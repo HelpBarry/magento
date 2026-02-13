@@ -1,0 +1,83 @@
+<?php
+/**
+ * @var $block \Bluebarry\Bluebarry\Block\Advisor
+ */
+$tenantId = $block->getTenantId(); 
+
+if ($tenantId != null && $tenantId != "") {
+?>
+<script nonce="<?= $block->escapeHtmlAttr($block->getNonce()); ?>">
+    window.barry = window.barry || {};
+    window.barry.tenantId = "<?= $block->escapeJs($tenantId); ?>";
+    var advisorScript = document.createElement('script');
+    advisorScript.async = true;
+    advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";
+    document.head.appendChild(advisorScript);
+
+    function updateSession(advisorId, sessionId, userId) {
+        jQuery.ajax({
+            url : '/bluebarry/session/update',
+            type: 'POST',
+            data: { 
+                session_id: sessionId,
+                advisor_id: advisorId,
+                user_id: userId,
+            },
+            success: function (response) {
+                if (!response.success) {
+                    console.error("Unable to set bluebarry session");
+                }
+            },
+            error: function (err) {
+                console.error("Unable to set bluebarry session");
+            } 
+        });
+    }
+
+    require(['jquery'], function($) {
+        const sessionRaw = localStorage.getItem('barry-session');
+        if (!sessionRaw) return;
+
+        const session = JSON.parse(sessionRaw);
+        const now = Date.now();
+
+        const lastUpdateRaw = localStorage.getItem('barry-session-last-update');
+        if (lastUpdateRaw && (now - parseInt(lastUpdateRaw, 10) < 60 * 60 * 1000)) {
+            return;
+        }
+
+        updateSession(session.advisorId, session.sessionId, session.userId);
+        localStorage.setItem('barry-session-last-update', now.toString());
+    });
+
+    window.addEventListener('message', (message) => {
+        if (message.origin !== "https://advisor.bluebarry.ai")
+            return;
+        const { event, value } = message.data;
+        if (event !== "barry-analytics")
+            return;
+
+        const { name, data } = value;
+        if (name !== "bluebarry_start")
+            return;
+
+        const obj = {
+            advisorId: data.bluebarry_advisor_id,
+            sessionId: data.bluebarry_session_id,
+            userId: data.bluebarry_user_id,
+            time: Date.now(),
+        };
+
+        let current = localStorage.getItem('barry-session');
+        if (current)
+            current = JSON.parse(current);
+
+        if (current?.advisorId == obj.advisorId && current?.sessionId == obj.sessionId && current?.userId == obj.userId)
+            return;
+
+        localStorage.setItem('barry-session', JSON.stringify(obj));
+        updateSession(obj.advisorId, obj.sessionId, obj.userId);
+    });
+</script>
+
+<?php } ?>

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+
+	<body>
+		<referenceBlock name="head.additional">
+            <block name="bluebarry.advisor.script"
+                as="bluebarry_advisor_script"
+                class="Bluebarry\Bluebarry\Block\Advisor"
+                before="-"
+                template="Bluebarry_Bluebarry::head/advisor.phtml">
+            </block>
+        </referenceBlock>
+	</body>
+</page>

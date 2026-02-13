@@ -1,0 +1,5 @@
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
+    <event name="sales_model_service_quote_submit_success">
+        <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
+    </event>
+</config>

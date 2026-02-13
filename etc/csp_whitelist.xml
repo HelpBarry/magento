@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<csp_whitelist xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Csp:etc/csp_whitelist.xsd">
+    <policies>
+        <policy id="script-src">
+            <values>
+                <value id="bluebarry_advisor_domain" type="host">advisor.bluebarry.ai</value>
+                <value id="bluebarry_cdn_domain" type="host">cdn.bluebarry.ai</value>
+            </values>
+        </policy>
+        <policy id="frame-src">
+            <values>
+                <value id="bluebarry_advisor_iframe" type="host">advisor.bluebarry.ai</value>
+            </values>
+        </policy>
+        <policy id="connect-src">
+            <values>
+                <value id="bluebarry_data_api" type="host">data.bluebarry.ai</value>
+                <value id="bluebarry_advisor_connect" type="host">advisor.bluebarry.ai</value>
+            </values>
+        </policy>
+    </policies>
+</csp_whitelist>
