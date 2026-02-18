@@ -14,37 +14,47 @@ if ($tenantId != null && $tenantId != "") {
     advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";
     document.head.appendChild(advisorScript);
 
+    function getFormKey() {
+        var match = document.cookie.match(/form_key=([^;]+)/);
+        return match ? match[1] : null;
+    }
+
     function updateSession(advisorId, sessionId, userId) {
-        jQuery.ajax({
-            url : '/bluebarry/session/update',
-            type: 'POST',
-            data: { 
+        var formKey = getFormKey();
+        fetch('/bluebarry/session/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                form_key: formKey,
                 session_id: sessionId,
                 advisor_id: advisorId,
                 user_id: userId,
-            },
-            success: function (response) {
-                if (!response.success) {
-                    console.error("Unable to set bluebarry session");
-                }
-            },
-            error: function (err) {
+            })
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(response) {
+            if (!response.success) {
                 console.error("Unable to set bluebarry session");
-            } 
+            }
+        })
+        .catch(function(err) {
+            console.error("Unable to set bluebarry session");
         });
     }
 
-    require(['jquery'], function($) {
+    document.addEventListener('DOMContentLoaded', function() {
         const sessionRaw = localStorage.getItem('barry-session');
-        if (!sessionRaw) return;
+        if (!sessionRaw)
+            return;
 
         const session = JSON.parse(sessionRaw);
         const now = Date.now();
 
         const lastUpdateRaw = localStorage.getItem('barry-session-last-update');
-        if (lastUpdateRaw && (now - parseInt(lastUpdateRaw, 10) < 60 * 60 * 1000)) {
+        if (lastUpdateRaw && (now - parseInt(lastUpdateRaw, 10) < 60 * 60 * 1000))
             return;
-        }
 
         updateSession(session.advisorId, session.sessionId, session.userId);
         localStorage.setItem('barry-session-last-update', now.toString());
@@ -58,7 +68,7 @@ if ($tenantId != null && $tenantId != "") {
             return;
 
         const { name, data } = value;
-        if (name !== "bluebarry_start")
+        if (name !== "bluebarry_start_advisor")
             return;
 
         const obj = {
