@@ -32,7 +32,15 @@ class Update extends Action
     }
 
     public function execute() {
-    
+        $result = $this->jsonFactory->create();
+
+        if (!$this->getRequest()->isPost()) {
+            return $result->setData([
+                'success' => true,
+                'session' => $this->session->getSession(),
+            ]);
+        }
+
         $post = $this->getRequest()->getPostValue();
 
         $this->session->setSession([
@@ -43,8 +51,6 @@ class Update extends Action
             ],
         ]);
 
-        $result = $this->jsonFactory->create();
-        
         return $result->setData([
             'success' => true, 
             'session' => $this->session->getSession(),
