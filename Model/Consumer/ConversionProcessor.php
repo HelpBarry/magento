@@ -113,11 +113,8 @@ class ConversionProcessor
                 $itemTotalExlTax += ($item->getQtyOrdered() * $item->getPrice());
 
                 if ($item->getTaxPercent() > 0) { 
-                    $exactPriceIncl = $item->getPrice() * ($item->getTaxPercent() / 100);
-                    $itemTotalTax += ($item->getQtyOrdered() * $exactPriceIncl);
-                } else {
-                    $exactPriceIncl = $item->getPrice();
-                    $itemTotalTax += ($item->getQtyOrdered() * $exactPriceIncl);
+                    $taxAmount = $item->getPrice() * ($item->getTaxPercent() / 100);
+                    $itemTotalTax += ($item->getQtyOrdered() * $taxAmount);
                 }
 
                 $items[] = (object) [
@@ -174,9 +171,7 @@ class ConversionProcessor
     private function isWriteToLogEnabled(): bool
     {
         return (bool) $this->scopeConfig->getValue(
-            "bluebarry_module/general/write_to_debug_file", 
-            'stores', 
-            $this->storeManager->getStore()->getCode()
+            "bluebarry_module/general/write_to_debug_file"
         );
     }
 
