@@ -120,9 +120,9 @@ class ConversionProcessor
                 $items[] = (object) [
                     "itemId" => $item->getItemId(),
                     "quantity" => (float) $item->getQtyOrdered(),
-                    "value" => (float) $item->getPrice(),
+                    "value" => $item->getPrice(),
                     "taxPercentage" => (float) $item->getTaxPercent(),
-                    "priceExclTax" => (float) $item->getPrice(),
+                    "priceExclTax" => $item->getPrice(),
                     "priceInclTax" => (float) $item->getPriceInclTax(),
                 ];
             }
