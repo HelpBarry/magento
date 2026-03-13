@@ -121,8 +121,8 @@ class ConversionProcessor
                     "itemId" => $item->getItemId(),
                     "quantity" => (float) $item->getQtyOrdered(),
                     "value" => $item->getPrice(),
-                    "taxPercentage" => $item->getTaxPercent() > 0 ? $item->getTaxPercent() : 0,
-                    "priceExclTax" => $item->getPrice(), 
+                    "taxPercentage" => (float) $item->getTaxPercent(),
+                    "priceExclTax" => $item->getPrice(),
                     "priceInclTax" => (float) $item->getPriceInclTax(),
                 ];
             }
@@ -136,7 +136,7 @@ class ConversionProcessor
                 "orderTaxTotal" => round(($itemTotalTax),2),
                 "orderGrandTotal" => (round(($itemTotalTax),2) + $itemTotalExlTax), 
                 "currencyIso" => "EUR",
-                "conversionId" => $order->getId(),
+                "conversionId" => (string) $order->getId(),
                 "items" => $items
             ];
 
