@@ -45,7 +45,7 @@ class Update extends Action
 
         $this->session->setSession([
             'bluebarry' => [
-                'session_id' => $post['session_id'] ?? null,
+                'session_id' => $post['bb_session_id'] ?? null,
                 'advisor_id' => $post['advisor_id'] ?? null,
                 'user_id'    => $post['user_id'] ?? null,
             ],
