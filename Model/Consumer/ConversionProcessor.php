@@ -148,6 +148,21 @@ class ConversionProcessor
 
             $result = $this->curlConversionRequest($request, $tenantId, $loggingEnabled);
 
+            // Attach the customer email to the quiz session so post-checkout
+            // automations (Klaviyo / Omnisend) can be matched to a profile.
+            $customerEmail = $order->getCustomerEmail();
+            if (!empty($customerEmail)) {
+                $this->curlIdentifyRequest(
+                    (object) [
+                        "email" => $customerEmail,
+                        "sessionId" => $sessionData['bluebarry']['session_id'],
+                        "userId" => $sessionData['bluebarry']['user_id'],
+                    ],
+                    $tenantId,
+                    $loggingEnabled
+                );
+            }
+
             if ($loggingEnabled) {
                 if (isset($result) && isset($result->id)) {
                     $this->logger->debug("Conversion successfully sent to Bluebarry. Response ID: " . $result->id);
@@ -228,6 +243,34 @@ class ConversionProcessor
                 $this->logger->debug("--- Bluebarry API Exception ---");
             }
             return null;
+        }
+    }
+
+    /**
+     * Send identify (email <-> session) request to Bluebarry API.
+     * Best-effort; failures are logged but never thrown.
+     *
+     * @param object $data
+     * @param string $tenantId
+     * @return void
+     */
+    private function curlIdentifyRequest(object $data, string $tenantId, bool $loggingEnabled): void
+    {
+        $url = "https://data.bluebarry.ai/data/identify";
+
+        try {
+            $this->curl->addHeader("Content-Type", "application/json");
+            $this->curl->addHeader("BB-Tenant-Id", $tenantId);
+            $this->curl->setTimeout(30);
+            $this->curl->post($url, json_encode($data));
+
+            if ($loggingEnabled) {
+                $this->logger->debug("Bluebarry identify HTTP " . $this->curl->getStatus());
+            }
+        } catch (\Exception $e) {
+            if ($loggingEnabled) {
+                $this->logger->debug("Bluebarry identify exception: " . $e->getMessage());
+            }
         }
     }
 }
