@@ -1,6 +1,14 @@
-# Bluebarry Magento 2 Module 1.0.2 Release Notes
+# Bluebarry Magento 2 Module 1.0.3 Release Notes
 
-Release date: 2026-05-18
+Release date: 2026-09-24
+
+1.0.3:
+Stability: Stable Build
+Description:
+Release 1.0.3 (2026-09-24)
+
+Bug Fixes
+- Changed the AMQP conversion queue binding to a wildcard topic so first-install deployments do not fail during `setup:upgrade` when a live release refreshes the communication configuration
 
 1.0.2:
 Stability: Stable Build
