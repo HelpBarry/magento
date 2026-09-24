@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework-message-queue:etc/topology.xsd">
     <exchange name="bluebarry-conversion-exchange" type="topic" connection="amqp">
-        <binding id="BluebarryConversionProcess" topic="bluebarry.conversion.process" destinationType="queue" destination="bluebarry_conversion_process"/>
+        <!-- Wildcard on purpose: an exact topic makes setup:upgrade fail on first install when an old release
+             re-caches communication config mid-deploy. Only works over amqp; the db connection matches topics exactly. -->
+        <binding id="BluebarryConversionProcess" topic="bluebarry.conversion.*" destinationType="queue" destination="bluebarry_conversion_process"/>
     </exchange>
 </config>
