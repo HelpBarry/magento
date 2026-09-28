@@ -120,6 +120,49 @@ class ConversionProcessorTest extends TestCase
         $this->assertSame('USD', $this->posts[0]['body']['currencyIso']);
     }
 
+    /** Child lines (configurable variants, bundle parts) repeat the product the shopper bought. */
+    public function testSkipsChildLines(): void
+    {
+        $this->givenOrder(42, null, [
+            $this->item('39', '1.0000', '80.0000', '21.0000', '96.8000'),
+            $this->item('40', '1.0000', '0.0000', '0.0000', null, '39'),
+        ]);
+
+        $this->processor->processConversion($this->message(42));
+
+        $body = $this->posts[0]['body'];
+        $this->assertCount(1, $body['items']);
+        $this->assertSame('39', $body['items'][0]['itemId']);
+        $this->assertEqualsWithDelta(96.8, $body['orderGrandTotal'], 0.001);
+    }
+
+    /** A dynamic-price bundle line carries the summed price and tax, but no tax percentage of its own. */
+    public function testDynamicBundleLineUsesChargedTax(): void
+    {
+        $this->givenOrder(42, null, [$this->item('41', '1.0000', '50.0000', null, '60.5000')]);
+
+        $this->processor->processConversion($this->message(42));
+
+        $body = $this->posts[0]['body'];
+        $this->assertEqualsWithDelta(50.0, $body['orderProductTotal'], 0.001);
+        $this->assertEqualsWithDelta(10.5, $body['orderTaxTotal'], 0.001);
+        $this->assertEqualsWithDelta(60.5, $body['orderGrandTotal'], 0.001);
+        $this->assertEqualsWithDelta(21.0, $body['items'][0]['taxPercentage'], 0.001);
+        $this->assertEqualsWithDelta(60.5, $body['items'][0]['priceInclTax'], 0.001);
+    }
+
+    public function testFallsBackToTaxPercentWithoutInclTaxPrice(): void
+    {
+        $this->givenOrder(42, null, [$this->item('7', '3.0000', '10.0000', '21.0000', null)]);
+
+        $this->processor->processConversion($this->message(42));
+
+        $body = $this->posts[0]['body'];
+        $this->assertEqualsWithDelta(30.0, $body['orderProductTotal'], 0.001);
+        $this->assertEqualsWithDelta(6.3, $body['orderTaxTotal'], 0.001);
+        $this->assertEqualsWithDelta(12.1, $body['items'][0]['priceInclTax'], 0.001);
+    }
+
     public function testNoIdentifyWithoutCustomerEmail(): void
     {
         $this->givenOrder(42, null, [$this->item('7', '1.0000', '10.0000', '0.0000', '10.0000')]);
@@ -186,14 +229,15 @@ class ConversionProcessorTest extends TestCase
         $order->method('getId')->willReturn($id);
         $order->method('getOrderCurrencyCode')->willReturn($currency);
         $order->method('getCustomerEmail')->willReturn($email);
-        $order->method('getAllItems')->willReturn($items);
+        $order->method('getItems')->willReturn($items);
         $this->orderRepository->method('get')->willReturnMap([[$id, $order]]);
     }
 
-    private function item($id, $qty, $price, $taxPercent, $priceInclTax): Item
+    private function item($id, $qty, $price, $taxPercent, $priceInclTax, $parentItemId = null): Item
     {
         $item = $this->createStub(Item::class);
         $item->method('getItemId')->willReturn($id);
+        $item->method('getParentItemId')->willReturn($parentItemId);
         $item->method('getQtyOrdered')->willReturn($qty);
         $item->method('getPrice')->willReturn($price);
         $item->method('getTaxPercent')->willReturn($taxPercent);
