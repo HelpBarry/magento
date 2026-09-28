@@ -76,6 +76,17 @@ class Config
     }
 
     /**
+     * Whether a website has an API key, without decrypting it: cheap enough for every product save.
+     *
+     * @param int|string $website
+     * @return bool
+     */
+    public function hasWebsiteApiKey($website): bool
+    {
+        return (string) $this->scopeConfig->getValue(self::XML_API_KEY, ScopeInterface::SCOPE_WEBSITE, $website) !== '';
+    }
+
+    /**
      * The tenant a store view reports to, or null when none is set.
      *
      * @param int|string|null $store

@@ -110,6 +110,50 @@ const magentoPing = {
   },
 };
 
+const catalogProperty = {
+  disallowUnknown: true,
+  required: ['propertyName', 'type'],
+  fields: {
+    propertyName: (v) => typeof v === 'string' && v.length > 0 && v.length <= 254,
+    value: types.any,
+    type: (v) => ['text', 'numeric', 'boolean', 'collection', 'description'].includes(v),
+  },
+};
+
+const catalogProduct = {
+  disallowUnknown: true,
+  required: ['reference'],
+  fields: {
+    reference: (v) => typeof v === 'string' && v.length > 0 && v.length <= 64,
+    name: types.nullableString(512),
+    groupName: types.nullableString(512),
+    groupId: types.nullableString(128),
+    url: types.nullableString(1024),
+    imageUrl: types.nullableString(1024),
+    secondaryImages: (v) => v === null || (Array.isArray(v) && v.every((s) => typeof s === 'string')),
+    inactive: (v) => typeof v === 'boolean',
+    properties: (v, path, errors) => {
+      if (v === null) return true;
+      if (!Array.isArray(v)) return false;
+      v.forEach((p, i) => validateObject(p, catalogProperty, `${path}[${i}]`, errors));
+      return true;
+    },
+  },
+};
+
+// DataApi's MagentoProductSyncRequest (MaxProducts 500).
+const catalogSync = {
+  disallowUnknown: true,
+  fields: {
+    products: (v, path, errors) => {
+      if (!Array.isArray(v) || v.length > 500) return false;
+      v.forEach((p, i) => validateObject(p, catalogProduct, `${path}[${i}]`, errors));
+      return true;
+    },
+    reconcileGroupIds: (v) => v === null || (Array.isArray(v) && v.every((s) => typeof s === 'string')),
+  },
+};
+
 // The one API key the mock accepts, and the company it belongs to.
 export const API_KEY = 'test-api-key';
 const API_KEY_TENANT = 'test-tenant';
@@ -118,6 +162,7 @@ const routes = {
   '/data/conversionevents': { schema: conversionEvent, ok: (n) => [201, { id: `mock-${n}` }] },
   '/data/identify': { schema: identify, ok: () => [204, null] },
   '/data/magento/ping': { schema: magentoPing, auth: 'apiKey', ok: () => [200, { success: true, tenantId: API_KEY_TENANT }] },
+  '/data/magento/products/sync': { schema: catalogSync, auth: 'apiKey', ok: () => [200, { synced: 0, errors: 0 }] },
   '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 
