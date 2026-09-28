@@ -37,6 +37,16 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <type name="Bluebarry\Bluebarry\Observer\QueueChangedProducts">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Catalog\Sync">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
     <!-- Settings page and save: build the heartbeat (and its HTTP client) only when used. -->
     <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection">
         <arguments>
@@ -47,12 +57,23 @@
         <arguments>
             <argument name="commands" xsi:type="array">
                 <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
+                <item name="bluebarry_catalog_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncCatalog</item>
             </argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Console\Command\SendDueConversions">
         <arguments>
             <argument name="job" xsi:type="object">Bluebarry\Bluebarry\Cron\SendDueConversions\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\SyncCatalog">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Catalog">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
         </arguments>
     </type>
     <type name="Magento\MysqlMq\Model\QueueManagement">

@@ -1,0 +1,192 @@
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, test, type APIRequestContext } from '@playwright/test';
+import {
+  addToCart,
+  adminLogin,
+  adminToken,
+  checkoutAsGuest,
+  magento,
+  mockApi,
+  openBluebarrySettings,
+  sql,
+  stubAdvisor,
+  type RecordedRequest,
+} from './helpers';
+
+// Catalog sync (magento-internal#7): the whole catalog when a website connects, then every change:
+// a sale once Magento indexed its price, a deleted product, stock an order took, and a bluebarry outage.
+
+const SKU = 'bb-catalog-e2e';
+// 1x1 PNG
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin');
+
+/** bin/magento bluebarry:catalog:sync, which exits 1 while products wait on an error. */
+function syncCatalog(...args: string[]): { code: number; output: string } {
+  try {
+    return { code: 0, output: execFileSync(path.join(BIN, 'magento'), ['bluebarry:catalog:sync', ...args], { encoding: 'utf8' }) };
+  } catch (e: any) {
+    return { code: e.status, output: `${e.stdout ?? ''}${e.stderr ?? ''}` };
+  }
+}
+
+const syncs = async (): Promise<RecordedRequest[]> =>
+  (await mockApi.requests()).filter((r) => r.path === '/data/magento/products/sync');
+
+const sent = async (reference: string) =>
+  (await syncs()).flatMap((r) => r.body.products).filter((p: any) => p.reference === reference);
+
+const property = (product: any, name: string) => product.properties.find((p: any) => p.propertyName === name)?.value;
+
+const productId = (sku: string) => sql(`SELECT entity_id FROM catalog_product_entity WHERE sku = '${sku}'`);
+const queued = (id: string) => Number(sql(`SELECT COUNT(*) FROM bluebarry_product_sync WHERE product_id = ${Number(id)}`));
+
+async function rest(request: APIRequestContext, method: 'post' | 'put' | 'delete', url: string, data?: unknown) {
+  const response = await request[method](url, { headers: { Authorization: `Bearer ${await adminToken(request)}` }, data });
+  expect(response.status(), await response.text()).toBe(200);
+  return response.json();
+}
+
+test.describe('catalog sync', () => {
+  test.describe.configure({ mode: 'serial' });
+  let categoryId = 0;
+
+  test.beforeAll(async ({ request }) => {
+    magento('config:set', 'bluebarry_module/general/api_key', 'test-api-key');
+    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_catalog'");
+    categoryId = (await rest(request, 'post', '/rest/V1/categories', { category: { parent_id: 2, name: 'BB Catalog', is_active: true } })).id;
+    const image = (name: string, types: string[]) => ({
+      media_type: 'image', label: name, position: types.length ? 1 : 2, disabled: false, types,
+      content: { base64_encoded_data: PNG, type: 'image/png', name: `${name}.png` },
+    });
+    await rest(request, 'post', '/rest/all/V1/products', {
+      product: {
+        sku: SKU, name: 'Bluebarry Catalog Product', attribute_set_id: 4, price: 30, status: 1, visibility: 4, type_id: 'simple', weight: 1,
+        extension_attributes: { website_ids: [1], category_links: [{ position: 0, category_id: String(categoryId) }], stock_item: { qty: 50, is_in_stock: true } },
+        custom_attributes: [{ attribute_code: 'url_key', value: SKU }, { attribute_code: 'tax_class_id', value: '2' }],
+        media_gallery_entries: [image('bb-front', ['image', 'small_image', 'thumbnail']), image('bb-back', [])],
+      },
+    });
+    // As the indexer cron would: in stock, then priced (a product the stock index has not seen is left out of the price index).
+    magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+  });
+
+  test.beforeEach(async () => {
+    await mockApi.reset();
+  });
+
+  test.afterAll(async ({ request }) => {
+    await mockApi.reset();
+    const token = await adminToken(request);
+    await request.delete(`/rest/V1/products/${SKU}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (categoryId) await request.delete(`/rest/V1/categories/${categoryId}`, { headers: { Authorization: `Bearer ${token}` } });
+    sql("DELETE FROM core_config_data WHERE path = 'bluebarry_module/general/api_key'");
+    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_catalog'");
+    sql('DELETE FROM bluebarry_product_sync');
+    magento('cache:flush');
+  });
+
+  test('a newly connected website sends the whole catalog', async () => {
+    const run = syncCatalog();
+    expect(run.output).toContain('0 waiting');
+
+    const requests = await syncs();
+    expect(requests.length).toBeGreaterThan(0);
+    for (const r of requests) {
+      expect(r.contractErrors).toEqual([]);
+      expect(r.headers.authorization).toBe('test-api-key');
+      expect(r.headers['bb-tenant-id'], 'a key-authenticated call must not name the tenant').toBeUndefined();
+    }
+
+    const [product] = await sent(productId(SKU));
+    expect(product).toMatchObject({
+      name: 'Bluebarry Catalog Product',
+      url: `http://localhost:8080/${SKU}.html`,
+      inactive: false,
+    });
+    expect(product.imageUrl).toMatch(/\/media\/catalog\/product\/.*bb-front.*\.png$/);
+    expect(product.secondaryImages).toHaveLength(1);
+    expect(property(product, 'price')).toBe(30);
+    expect(property(product, 'compare_at_price')).toBeNull();
+    expect(property(product, 'categories')).toEqual(['BB Catalog']);
+    expect(property(product, 'stock_status')).toBe('instock');
+    expect(property(product, 'stock_quantity')).toBe(50);
+    expect(property(product, 'currency')).toBe('EUR');
+
+    // A configurable product's children are the products, grouped under it; it has none of its own.
+    const parent = productId('bb-configurable');
+    const [red] = await sent(productId('bb-configurable-red'));
+    expect(red).toMatchObject({ groupId: parent, name: 'Bluebarry Configurable Product', url: 'http://localhost:8080/bb-configurable.html' });
+    expect(property(red, 'attr_color')).toBe('BB Red');
+    expect(await sent(parent)).toEqual([]);
+    expect(requests.flatMap((r) => r.body.reconcileGroupIds)).toContain(parent);
+
+    // A bundle part without a page of its own is no product in bluebarry.
+    expect(await sent(productId('bb-part-a'))).toEqual([{ reference: productId('bb-part-a'), inactive: true }]);
+  });
+
+  test('a sale goes out once Magento indexed its price', async ({ request }) => {
+    const id = productId(SKU);
+    await rest(request, 'put', `/rest/all/V1/products/${SKU}`, {
+      product: { sku: SKU, custom_attributes: [{ attribute_code: 'special_price', value: '25' }] },
+    });
+    expect(queued(id)).toBe(1);
+
+    syncCatalog(); // the price index ("Update by Schedule") has not run: it waits
+    expect(await sent(id)).toEqual([]);
+    expect(queued(id)).toBe(1);
+
+    magento('indexer:reindex', 'catalog_product_price');
+    syncCatalog();
+    const [product] = await sent(id);
+    expect(property(product, 'price')).toBe(25);
+    expect(property(product, 'compare_at_price')).toBe(30);
+    expect(queued(id)).toBe(0);
+  });
+
+  test('an order sends the stock it left', async ({ page }) => {
+    const id = productId('bb-simple');
+    syncCatalog();
+    await mockApi.reset();
+
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    await checkoutAsGuest(page, 'catalog-stock@example.com');
+    expect(queued(id)).toBe(1);
+
+    syncCatalog();
+    const [product] = await sent(id);
+    // Reserved by the order, so no longer for sale, although the quantity only drops when it ships.
+    const onHand = Number(sql(`SELECT qty FROM cataloginventory_stock_item WHERE product_id = ${id}`));
+    const reserved = Number(sql(`SELECT COALESCE(SUM(quantity), 0) FROM inventory_reservation WHERE sku = 'bb-simple'`));
+    expect(reserved).toBeLessThan(0);
+    expect(property(product, 'stock_quantity')).toBe(Math.floor(onHand + reserved));
+  });
+
+  test('a deleted product is switched off', async ({ request }) => {
+    const id = productId(SKU);
+    await rest(request, 'delete', `/rest/V1/products/${SKU}`);
+
+    syncCatalog();
+    expect(await sent(id)).toEqual([{ reference: id, inactive: true }]);
+  });
+
+  test('while bluebarry is unreachable the products wait, and the settings say so', async ({ page }) => {
+    await mockApi.respondWith({ status: 503 });
+    const failed = syncCatalog('--all');
+    expect(failed.code).toBe(1);
+    expect(failed.output).toContain('bluebarry answered HTTP 503.');
+
+    await adminLogin(page);
+    await openBluebarrySettings(page);
+    await expect(page.locator('#row_bluebarry_module_general_catalog')).toContainText('products waiting: bluebarry answered HTTP 503.');
+
+    // Resending the catalog does not wait for the retry.
+    await mockApi.reset();
+    expect(syncCatalog('--all').code).toBe(0);
+    await openBluebarrySettings(page);
+    await expect(page.locator('#row_bluebarry_module_general_catalog')).toContainText('Up to date, last sent');
+  });
+});

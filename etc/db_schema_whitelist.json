@@ -19,5 +19,16 @@
             "PRIMARY": true,
             "BLUEBARRY_ORDER_VISITOR_ORDER_ID_SALES_ORDER_ENTITY_ID": true
         }
+    },
+    "bluebarry_product_sync": {
+        "column": {
+            "product_id": true,
+            "claim": true,
+            "attempts": true,
+            "queued_at": true
+        },
+        "constraint": {
+            "PRIMARY": true
+        }
     }
 }
