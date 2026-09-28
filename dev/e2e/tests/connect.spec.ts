@@ -14,6 +14,7 @@ test.describe('connect with an API key', () => {
   });
 
   test.afterAll(() => {
+    magento('config:set', 'bluebarry_module/general/tenantid', 'test-tenant');
     sql("DELETE FROM core_config_data WHERE path = 'bluebarry_module/general/api_key'");
     magento('cache:flush');
   });
@@ -48,5 +49,18 @@ test.describe('connect with an API key', () => {
 
     await expect(page.locator('.message-error', { hasText: 'bluebarry refused the API key' })).toBeVisible();
     await expect(page.locator('#row_bluebarry_module_general_connection')).toContainText('Not connected: bluebarry refused the API key.');
+  });
+
+  test('a key from another company than the Tenant ID is refused, and nothing is registered there', async ({ page }) => {
+    await adminLogin(page);
+    await openBluebarrySettings(page);
+    await page.locator('#bluebarry_module_general_tenantid').fill('another-tenant');
+    await page.locator('#bluebarry_module_general_api_key').fill('test-api-key');
+    await page.locator('#save').click();
+
+    await expect(page.locator('.message-error', { hasText: 'The API key belongs to another bluebarry company than the Tenant ID.' })).toBeVisible();
+    const [ping] = await pings();
+    expect(ping.body.tenantId).toBe('another-tenant');
+    expect(ping.responseStatus).toBe(409);
   });
 });
