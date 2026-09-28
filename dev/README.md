@@ -31,6 +31,7 @@ caused, or could cause, a production-only bug.
 | Shops run in **production mode**: compiled DI, deployed static content, and no XML schema validation | `deploy:mode:set production`, `setup:di:compile` and `setup:static-content:deploy` on every deploy. `test-static` validates the XML against the XSDs separately. |
 | Queue consumers run in separate processes, sometimes on another server | Tests start `BluebarryConversionProcess` the way cron does, then check what reached the API. |
 | RabbitMQ or MySQL queue, depending on the host | Variants `default` (RabbitMQ) and `mysql-queue`. |
+| Luma or Hyvä storefront | Variant `hyva` installs Hyvä's open-source theme from GitHub (no license key). The browser tests check the cart through Magento's cart data, not theme markup, so the same tests run on both. |
 | Redis sessions and cache | Redis for sessions, cache and full-page cache. |
 | A WAF in front of the store (Cloud Armor, hosting WAFs) | OWASP CRS at paranoia level 2 on port 8081. `waf.spec.ts` covers the 1.0.2 incident. |
 | Zero-downtime deploys, where the old release keeps running during and after `setup:upgrade` | `test-deploy-race` runs the new release's deploy while a copy of the old release keeps re-caching config into the shared Redis. It checks that the deploy succeeds (the 1.0.3 incident), then that a quiz order placed right after it is tracked once the documented post-deploy step (`cache:flush`) has run. `dev/bin/test-deploy-race dist/bluebarry-magento2-module-1.0.2.zip` reproduces the original failure. |
@@ -47,13 +48,14 @@ under test is exactly what ships, and no test traffic can reach real Bluebarry.
 `BB_ENV=<name>` selects `dev/env/<name>.env`. Each variant keeps its own Docker volumes, so you can switch
 between them without reinstalling. Only one runs at a time, because they share ports.
 
-| Variant | Magento | PHP | Queue |
-|---|---|---|---|
-| `default` | 2.4.8-p5 | 8.3 | RabbitMQ |
-| `mysql-queue` | 2.4.8-p5 | 8.3 | MySQL (no RabbitMQ) |
-| `legacy` | 2.4.6-p14 | 8.2 | RabbitMQ |
-| `2.4.7` | 2.4.7-p9 | 8.3 | RabbitMQ |
-| `latest` | 2.4.9 | 8.4 | RabbitMQ |
+| Variant | Magento | PHP | Queue | Theme |
+|---|---|---|---|---|
+| `default` | 2.4.8-p5 | 8.3 | RabbitMQ | Luma |
+| `mysql-queue` | 2.4.8-p5 | 8.3 | MySQL (no RabbitMQ) | Luma |
+| `hyva` | 2.4.8-p5 | 8.3 | RabbitMQ | Hyvä (open source, with Hyvä's Luma checkout fallback) |
+| `legacy` | 2.4.6-p14 | 8.2 | RabbitMQ | Luma |
+| `2.4.7` | 2.4.7-p9 | 8.3 | RabbitMQ | Luma |
+| `latest` | 2.4.9 | 8.4 | RabbitMQ | Luma |
 
 ```bash
 dev/bin/compose down                       # stop the current variant (keeps its data)
@@ -61,7 +63,7 @@ BB_ENV=mysql-queue dev/bin/setup
 BB_ENV=mysql-queue dev/bin/test-e2e
 ```
 
-CI (`.github/workflows/tests.yml`) runs `default` and `mysql-queue` on every PR, and every variant plus the deploy-race
+CI (`.github/workflows/tests.yml`) runs `default`, `mysql-queue` and `hyva` on every PR, and every variant plus the deploy-race
 test on `main`, nightly and on demand.
 
 ## Useful commands
@@ -76,9 +78,10 @@ dev/bin/compose down -v                    # delete this variant completely
 
 ## What this can't cover
 
-Third-party themes (Hyvä, headless), payment providers that create orders from webhooks, and hosting
-quirks such as restricted consumer lists in `env.php`, egress firewalls and Adobe Commerce Cloud's
-read-only filesystem still need a real staging shop before a release.
+Hyvä Checkout (commercial; the `hyva` variant uses Hyvä's Luma checkout fallback), headless
+storefronts, payment providers that create orders from webhooks, and hosting quirks such as restricted
+consumer lists in `env.php`, egress firewalls and Adobe Commerce Cloud's read-only filesystem still need
+a real staging shop before a release.
 
 ## Releasing
 

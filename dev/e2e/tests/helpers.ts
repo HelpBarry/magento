@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { expect, type Page } from '@playwright/test';
@@ -7,6 +8,13 @@ import { expect, type Page } from '@playwright/test';
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin');
 export const MOCK_API = process.env.MOCK_API_URL ?? 'http://localhost:8099';
 export const WAF_URL = process.env.WAF_URL ?? 'http://localhost:8081';
+
+/** The storefront theme of the variant under test (THEME in dev/env/<BB_ENV>.env): "luma" or "hyva". */
+export const THEME: string = (() => {
+  const envFile = path.join(BIN, '..', 'env', `${process.env.BB_ENV ?? 'default'}.env`);
+  const match = readFileSync(envFile, 'utf8').match(/^THEME=(\S+)/m);
+  return match ? match[1] : 'luma';
+})();
 
 // --- Mock data.bluebarry.ai ---------------------------------------------------------------------------
 
@@ -140,20 +148,30 @@ export async function collectCspViolations(page: Page) {
 export async function addToCart(page: Page, urlKey: string, options: { color?: string; bundle?: boolean } = {}) {
   await page.goto(`/${urlKey}.html`);
   if (options.bundle) {
-    // Luma shows bundle options after "Customize and Add to Cart"; the fixtures preselect every part.
-    await page.locator('#bundle-slide').click();
+    // Luma shows bundle options after "Customize and Add to Cart"; Hyvä renders them inline. The
+    // fixtures preselect every part either way.
+    const customize = page.locator('#bundle-slide');
+    if (await customize.isVisible()) await customize.click();
     await expect(page.locator('#product-addtocart-button')).toBeVisible();
   }
   if (options.color) {
-    await page.locator('.swatch-attribute.color .swatch-option, select.super-attribute-select').first().waitFor();
+    // Luma renders swatches or a select; Hyvä a select named after the attribute.
+    const choice = page.locator('.swatch-attribute.color .swatch-option, select.super-attribute-select, select[name^="super_attribute"]');
+    await choice.first().waitFor();
     const swatch = page.locator(`.swatch-attribute.color .swatch-option[data-option-label="${options.color}"]`);
     if (await swatch.count()) await swatch.click();
-    else await page.locator('select.super-attribute-select').selectOption({ label: options.color });
+    else await page.locator('select.super-attribute-select, select[name^="super_attribute"]').first().selectOption({ label: options.color });
   }
   const added = page.waitForResponse((r) => r.url().includes('/checkout/cart/add') && r.request().method() === 'POST');
   await page.locator('#product-addtocart-button').click();
   await added;
-  await expect(page.locator('.page.messages .message-success')).toBeVisible();
+  // Check the cart itself rather than a theme's success message (Luma: ajax + message, Hyvä: reload).
+  await expect
+    .poll(async () => {
+      const sections = await (await page.request.get('/customer/section/load/?sections=cart&force_new_section_timestamp=true')).json();
+      return Number(sections.cart?.summary_count ?? 0);
+    })
+    .toBeGreaterThan(0);
 }
 
 export async function checkoutAsGuest(page: Page, email: string): Promise<string> {
