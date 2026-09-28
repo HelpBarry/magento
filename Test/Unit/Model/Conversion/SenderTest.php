@@ -64,6 +64,19 @@ class SenderTest extends TestCase
         $this->sender($visitors, [400])->send(7);
     }
 
+    public function testAnOrderThatCannotBeReadCountsAsAnAttempt(): void
+    {
+        // Its store view was deleted: counted and retried like a failed delivery, so it neither stops
+        // the cron's batch nor comes back forever.
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->method('get')->willReturn($this->row(attempts: 1));
+        $visitors->expects($this->once())->method('scheduleRetry')->with(7, 2, 4);
+
+        $this->sender($visitors, [201], storeGone: true)->send(7);
+
+        $this->assertSame([], $this->calls);
+    }
+
     public function testOnlyQueuedConversionsAreSent(): void
     {
         $visitors = $this->createStub(OrderVisitor::class);
@@ -80,7 +93,7 @@ class SenderTest extends TestCase
             'experiments' => null, 'status' => $status, 'attempts' => $attempts];
     }
 
-    private function sender(OrderVisitor $visitors, array $statuses, string $email = ''): Sender
+    private function sender(OrderVisitor $visitors, array $statuses, string $email = '', bool $storeGone = false): Sender
     {
         $order = $this->createStub(Order::class);
         $order->method('getStoreId')->willReturn(1);
@@ -96,7 +109,11 @@ class SenderTest extends TestCase
         $store = $this->createStub(Store::class);
         $store->method('getBaseUrl')->willReturn('https://Shop.example/');
         $storeManager = $this->createStub(StoreManagerInterface::class);
-        $storeManager->method('getStore')->willReturn($store);
+        if ($storeGone) {
+            $storeManager->method('getStore')->willThrowException(new \Magento\Framework\Exception\NoSuchEntityException(__('The store that was requested wasn\'t found.')));
+        } else {
+            $storeManager->method('getStore')->willReturn($store);
+        }
 
         $client = $this->createStub(Client::class);
         $client->method('post')->willReturnCallback(function ($path, $body) use (&$statuses) {
