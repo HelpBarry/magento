@@ -1,8 +1,10 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework-message-queue:etc/topology.xsd">
-    <exchange name="bluebarry-conversion-exchange" type="topic" connection="amqp">
+    <!-- The default exchange on the shop's queue connection (RabbitMQ when configured, otherwise MySQL). -->
+    <exchange name="magento" type="topic">
         <!-- Wildcard on purpose: an exact topic makes setup:upgrade fail on first install when an old release
-             re-caches communication config mid-deploy. Only works over amqp; the db connection matches topics exactly. -->
+             re-caches communication config mid-deploy (1.0.3). The MySQL queue only routes exact topics, so
+             Plugin\MysqlMq\RouteConversionToQueue routes the conversion topic there. -->
         <binding id="BluebarryConversionProcess" topic="bluebarry.conversion.*" destinationType="queue" destination="bluebarry_conversion_process"/>
     </exchange>
 </config>
