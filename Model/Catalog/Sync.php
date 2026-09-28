@@ -229,13 +229,19 @@ class Sync
                     continue;
                 }
                 $response = $this->client->post('/data/magento/products/sync', [
+                    // bluebarry refuses a key from another company, so the catalog never lands there.
+                    'tenantId' => $target['tenantId'],
                     'products' => $batch['products'],
                     'reconcileGroupIds' => $batch['reconcileGroupIds'],
                 ], $target['tenantId'], $target['apiKey'], 60);
                 if (!$response->isSuccess()) {
-                    $error = in_array($response->getStatus(), [401, 403], true)
-                        ? 'bluebarry refused the API key.'
-                        : ($response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.');
+                    if ($response->getStatus() === 409) {
+                        $error = 'The API key belongs to another bluebarry company than the Tenant ID.';
+                    } elseif (in_array($response->getStatus(), [401, 403], true)) {
+                        $error = 'bluebarry refused the API key.';
+                    } else {
+                        $error = $response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.';
+                    }
                     $this->logger->warning('bluebarry: catalog sync failed, retrying in 5 minutes: ' . $error);
                     $this->saveState(['retry_at' => time() + self::RETRY_AFTER, 'error' => $error]);
                     return $sent;

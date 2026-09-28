@@ -83,6 +83,19 @@ class SyncTest extends TestCase
         $this->assertSame('bluebarry refused the API key.', $sync->status()['error']);
     }
 
+    public function testAKeyFromAnotherCompanyIsReported(): void
+    {
+        $sync = $this->sync([409]);
+        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->queued = [5 => ''];
+
+        $sync->run();
+
+        $this->assertSame('a', $this->calls[0]['body']['tenantId']);
+        $this->assertSame('The API key belongs to another bluebarry company than the Tenant ID.', $sync->status()['error']);
+        $this->assertArrayHasKey(5, $this->queued);
+    }
+
     public function testAProductThatCannotBeReadStaysQueued_TheOthersGo(): void
     {
         $sync = $this->sync([200]);

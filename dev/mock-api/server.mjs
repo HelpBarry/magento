@@ -152,6 +152,7 @@ const catalogSync = {
       return true;
     },
     reconcileGroupIds: (v) => v === null || (Array.isArray(v) && v.every((s) => typeof s === 'string')),
+    tenantId: types.nullableString(64),
   },
 };
 
@@ -169,7 +170,12 @@ const routes = {
       ? [409, { tenantId: API_KEY_TENANT }]
       : [200, { success: true, tenantId: API_KEY_TENANT }],
   },
-  '/data/magento/products/sync': { schema: catalogSync, auth: 'apiKey', ok: () => [200, { synced: 0, errors: 0 }] },
+  '/data/magento/products/sync': {
+    schema: catalogSync, auth: 'apiKey',
+    ok: (n, body) => body?.tenantId && body.tenantId.toLowerCase() !== API_KEY_TENANT
+      ? [409, { tenantId: API_KEY_TENANT }]
+      : [200, { synced: 0, errors: 0 }],
+  },
   '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 
