@@ -31,15 +31,16 @@ test('advisor bootstrap loads on storefront pages without CSP violations', async
   const consoleErrors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
 
+  const ours: any[] = [];
   for (const url of ['/', '/bb-simple.html']) {
     await page.goto(url);
     await expect.poll(() => page.evaluate(() => (window as any).__bbAdvisorLoaded)).toBe(true);
     expect(await page.evaluate(() => (window as any).barry?.tenantId)).toBe('test-tenant');
+    // Collected per document, so read them before navigating away.
+    for (const v of await cspViolations()) {
+      if (/bluebarry/.test(`${v.blockedURI} ${v.sourceFile}`) || /barry/.test(v.sample ?? '')) ours.push({ url, ...v });
+    }
   }
-
-  const ours = (await cspViolations()).filter(
-    (v) => /bluebarry/.test(`${v.blockedURI} ${v.sourceFile}`) || /barry/.test(v.sample ?? ''),
-  );
   expect(ours).toEqual([]);
   expect(consoleErrors.filter((e) => /bluebarry|barry/i.test(e))).toEqual([]);
 });
@@ -99,25 +100,36 @@ test('simple product: checkout after quiz sends a valid conversion and identify'
   expect(identify!.body).toEqual({ email, sessionId: ids.sessionId, userId: ids.userId });
 });
 
-test('configurable product: reported once, at the variant price', async ({ page }) => {
-  // Known bug: ConversionProcessor iterates getAllItems(), which includes the child simple of a
-  // configurable as a second, EUR 0 line. Totals are right; the item list is not. Remove once fixed.
-  test.fail();
-  const ids = newAdvisorIds();
-  await stubAdvisor(page, ids);
-  await page.goto('/');
-  await startAdvisor(page);
-  await addToCart(page, 'bb-configurable', { color: 'BB Red' });
-  await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+test.describe('configurable product', () => {
+  let body: any;
 
-  runConversionConsumer();
-  const conversion = (await mockApi.requests()).find((r) => r.path.toLowerCase() === '/data/conversionevents');
-  expect(conversion).toBeDefined();
-  expect(conversion!.contractErrors).toEqual([]);
-  const body = conversion!.body;
-  expect(Number(body.orderProductTotal)).toBeCloseTo(80, 2);
-  expect(Number(body.orderGrandTotal)).toBeCloseTo(96.8, 2);
-  expect(body.items, 'one line per purchased product, not parent + child').toHaveLength(1);
+  // One checkout for both tests below; serial so the known-bug test sees this conversion.
+  test.describe.configure({ mode: 'serial' });
+
+  test('conversion is sent with the variant totals', async ({ page }) => {
+    const ids = newAdvisorIds();
+    await stubAdvisor(page, ids);
+    await page.goto('/');
+    await startAdvisor(page);
+    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+
+    runConversionConsumer();
+    const conversion = (await mockApi.requests()).find((r) => r.path.toLowerCase() === '/data/conversionevents');
+    expect(conversion).toBeDefined();
+    expect(conversion!.contractErrors).toEqual([]);
+    body = conversion!.body;
+    expect(Number(body.orderProductTotal)).toBeCloseTo(80, 2);
+    expect(Number(body.orderGrandTotal)).toBeCloseTo(96.8, 2);
+  });
+
+  test('conversion lists the product once', async () => {
+    // Known bug (#20): ConversionProcessor iterates getAllItems(), which includes the configurable's
+    // child simple as a second, EUR 0 line. Only this assertion is expected to fail; remove once fixed.
+    test.skip(!body, 'needs the conversion from the previous test');
+    test.fail();
+    expect(body.items, 'one line per purchased product, not parent + child').toHaveLength(1);
+  });
 });
 
 test('checkout without a quiz session sends nothing', async ({ page }) => {

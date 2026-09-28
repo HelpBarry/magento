@@ -20,9 +20,12 @@ step "Starting services"
 compose build php
 compose up -d db opensearch redis rabbitmq mock-api php
 
-if ! in_php 'test -f app/etc/env.php' 2>/dev/null; then
+# Written only after the whole install block succeeds; env.php alone exists halfway through an install.
+INSTALLED_MARKER=app/etc/.bb-install-complete
+if ! in_php "test -f $INSTALLED_MARKER" 2>/dev/null; then
     step "Downloading Magento $MAGENTO_VERSION from the Mage-OS mirror (no marketplace keys needed)"
     in_php "
+        rm -rf /tmp/magento
         composer create-project --no-install --no-interaction \
             --repository-url=https://mirror.mage-os.org/ \
             magento/project-community-edition=$MAGENTO_VERSION /tmp/magento
@@ -43,7 +46,7 @@ if ! in_php 'test -f app/etc/env.php' 2>/dev/null; then
         AMQP_ARGS="--amqp-host=rabbitmq --amqp-port=5672 --amqp-user=guest --amqp-password=guest --amqp-virtualhost=/"
     fi
     in_php "
-        php bin/magento setup:install --no-interaction \
+        php bin/magento setup:install --no-interaction --cleanup-database \
             --base-url=http://localhost:$HTTP_PORT/ \
             --db-host=db --db-name=magento --db-user=magento --db-password=magento \
             --admin-firstname=Admin --admin-lastname=User --admin-email=admin@example.com \
@@ -69,6 +72,7 @@ if ! in_php 'test -f app/etc/env.php' 2>/dev/null; then
         php bin/magento config:set admin/security/session_lifetime 86400
         php bin/magento config:set admin/security/admin_account_sharing 1
         php bin/magento config:set system/smtp/disable 1
+        touch $INSTALLED_MARKER
     "
 fi
 

@@ -8,22 +8,29 @@ DEV_DIR="$(dirname "$BIN")"
 ARTIFACTS="$DEV_DIR/.artifacts"
 in_php() { "$BIN/compose" exec -T -u www-data php bash -ec "$1"; }
 
-rm -f "$ARTIFACTS"/*.zip
 if [ $# -gt 0 ]; then
-    cp "$1" "$ARTIFACTS/"
+    # Copy aside first: the given zip may itself live in $ARTIFACTS, which is cleared next.
+    STAGED="$(mktemp)"
+    cp "$1" "$STAGED"
+    rm -f "$ARTIFACTS"/*.zip
     ZIP="$ARTIFACTS/$(basename "$1")"
+    mv "$STAGED" "$ZIP"
 else
+    rm -f "$ARTIFACTS"/*.zip
     ZIP="$("$DEV_DIR/../scripts/package.sh" "$ARTIFACTS")"
 fi
 VERSION="$(unzip -p "$ZIP" composer.json | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
 echo "==> Installing bluebarry/magento2-module $VERSION from $(basename "$ZIP")"
 
-# Artifact packages carry no source reference, so a rebuilt zip with an unchanged version would be
-# skipped by a plain update. Refresh the lock (new checksum) and force a reinstall from the new zip.
+# Artifact packages carry no source reference, so Composer treats a rebuilt zip with an unchanged
+# version as already installed, and its lock keeps the old checksum. Remove the package first so it is
+# relocked from the new zip.
 in_php "
     rm -rf /var/www/.composer/cache/files/bluebarry
+    if composer show --locked bluebarry/magento2-module >/dev/null 2>&1; then
+        composer remove --no-interaction --no-progress bluebarry/magento2-module
+    fi
     composer require --no-interaction --no-progress 'bluebarry/magento2-module:$VERSION'
-    composer reinstall --no-interaction --no-progress bluebarry/magento2-module
 "
 
 echo "==> Production deploy (setup:upgrade, di:compile, static content, cache flush)"

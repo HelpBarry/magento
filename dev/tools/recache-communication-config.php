@@ -4,7 +4,8 @@
  * config, which re-populates the shared cache with the OLD release's topics whenever the new release's
  * setup:upgrade has just flushed it. Cron and queue consumers of the live release do this in prod.
  * One round per process (like each cron / consumer start); test-deploy-race runs it in a loop from the
- * old release root.
+ * old release root. Exits non-zero when the round failed (expected now and then while the database is
+ * mid-upgrade), so the caller counts only rounds that really loaded the config.
  */
 
 use Magento\Framework\App\Bootstrap;
@@ -15,5 +16,6 @@ require getcwd() . '/app/bootstrap.php';
 try {
     Bootstrap::create(BP, $_SERVER)->getObjectManager()->create(CommunicationConfigData::class)->get();
 } catch (\Throwable $e) {
-    // The database may be mid-upgrade; the next round tries again.
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(1);
 }
