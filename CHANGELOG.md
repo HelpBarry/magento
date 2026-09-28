@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Fixed
+- Conversions are reported in the order's currency instead of always EUR.
 
 ## [1.0.3] - 2026-09-24
 ### Fixed

@@ -135,7 +135,7 @@ class ConversionProcessor
                 "orderProductTotal" => $itemTotalExlTax, 
                 "orderTaxTotal" => round(($itemTotalTax),2),
                 "orderGrandTotal" => (round(($itemTotalTax),2) + $itemTotalExlTax), 
-                "currencyIso" => "EUR",
+                "currencyIso" => $order->getOrderCurrencyCode(),
                 "conversionId" => (string) $order->getId(),
                 "items" => $items
             ];
