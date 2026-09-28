@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Playwright end-to-end suite against the running stack. Extra args go to `playwright test`.
+set -euo pipefail
+cd "$(dirname "$0")/../e2e"
+[ -d node_modules ] || npm ci
+npx playwright install ${CI:+--with-deps} chromium >/dev/null
+exec npx playwright test "$@"

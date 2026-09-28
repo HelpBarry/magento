@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Static checks: syntax on every supported PHP version, XML against Magento's XSDs, Magento coding
+# standard, PHPStan against the installed Magento. Needs a set-up stack (dev/bin/setup) for all but syntax.
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$BIN/../.." && pwd)"
+in_php() { "$BIN/compose" exec -T -u www-data php bash -ec "$1"; }
+failed=()
+check() { local name="$1"; shift; printf '\n==> %s\n' "$name"; "$@" || failed+=("$name"); }
+
+syntax() {
+    local rc=0
+    for v in ${PHP_VERSIONS:-8.1 8.2 8.3 8.4 8.5}; do
+        # php -l prints "No syntax errors" per clean file; anything else, or a container that didn't
+        # run at all (image pull failure), is a failure.
+        out="$(docker run --rm -v "$ROOT:/module:ro" "php:$v-cli-alpine" sh -c \
+            'find /module -name "*.php" -not -path "/module/dev/*" -print0 | xargs -0 -n1 php -l 2>&1')"
+        status=$?
+        errors="$(grep -v "^No syntax errors" <<<"$out")"
+        if [ $status -ne 0 ] || [ -n "$errors" ] || ! grep -q "^No syntax errors" <<<"$out"; then
+            echo "PHP $v: FAILED (exit $status)"; echo "$errors"; rc=1
+        else
+            echo "PHP $v: ok"
+        fi
+    done
+    return $rc
+}
+
+check "PHP syntax (8.1 - 8.5)" syntax
+check "XML config vs Magento XSDs" in_php 'php /module/dev/tools/validate-xml.php /module'
+check "Magento coding standard (errors only)" in_php \
+    'vendor/bin/phpcs --standard=Magento2 --severity=10 --warning-severity=0 --extensions=php,phtml \
+        --ignore=/module/dev/*,/module/Test/* -s /module'
+check "PHPStan" in_php 'vendor/bin/phpstan analyse --no-progress --memory-limit=2G -c /module/dev/phpstan.neon.dist'
+
+echo
+if [ ${#failed[@]} -gt 0 ]; then printf 'FAILED: %s\n' "${failed[@]}"; exit 1; fi
+echo "All static checks passed"
