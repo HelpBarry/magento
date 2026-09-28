@@ -11,9 +11,17 @@ check() { local name="$1"; shift; printf '\n==> %s\n' "$name"; "$@" || failed+=(
 syntax() {
     local rc=0
     for v in ${PHP_VERSIONS:-8.1 8.2 8.3 8.4 8.5}; do
+        # php -l prints "No syntax errors" per clean file; anything else, or a container that didn't
+        # run at all (image pull failure), is a failure.
         out="$(docker run --rm -v "$ROOT:/module:ro" "php:$v-cli-alpine" sh -c \
-            'find /module -name "*.php" -not -path "/module/dev/*" -print0 | xargs -0 -n1 php -l 2>&1 | grep -v "^No syntax errors"')"
-        if [ -n "$out" ]; then echo "PHP $v:"; echo "$out"; rc=1; else echo "PHP $v: ok"; fi
+            'find /module -name "*.php" -not -path "/module/dev/*" -print0 | xargs -0 -n1 php -l 2>&1')"
+        status=$?
+        errors="$(grep -v "^No syntax errors" <<<"$out")"
+        if [ $status -ne 0 ] || [ -n "$errors" ] || ! grep -q "^No syntax errors" <<<"$out"; then
+            echo "PHP $v: FAILED (exit $status)"; echo "$errors"; rc=1
+        else
+            echo "PHP $v: ok"
+        fi
     done
     return $rc
 }

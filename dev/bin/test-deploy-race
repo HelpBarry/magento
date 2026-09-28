@@ -30,7 +30,10 @@ compose exec -T rabbitmq sh -c 'rabbitmqctl delete_queue bluebarry_conversion_pr
 
 echo "==> Snapshot the live release (release-a) and keep it busy re-caching config"
 compose exec -T php rm -f /tmp/recache.stop /tmp/recache.ok /tmp/recache.done
-in_php 'rm -rf /var/www/release-a && rsync -a --exclude var/cache --exclude var/page_cache --exclude pub/media /var/www/html/ /var/www/release-a/'
+if ! in_php 'rm -rf /var/www/release-a && rsync -a --exclude var/cache --exclude var/page_cache --exclude pub/media /var/www/html/ /var/www/release-a/'; then
+    echo "ERROR: could not snapshot the live release."
+    exit 1
+fi
 # Counts only rounds that actually loaded (and so possibly re-cached) the old release's config.
 compose exec -d -u www-data -w /var/www/release-a php bash -c '
     ok=0
@@ -40,6 +43,13 @@ compose exec -d -u www-data -w /var/www/release-a php bash -c '
     done
     touch /tmp/recache.done'
 recache_count() { compose exec -T php cat /tmp/recache.ok 2>/dev/null || echo 0; }
+# Only deploy once the old release demonstrably runs; otherwise nothing would race the deploy.
+for _ in $(seq 1 60); do [ "$(recache_count)" -ge 1 ] && break; sleep 1; done
+if [ "$(recache_count)" -lt 1 ]; then
+    echo "ERROR: the old release never loaded its config; the simulation would prove nothing."
+    compose exec -T php touch /tmp/recache.stop
+    exit 1
+fi
 
 echo "==> Deploying the new release (installs the module) while release-a is live"
 OUTPUT="$("$BIN/deploy-module" ${ZIP:+"$ZIP"} 2>&1)"
