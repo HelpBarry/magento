@@ -11,11 +11,6 @@ parameters:
 			path: /module/Controller/Session/Update.php
 
 		-
-			message: "#^Call to an undefined method Magento\\\\Sales\\\\Api\\\\Data\\\\OrderInterface\\:\\:getAllItems\\(\\)\\.$#"
-			count: 1
-			path: /module/Model/Consumer/ConversionProcessor.php
-
-		-
 			message: "#^Call to an undefined method Magento\\\\Sales\\\\Api\\\\Data\\\\OrderInterface\\:\\:getId\\(\\)\\.$#"
 			count: 1
 			path: /module/Model/Consumer/ConversionProcessor.php
