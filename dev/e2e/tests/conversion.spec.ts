@@ -100,37 +100,36 @@ test('simple product: checkout after quiz sends a valid conversion and identify'
   expect(identify!.body).toEqual({ email, sessionId: ids.sessionId, userId: ids.userId });
 });
 
-test.describe('configurable product', () => {
-  let body: any;
-
-  // One checkout for both tests below; serial so the known-bug test sees this conversion.
-  test.describe.configure({ mode: 'serial' });
-
-  test('conversion is sent with the variant totals', async ({ page }) => {
+// Composite products must be reported as the line the shopper bought: once, at the price paid (#20).
+for (const [name, urlKey, options, net] of [
+  ['configurable product', 'bb-configurable', { color: 'BB Red' }, 80],
+  ['dynamic-price bundle', 'bb-bundle-dynamic', { bundle: true }, 50],
+  ['fixed-price bundle', 'bb-bundle-fixed', { bundle: true }, 45],
+] as const) {
+  test(`${name}: reported once, at the price paid`, async ({ page }) => {
     const ids = newAdvisorIds();
     await stubAdvisor(page, ids);
     await page.goto('/');
     await startAdvisor(page);
-    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    await addToCart(page, urlKey, options);
     await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
 
     runConversionConsumer();
     const conversion = (await mockApi.requests()).find((r) => r.path.toLowerCase() === '/data/conversionevents');
     expect(conversion).toBeDefined();
     expect(conversion!.contractErrors).toEqual([]);
-    body = conversion!.body;
-    expect(Number(body.orderProductTotal)).toBeCloseTo(80, 2);
-    expect(Number(body.orderGrandTotal)).toBeCloseTo(96.8, 2);
+    const body = conversion!.body;
+    const gross = Math.round(net * 121) / 100; // NL 21% VAT
+    expect(Number(body.orderProductTotal)).toBeCloseTo(net, 2);
+    expect(Number(body.orderTaxTotal)).toBeCloseTo(gross - net, 2);
+    expect(Number(body.orderGrandTotal)).toBeCloseTo(gross, 2);
+    expect(body.items, 'one line per purchased product').toHaveLength(1);
+    expect(Number(body.items[0].quantity)).toBe(1);
+    expect(Number(body.items[0].priceExclTax)).toBeCloseTo(net, 2);
+    expect(Number(body.items[0].priceInclTax)).toBeCloseTo(gross, 2);
+    expect(Number(body.items[0].taxPercentage)).toBeCloseTo(21, 2);
   });
-
-  test('conversion lists the product once', async () => {
-    // Known bug (#20): ConversionProcessor iterates getAllItems(), which includes the configurable's
-    // child simple as a second, EUR 0 line. Only this assertion is expected to fail; remove once fixed.
-    test.skip(!body, 'needs the conversion from the previous test');
-    test.fail();
-    expect(body.items, 'one line per purchased product, not parent + child').toHaveLength(1);
-  });
-});
+}
 
 test('checkout without a quiz session sends nothing', async ({ page }) => {
   await stubAdvisor(page, null);
