@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Every suite against the current variant (BB_ENV). Keeps going after a failure and summarises.
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+failed=()
+run() { printf '\n######## %s [%s]\n' "$1" "${BB_ENV:-default}"; "$BIN/$1" || failed+=("$1"); }
+
+run test-static
+run test-unit
+run test-e2e
+[ "${SKIP_DEPLOY_RACE:-0}" = 1 ] || run test-deploy-race
+
+echo
+if [ ${#failed[@]} -gt 0 ]; then printf '[%s] FAILED: %s\n' "${BB_ENV:-default}" "${failed[*]}"; exit 1; fi
+echo "[${BB_ENV:-default}] all suites passed"

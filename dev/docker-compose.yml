@@ -1,0 +1,111 @@
+# Production-like Magento stack for testing the Bluebarry module. Use dev/bin/compose rather than
+# calling docker compose directly: it selects the env variant (dev/env/<BB_ENV>.env) and project name.
+name: bb-magento-${BB_ENV:-default}
+
+services:
+  db:
+    image: mariadb:${MARIADB_VERSION}
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: magento
+      MARIADB_USER: magento
+      MARIADB_PASSWORD: magento
+    command: --max_allowed_packet=64M --optimizer_switch=rowid_filter=off --optimizer_use_condition_selectivity=1
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 30
+
+  opensearch:
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - opensearch:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      retries: 60
+
+  redis:
+    image: redis:7.2-alpine
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+
+  php:
+    build:
+      context: ./php
+      args:
+        PHP_VERSION: ${PHP_VERSION}
+    volumes:
+      - code:/var/www/html
+      - composer-cache:/var/www/.composer/cache
+      - ..:/module:ro
+      - ./.certs:/certs:ro
+      - ./.artifacts:/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      mock-api:
+        condition: service_started
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - code:/var/www/html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    depends_on:
+      - php
+
+  # Stand-in for data.bluebarry.ai (see mock-api/server.mjs).
+  mock-api:
+    image: node:22-alpine
+    command: node /app/server.mjs
+    volumes:
+      - ./mock-api/server.mjs:/app/server.mjs:ro
+      - ./.certs:/certs:ro
+    ports:
+      - "${MOCK_API_PORT:-8099}:3000"
+    networks:
+      default:
+        aliases:
+          - data.bluebarry.ai
+
+  # OWASP CRS in front of the store, the same rule set Cloud Armor and most hosting WAFs are based on.
+  waf:
+    image: owasp/modsecurity-crs:${WAF_IMAGE_TAG:-nginx-alpine}
+    environment:
+      BACKEND: http://nginx:80
+      BLOCKING_PARANOIA: ${WAF_PARANOIA:-2}
+      MODSEC_RULE_ENGINE: "On"
+      ANOMALY_INBOUND: 5
+      SERVER_NAME: localhost
+    volumes:
+      - ./waf/proxy-buffers.conf:/etc/nginx/conf.d/zz-proxy-buffers.conf:ro
+    ports:
+      - "${WAF_PORT:-8081}:8080"
+    depends_on:
+      - nginx
+
+volumes:
+  db:
+  opensearch:
+  code:
+  composer-cache:
+    name: bb-magento-composer-cache

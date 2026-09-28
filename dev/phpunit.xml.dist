@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Runs inside the php container (dev/bin/test-unit) against the installed Magento's unit test framework. -->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         colors="true"
+         bootstrap="/module/dev/tools/phpunit-bootstrap.php"
+         cacheResult="false">
+    <testsuites>
+        <testsuite name="Bluebarry Unit">
+            <directory suffix="Test.php">/module/Test/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <ini name="date.timezone" value="Europe/Amsterdam"/>
+        <ini name="memory_limit" value="-1"/>
+    </php>
+</phpunit>

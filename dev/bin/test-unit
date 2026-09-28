@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# PHPUnit (Test/Unit) inside the php container, against the working tree.
+set -euo pipefail
+exec "$(dirname "$0")/compose" exec -T -u www-data php vendor/bin/phpunit -c /module/dev/phpunit.xml.dist "$@"

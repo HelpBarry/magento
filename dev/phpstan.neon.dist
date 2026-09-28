@@ -1,0 +1,17 @@
+# Runs inside the php container against the installed Magento (dev/bin/test-static). The bitexpert
+# extension teaches PHPStan Magento's magic getters/setters, factories and proxies.
+# Existing findings are in phpstan-baseline.neon so only new ones fail; shrink it as code gets fixed.
+includes:
+    - /var/www/html/vendor/bitexpert/phpstan-magento/extension.neon
+    - phpstan-baseline.neon
+
+parameters:
+    level: 5
+    paths:
+        - /module
+    excludePaths:
+        - /module/dev/*
+        - /module/Test/*
+    bootstrapFiles:
+        - /var/www/html/vendor/bitexpert/phpstan-magento/autoload.php
+    treatPhpDocTypesAsCertain: false
