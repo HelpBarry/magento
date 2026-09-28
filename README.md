@@ -47,7 +47,7 @@ Once the previous release's cron jobs and queue consumers have stopped, run:
 ```bash
 php bin/magento cache:flush
 ```
-Use `cache:flush`, not `cache:clean`: the previous release's entries aren't reliably removed by a tag-based clean. Most deploy tools can run this as their final step, after PHP-FPM and the queue consumers have restarted.
+Use `cache:flush`, not `cache:clean`: the previous release's entries aren't reliably removed by a tag-based clean. Most deploy tools can run this as their final step, after PHP-FPM and the queue consumers have restarted. Quiz orders placed between the release switch and this flush may not be tracked.
 
 ## Configuration
 1. Go to **Stores > Configuration > Bluebarry > General** in the Magento Admin.

@@ -25,6 +25,7 @@ cleanup() {
         compose exec -T php pgrep -f old-release-round >/dev/null || break
         sleep 1
     done
+    compose exec -T php pkill -f old-release-round >/dev/null 2>&1
     in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a; php bin/magento cache:flush >/dev/null'
     if [ -n "$ZIP" ] || ! in_php 'composer show --locked bluebarry/magento2-module >/dev/null 2>&1'; then
         echo "==> Restoring the working-tree module"
@@ -124,7 +125,10 @@ fi
 echo "    observer missing: the old release's config is cached (expected; quiz orders are not tracked yet)"
 
 echo "==> Documented post-deploy step: bin/magento cache:flush"
-in_php 'php bin/magento cache:flush >/dev/null'
+if ! in_php 'php bin/magento cache:flush >/dev/null'; then
+    echo "ERROR: cache:flush failed; the post-deploy step itself did not run."
+    exit 1
+fi
 
 # The real question: after the documented deploy, does a shopper's quiz order reach Bluebarry?
 echo "==> A quiz checkout right after the deploy"
