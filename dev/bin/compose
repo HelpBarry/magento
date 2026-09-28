@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# docker compose for the selected variant: BB_ENV=<name> picks dev/env/<name>.env (default: "default").
+set -euo pipefail
+DEV_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export BB_ENV="${BB_ENV:-default}"
+ENV_FILE="$DEV_DIR/env/$BB_ENV.env"
+[ -f "$ENV_FILE" ] || { echo "Unknown BB_ENV '$BB_ENV' (no $ENV_FILE)" >&2; exit 1; }
+exec docker compose -f "$DEV_DIR/docker-compose.yml" --env-file "$ENV_FILE" "$@"

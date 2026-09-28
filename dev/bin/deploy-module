@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Packages the working tree (or installs a given zip) through Composer and runs the same deploy steps a
+# production host runs: setup:upgrade, setup:di:compile, static content deploy, cache flush.
+# Usage: dev/bin/deploy-module [path/to/module.zip]
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+DEV_DIR="$(dirname "$BIN")"
+ARTIFACTS="$DEV_DIR/.artifacts"
+in_php() { "$BIN/compose" exec -T -u www-data php bash -ec "$1"; }
+
+rm -f "$ARTIFACTS"/*.zip
+if [ $# -gt 0 ]; then
+    cp "$1" "$ARTIFACTS/"
+    ZIP="$ARTIFACTS/$(basename "$1")"
+else
+    ZIP="$("$DEV_DIR/../scripts/package.sh" "$ARTIFACTS")"
+fi
+VERSION="$(unzip -p "$ZIP" composer.json | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
+echo "==> Installing bluebarry/magento2-module $VERSION from $(basename "$ZIP")"
+
+# Artifact packages carry no source reference, so a rebuilt zip with an unchanged version would be
+# skipped by a plain update. Refresh the lock (new checksum) and force a reinstall from the new zip.
+in_php "
+    rm -rf /var/www/.composer/cache/files/bluebarry
+    composer require --no-interaction --no-progress 'bluebarry/magento2-module:$VERSION'
+    composer reinstall --no-interaction --no-progress bluebarry/magento2-module
+"
+
+echo "==> Production deploy (setup:upgrade, di:compile, static content, cache flush)"
+in_php "
+    php bin/magento maintenance:enable >/dev/null
+    php bin/magento setup:upgrade --no-interaction
+    php bin/magento setup:di:compile
+    php bin/magento setup:static-content:deploy -f -j 4 --area frontend --area adminhtml en_US >/dev/null
+    php bin/magento maintenance:disable >/dev/null
+    php bin/magento cache:flush >/dev/null
+"
+in_php "php bin/magento module:status Bluebarry_Bluebarry"
