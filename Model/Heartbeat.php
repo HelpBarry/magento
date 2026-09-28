@@ -89,7 +89,15 @@ class Heartbeat
         foreach ($this->storeManager->getWebsites() as $website) {
             $last = $state['websites'][(int) $website->getId()]['at'] ?? 0;
             if ($force || time() - $last >= self::INTERVAL) {
-                $this->send($website);
+                try {
+                    $this->send($website);
+                } catch (\Exception $e) {
+                    // One broken website (an undecryptable key, a missing store) must not keep the others
+                    // from reporting in. Tried again in a day, or when its settings are saved.
+                    $this->record((int) $website->getId(), [
+                        'at' => time(), 'site' => '', 'ok' => false, 'status' => 0, 'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
         if ($force) {
@@ -117,6 +125,8 @@ class Heartbeat
 
         $siteUrl = $this->siteUrl($website);
         $response = $this->client->post('/data/magento/ping', [
+            // bluebarry refuses a key from another company before it registers anything.
+            'tenantId' => $tenantId,
             'siteUrl' => $siteUrl,
             'siteName' => (string) $website->getName(),
             'moduleVersion' => (string) ($this->moduleList->getOne('Bluebarry_Bluebarry')['setup_version'] ?? ''),
@@ -126,12 +136,9 @@ class Heartbeat
 
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];
         if ($response->isSuccess()) {
-            $keyTenant = strtolower((string) (json_decode($response->getBody(), true)['tenantId'] ?? ''));
-            if ($keyTenant !== '' && $keyTenant !== strtolower($tenantId)) {
-                $outcome['error'] = 'The API key belongs to another bluebarry company than the Tenant ID.';
-            } else {
-                $outcome['ok'] = true;
-            }
+            $outcome['ok'] = true;
+        } elseif ($response->getStatus() === 409) {
+            $outcome['error'] = 'The API key belongs to another bluebarry company than the Tenant ID.';
         } elseif ($response->getStatus() === 401 || $response->getStatus() === 403) {
             $outcome['error'] = 'bluebarry refused the API key.';
         } else {
@@ -199,6 +206,9 @@ class Heartbeat
     {
         $state = $this->state();
         if ($outcome === null) {
+            if (!isset($state['websites'][$websiteId])) {
+                return; // an unconnected website stays one flag read
+            }
             unset($state['websites'][$websiteId]);
         } else {
             $state['websites'][$websiteId] = $outcome;

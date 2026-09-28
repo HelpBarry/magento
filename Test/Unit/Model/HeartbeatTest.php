@@ -21,6 +21,8 @@ class HeartbeatTest extends TestCase
 
     private array $calls = [];
     private array $flag = [];
+    /** @var callable|null */
+    private $onSave;
 
     public function testPingsEachConnectedWebsiteWithItsKey(): void
     {
@@ -34,6 +36,7 @@ class HeartbeatTest extends TestCase
         $this->assertSame('key-1', $key);
         $this->assertSame(self::TENANT, $tenant);
         $this->assertSame([
+            'tenantId' => self::TENANT,
             'siteUrl' => 'https://shop1.example',
             'siteName' => 'Website 1',
             'moduleVersion' => '1.1.0',
@@ -59,7 +62,7 @@ class HeartbeatTest extends TestCase
 
     public function testAKeyFromAnotherCompanyIsNotAConnection(): void
     {
-        $heartbeat = $this->heartbeat([200], keyTenant: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+        $heartbeat = $this->heartbeat([409]); // bluebarry refuses it before registering anything
 
         $outcome = $heartbeat->send($this->website(1));
 
@@ -85,6 +88,31 @@ class HeartbeatTest extends TestCase
         $this->assertSame([], $heartbeat->outcomes());
     }
 
+    public function testAnUnconnectedWebsiteCostsNoWrite(): void
+    {
+        $heartbeat = $this->heartbeat([], connected: [1 => false]);
+        $saves = 0;
+        $this->onSave = function () use (&$saves) {
+            $saves++;
+        };
+
+        $heartbeat->sendDue();
+        $heartbeat->sendDue();
+
+        $this->assertSame(0, $saves);
+    }
+
+    public function testOneBrokenWebsiteDoesNotStopTheOthers(): void
+    {
+        $heartbeat = $this->heartbeat([200], connected: [1 => true, 2 => true], brokenWebsite: 1);
+
+        $heartbeat->sendDue();
+
+        $this->assertSame(['key-2'], array_column($this->calls, 3));
+        $this->assertFalse($heartbeat->outcomes()[1]['ok']);
+        $this->assertTrue($heartbeat->outcomes()[2]['ok']);
+    }
+
     public function testUninstallDeactivatesEveryConnectedWebsite(): void
     {
         $this->heartbeat([200, 200], connected: [1 => true, 2 => true])->deactivateAll();
@@ -107,7 +135,7 @@ class HeartbeatTest extends TestCase
         return $website;
     }
 
-    private function heartbeat(array $statuses, array $connected = [1 => true], string $keyTenant = self::TENANT): Heartbeat
+    private function heartbeat(array $statuses, array $connected = [1 => true], ?int $brokenWebsite = null): Heartbeat
     {
         $websites = [];
         foreach (array_keys($connected) as $id) {
@@ -115,12 +143,17 @@ class HeartbeatTest extends TestCase
         }
         $config = $this->createStub(Config::class);
         $config->method('getWebsiteTenantId')->willReturnCallback(fn ($id) => ($connected[(int) $id] ?? false) ? self::TENANT : null);
-        $config->method('getWebsiteApiKey')->willReturnCallback(fn ($id) => ($connected[(int) $id] ?? false) ? "key-$id" : null);
+        $config->method('getWebsiteApiKey')->willReturnCallback(function ($id) use ($connected, $brokenWebsite) {
+            if ((int) $id === $brokenWebsite) {
+                throw new \Exception('Unable to decrypt the key.');
+            }
+            return ($connected[(int) $id] ?? false) ? "key-$id" : null;
+        });
 
         $client = $this->createStub(Client::class);
-        $client->method('post')->willReturnCallback(function ($path, $body, $tenant, $key) use (&$statuses, $keyTenant) {
+        $client->method('post')->willReturnCallback(function ($path, $body, $tenant, $key) use (&$statuses) {
             $this->calls[] = [$path, $body, $tenant, $key];
-            return new Response((int) array_shift($statuses), (string) json_encode(['success' => true, 'tenantId' => $keyTenant]));
+            return new Response((int) array_shift($statuses), (string) json_encode(['success' => true, 'tenantId' => self::TENANT]));
         });
 
         $storeManager = $this->createStub(StoreManagerInterface::class);
@@ -137,6 +170,9 @@ class HeartbeatTest extends TestCase
         $flags = $this->createStub(FlagManager::class);
         $flags->method('getFlagData')->willReturnCallback(fn () => $this->flag);
         $flags->method('saveFlag')->willReturnCallback(function ($code, $data) {
+            if ($this->onSave) {
+                ($this->onSave)();
+            }
             $this->flag = $data;
             return true;
         });
