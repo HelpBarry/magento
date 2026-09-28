@@ -169,3 +169,52 @@ $parentStock = $stockRegistry->getStockItemBySku('bb-configurable');
 $parentStock->setIsInStock(true);
 $stockRegistry->updateStockItemBySku('bb-configurable', $parentStock);
 echo "product: bb-configurable (variants BB Red / BB Blue, EUR 80.00 excl. tax)\n";
+
+// Bundles: dynamic price (the parts carry the prices) and fixed price (the bundle carries the price).
+$bundleOption = function (string $title, string $partSku) use ($om) {
+    $link = $om->get(\Magento\Bundle\Api\Data\LinkInterfaceFactory::class)->create();
+    $link->setSku($partSku)->setQty(1)->setIsDefault(true)->setCanChangeQuantity(0)->setPrice(0)->setPriceType(0);
+    $option = $om->get(\Magento\Bundle\Api\Data\OptionInterfaceFactory::class)->create();
+    $option->setTitle($title)->setType('select')->setRequired(true)->setPosition(1)->setProductLinks([$link]);
+    return $option;
+};
+$makeBundle = function (string $sku, string $name, bool $fixedPrice, ?float $price) use ($productFactory, $productRepo, $defaultSetId, $bundleOption) {
+    $bundle = $productFactory->create();
+    $bundle->setTypeId(\Magento\Bundle\Model\Product\Type::TYPE_CODE)
+        ->setAttributeSetId($defaultSetId)
+        ->setSku($sku)
+        ->setName($name)
+        ->setUrlKey($sku)
+        ->setVisibility(Visibility::VISIBILITY_BOTH)
+        ->setStatus(Status::STATUS_ENABLED)
+        ->setWebsiteIds([1])
+        ->setTaxClassId(TAXABLE_GOODS_CLASS)
+        ->setPriceType($fixedPrice ? \Magento\Bundle\Model\Product\Price::PRICE_TYPE_FIXED : \Magento\Bundle\Model\Product\Price::PRICE_TYPE_DYNAMIC)
+        ->setSkuType(0)
+        ->setWeightType(0)
+        ->setWeight(1)
+        ->setPriceView(0)
+        ->setShipmentType(0)
+        ->setStockData(['use_config_manage_stock' => 1, 'is_in_stock' => 1]);
+    if ($price !== null) {
+        $bundle->setPrice($price);
+    }
+    $extension = $bundle->getExtensionAttributes();
+    $extension->setBundleProductOptions([$bundleOption('Part A', 'bb-part-a'), $bundleOption('Part B', 'bb-part-b')]);
+    $bundle->setExtensionAttributes($extension);
+    $productRepo->save($bundle);
+};
+if (!$exists('bb-part-a')) {
+    $makeSimple('bb-part-a', 'Bluebarry Bundle Part A', 30.00, Visibility::VISIBILITY_NOT_VISIBLE);
+}
+if (!$exists('bb-part-b')) {
+    $makeSimple('bb-part-b', 'Bluebarry Bundle Part B', 20.00, Visibility::VISIBILITY_NOT_VISIBLE);
+}
+if (!$exists('bb-bundle-dynamic')) {
+    $makeBundle('bb-bundle-dynamic', 'Bluebarry Dynamic Bundle', false, null);
+}
+if (!$exists('bb-bundle-fixed')) {
+    $makeBundle('bb-bundle-fixed', 'Bluebarry Fixed Bundle', true, 45.00);
+}
+echo "product: bb-bundle-dynamic (parts EUR 30.00 + EUR 20.00 excl. tax)\n";
+echo "product: bb-bundle-fixed (EUR 45.00 excl. tax)\n";
