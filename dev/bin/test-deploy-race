@@ -22,7 +22,7 @@ cleanup() {
     compose exec -T php touch /tmp/recache.stop
     for _ in $(seq 1 60); do
         compose exec -T php test -f /tmp/recache.done && break
-        compose exec -T php pgrep -f recache-communication-config >/dev/null || break
+        compose exec -T php pgrep -f old-release-round >/dev/null || break
         sleep 1
     done
     in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a; php bin/magento cache:flush >/dev/null'
@@ -57,7 +57,7 @@ compose exec -d -u www-data -w /var/www/release-a php bash -c '
     ok=0
     echo 0 > /tmp/recache.ok
     while [ ! -f /tmp/recache.stop ]; do
-        if php /module/dev/tools/recache-communication-config.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
+        if php /module/dev/tools/old-release-round.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
     done
     touch /tmp/recache.done'
 # Only deploy once the old release demonstrably runs; otherwise nothing would race the deploy.
@@ -107,11 +107,12 @@ OBSERVER_STATE="$(in_php 'php -r "
     \$observers = \$om->get(Magento\\Framework\\Event\\ConfigInterface::class)->getObservers(\"sales_model_service_quote_submit_success\");
     echo isset(\$observers[\"bluebarry_checkout_conversion_tracking\"]) ? \"registered\" : \"missing\";
 "')"
-if [ "$OBSERVER_STATE" = "missing" ]; then
-    echo "    observer missing: the old release's config is cached (expected; quiz orders are not tracked yet)"
-else
-    echo "    observer registered: the old release did not leave its config behind this time"
+if [ "$OBSERVER_STATE" != "missing" ]; then
+    echo "INCONCLUSIVE: the observer is registered, so the old release did not leave its config behind this"
+    echo "              time and the documented step below would prove nothing."
+    exit 1
 fi
+echo "    observer missing: the old release's config is cached (expected; quiz orders are not tracked yet)"
 
 echo "==> Documented post-deploy step: bin/magento cache:flush"
 in_php 'php bin/magento cache:flush >/dev/null'
