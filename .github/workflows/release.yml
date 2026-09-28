@@ -84,21 +84,20 @@ jobs:
           unzip -Z1 "$ZIP"
           echo "path=$ZIP" >> "$GITHUB_OUTPUT"
 
-      - name: Keep the zip (dry run)
-        if: ${{ inputs.dry_run }}
+      # Always kept: if publishing fails after the push, this is the zip to attach by hand.
+      - name: Keep the zip
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ steps.version.outputs.version }}-dry-run
+          name: release-${{ steps.version.outputs.version }}${{ inputs.dry_run && '-dry-run' || '' }}
           path: |
             ${{ steps.zip.outputs.path }}
             ${{ runner.temp }}/release-notes.md
 
-      - name: Commit, tag and publish the release
+      - name: Commit and tag the release
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          ZIP: ${{ steps.zip.outputs.path }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -108,4 +107,29 @@ jobs:
           # Atomic: if main moved while the tests ran, neither the commit nor the tag lands, so the
           # workflow can simply be run again.
           git push --atomic "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main "refs/tags/v$VERSION"
-          gh release create "v$VERSION" "$ZIP" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+
+      # The commit and tag are pushed at this point, so a rerun of the workflow can't redo this step
+      # (Unreleased is empty now). Retry, reusing a release a failed attempt left behind, and otherwise
+      # say exactly how to finish by hand.
+      - name: Publish the GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.zip.outputs.path }}
+        run: |
+          publish() {
+            if gh release view "v$VERSION" >/dev/null 2>&1; then
+              gh release upload "v$VERSION" "$ZIP" --clobber &&
+                gh release edit "v$VERSION" --draft=false --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+            else
+              gh release create "v$VERSION" "$ZIP" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+            fi
+          }
+          for attempt in 1 2 3; do
+            publish && exit 0
+            echo "Publishing failed (attempt $attempt), retrying..."
+            sleep $((attempt * 10))
+          done
+          echo "::error::v$VERSION is committed and tagged but the GitHub release is not published. Download the 'release-$VERSION' artifact of this run and, in its folder, run: gh release create v$VERSION bluebarry-magento2-module-$VERSION.zip --verify-tag --title $VERSION --notes-file release-notes.md"
+          exit 1

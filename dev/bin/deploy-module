@@ -35,11 +35,12 @@ in_php "
 
 echo "==> Production deploy (setup:upgrade, di:compile, static content, cache flush)"
 in_php "
+    # A failed step must not leave the store in maintenance mode.
+    trap 'php bin/magento maintenance:disable >/dev/null' EXIT
     php bin/magento maintenance:enable >/dev/null
     php bin/magento setup:upgrade --no-interaction
     php bin/magento setup:di:compile
     php bin/magento setup:static-content:deploy -f -j 4 --area frontend --area adminhtml en_US >/dev/null
-    php bin/magento maintenance:disable >/dev/null
     php bin/magento cache:flush >/dev/null
 "
 in_php "php bin/magento module:status Bluebarry_Bluebarry"
