@@ -132,7 +132,8 @@ fi
 
 # The real question: after the documented deploy, does a shopper's quiz order reach Bluebarry?
 echo "==> A quiz checkout right after the deploy"
-if ! "$BIN/test-e2e" -g "simple product: checkout after quiz" >/tmp/bb-deploy-race-e2e.log 2>&1; then
+# No retries: a second order succeeding must not hide a lost first one.
+if ! "$BIN/test-e2e" -g "simple product: checkout after quiz" --retries=0 >/tmp/bb-deploy-race-e2e.log 2>&1; then
     grep -E "✘|Error" /tmp/bb-deploy-race-e2e.log | head -5
     echo "FAIL: a quiz order placed right after the deploy did not reach Bluebarry"
     exit 1
