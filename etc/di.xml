@@ -37,6 +37,12 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <!-- Settings page and save: build the heartbeat (and its HTTP client) only when used. -->
+    <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection">
+        <arguments>
+            <argument name="heartbeat" xsi:type="object">Bluebarry\Bluebarry\Model\Heartbeat\Proxy</argument>
+        </arguments>
+    </type>
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">

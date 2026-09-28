@@ -5,7 +5,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 ## Features
 - Injects Bluebarry advisor script into your storefront
 - Records every paid order from a shopper who used bluebarry (quiz, search, recommendations, product chat, popups) and identifies the buyer's email, from the background so checkout never waits
-- Admin configuration for Tenant ID and debug logging
+- Connects each Magento website to bluebarry with its Tenant ID and API key, and shows the connection in the admin and in bluebarry
 
 ## Installation
 
@@ -53,7 +53,9 @@ Use `cache:flush`, not `cache:clean`: the previous release's entries aren't reli
 ## Configuration
 1. Go to **Stores > Configuration > Bluebarry > General** in the Magento Admin.
 2. Enter your **Tenant ID** (find it in your Bluebarry account integrations page).
-3. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
+3. Enter an **API Key**: create one in bluebarry under Integrations, Developer area, API keys. It is stored encrypted and connects the website to bluebarry. With several websites, switch the scope to set the Tenant ID and API key per website.
+4. Save. Magento shows whether each website is connected, and **Connection** shows the last check. The module reports in daily from Magento's cron, so bluebarry shows the store as connected under Integrations.
+5. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
 
 ## Usage
 - The Bluebarry advisor widget will appear on your storefront if Tenant ID is set.

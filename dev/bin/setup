@@ -82,6 +82,7 @@ if [ "$INSTALLED" != "$WANTED" ]; then
         php bin/magento config:set tax/defaults/country NL
         php bin/magento config:set admin/security/session_lifetime 86400
         php bin/magento config:set admin/security/admin_account_sharing 1
+        php bin/magento config:set admin/security/use_form_key 0
         php bin/magento config:set system/smtp/disable 1
     "
 
