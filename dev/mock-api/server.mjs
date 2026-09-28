@@ -97,9 +97,28 @@ function validateObject(obj, schema, path, errors) {
   }
 }
 
+const magentoPing = {
+  disallowUnknown: false,
+  required: ['siteUrl'],
+  fields: {
+    siteUrl: (v) => typeof v === 'string' && /^https?:\/\//.test(v),
+    siteName: types.nullableString(256),
+    moduleVersion: types.nullableString(32),
+    magentoVersion: types.nullableString(32),
+    magentoEdition: types.nullableString(32),
+    commandUrl: types.nullableString(512),
+  },
+};
+
+// The one API key the mock accepts, and the company it belongs to.
+export const API_KEY = 'test-api-key';
+const API_KEY_TENANT = 'test-tenant';
+
 const routes = {
   '/data/conversionevents': { schema: conversionEvent, ok: (n) => [201, { id: `mock-${n}` }] },
   '/data/identify': { schema: identify, ok: () => [204, null] },
+  '/data/magento/ping': { schema: magentoPing, auth: 'apiKey', ok: () => [200, { success: true, tenantId: API_KEY_TENANT }] },
+  '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 
 function validateRequest(req, json, raw) {
@@ -107,7 +126,11 @@ function validateRequest(req, json, raw) {
   if (!route) return { status: 404, errors: [`unknown endpoint ${req.url}`] };
   const errors = [];
   if (req.method !== 'POST') errors.push(`method ${req.method} not allowed`);
-  if (!req.headers['bb-tenant-id']) errors.push('missing BB-Tenant-Id header');
+  if (route.auth === 'apiKey') {
+    // DataApi authenticates a request that names a tenant as that tenant's storefront and ignores the
+    // key, so a key-authenticated call must not send BB-Tenant-Id.
+    if (req.headers['bb-tenant-id'] || req.headers.authorization !== API_KEY) return { status: 401, errors: ['API key missing or refused'] };
+  } else if (!req.headers['bb-tenant-id']) errors.push('missing BB-Tenant-Id header');
   if (!(req.headers['content-type'] ?? '').startsWith('application/json')) errors.push('content-type must be application/json');
   if (raw && json === null) errors.push('body is not valid JSON');
   else validateObject(json, route.schema, '$', errors);

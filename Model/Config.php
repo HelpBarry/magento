@@ -4,6 +4,7 @@ namespace Bluebarry\Bluebarry\Model;
 
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\App\DeploymentConfig;
+use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Store\Model\ScopeInterface;
 
 /**
@@ -18,6 +19,7 @@ class Config
 {
     public const XML_TENANT_ID = 'bluebarry_module/general/tenantid';
     public const XML_DEBUG_LOG = 'bluebarry_module/general/write_to_debug_file';
+    public const XML_API_KEY = 'bluebarry_module/general/api_key';
 
     public const DEFAULT_API_URL = 'https://data.bluebarry.ai';
 
@@ -32,13 +34,45 @@ class Config
     private $deploymentConfig;
 
     /**
+     * @var EncryptorInterface
+     */
+    private $encryptor;
+
+    /**
      * @param ScopeConfigInterface $scopeConfig
      * @param DeploymentConfig $deploymentConfig
+     * @param EncryptorInterface $encryptor
      */
-    public function __construct(ScopeConfigInterface $scopeConfig, DeploymentConfig $deploymentConfig)
+    public function __construct(ScopeConfigInterface $scopeConfig, DeploymentConfig $deploymentConfig, EncryptorInterface $encryptor)
     {
         $this->scopeConfig = $scopeConfig;
         $this->deploymentConfig = $deploymentConfig;
+        $this->encryptor = $encryptor;
+    }
+
+    /**
+     * The tenant a website is connected to (one bluebarry installation per website).
+     *
+     * @param int|string $website
+     * @return string|null
+     */
+    public function getWebsiteTenantId($website): ?string
+    {
+        $tenantId = trim((string) $this->scopeConfig->getValue(self::XML_TENANT_ID, ScopeInterface::SCOPE_WEBSITE, $website));
+        return $tenantId === '' ? null : $tenantId;
+    }
+
+    /**
+     * The API key a website connects with, decrypted. Never printed on a page.
+     *
+     * @param int|string $website
+     * @return string|null
+     */
+    public function getWebsiteApiKey($website): ?string
+    {
+        $stored = (string) $this->scopeConfig->getValue(self::XML_API_KEY, ScopeInterface::SCOPE_WEBSITE, $website);
+        $key = $stored !== '' ? trim($this->encryptor->decrypt($stored)) : '';
+        return $key === '' ? null : $key;
     }
 
     /**

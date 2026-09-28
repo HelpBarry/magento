@@ -240,3 +240,20 @@ export async function payForOrder(page: Page, incrementId: string): Promise<void
   });
   expect(invoice.status(), await invoice.text()).toBe(200);
 }
+
+// --- Magento admin ------------------------------------------------------------------------------------
+
+/** Signs in to the Magento admin (the test store has no 2FA and no secret keys in admin URLs). */
+export async function adminLogin(page: Page): Promise<void> {
+  await page.goto('/admin');
+  await page.locator('#username').fill('admin');
+  await page.locator('#login').fill('Admin12345!');
+  await page.locator('.action-login').click();
+  await expect(page.locator('.page-title, h1').first()).toBeVisible({ timeout: 60_000 });
+}
+
+/** Opens Stores > Configuration > Bluebarry > General, at a website's scope when given. */
+export async function openBluebarrySettings(page: Page, websiteId?: number): Promise<void> {
+  await page.goto(`/admin/admin/system_config/edit/section/bluebarry_module/${websiteId ? `website/${websiteId}/` : ''}`);
+  await expect(page.locator('#bluebarry_module_general_tenantid')).toBeVisible({ timeout: 60_000 });
+}
