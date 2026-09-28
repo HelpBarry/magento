@@ -2,129 +2,101 @@
 
 namespace Bluebarry\Bluebarry\Observer;
 
-use Bluebarry\Bluebarry\Model\Session;
-use Magento\Framework\App\Config\ScopeConfigInterface;
-use Magento\Framework\MessageQueue\PublisherInterface;
-use Psr\Log\LoggerInterface;
-use Magento\Store\Model\StoreManagerInterface;
-use Magento\Framework\Event\ObserverInterface;
+use Bluebarry\Bluebarry\Model\Config;
+use Bluebarry\Bluebarry\Model\Conversion\Queue;
+use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
+use Bluebarry\Bluebarry\Model\Visitor;
 use Magento\Framework\Event\Observer;
+use Magento\Framework\Event\ObserverInterface;
+use Psr\Log\LoggerInterface;
 
+/**
+ * At order placement: remember which bluebarry visitor placed the order. Every visitor counts, not
+ * only quiz takers: search, recommendations, chat and popups attribute through the visitor id. The
+ * conversion itself goes out once the order is paid, from the background (QueuePaidOrder).
+ *
+ * One insert on the module's own table; nothing here calls bluebarry.
+ */
 class ProcessConversion implements ObserverInterface
 {
-    const TOPIC_NAME = 'bluebarry.conversion.process';
-
-     /**
-     * @var \Magento\Framework\App\Config\ScopeConfigInterface
+    /**
+     * @var Config
      */
-    protected $scopeConfig;
+    private $config;
 
     /**
-     * @var \Magento\Store\Model\StoreManagerInterface
+     * @var Visitor
      */
-    protected $storeManager;
+    private $visitor;
 
     /**
-     * @var \Bluebarry\Bluebarry\Model\Session
+     * @var OrderVisitor
      */
-    protected Session $session;
+    private $visitors;
 
     /**
-     * @var \Psr\Log\LoggerInterface
+     * @var Queue
      */
-    protected LoggerInterface $logger;
+    private $queue;
 
     /**
-     * @var PublisherInterface
+     * @var LoggerInterface
      */
-    protected $publisher;
+    private $logger;
 
     /**
-     * @param Session $session
-     * @param ScopeConfigInterface $scopeConfig
-     * @param StoreManagerInterface $storeManager
+     * @param Config $config
+     * @param Visitor $visitor
+     * @param OrderVisitor $visitors
+     * @param Queue $queue
      * @param LoggerInterface $logger
-     * @param PublisherInterface $publisher
      */
     public function __construct(
-        Session $session,
-        ScopeConfigInterface $scopeConfig,
-        StoreManagerInterface $storeManager,
-        LoggerInterface $logger,
-        PublisherInterface $publisher
+        Config $config,
+        Visitor $visitor,
+        OrderVisitor $visitors,
+        Queue $queue,
+        LoggerInterface $logger
     ) {
-        $this->scopeConfig = $scopeConfig;
-        $this->storeManager = $storeManager;
-        $this->session = $session;
+        $this->config = $config;
+        $this->visitor = $visitor;
+        $this->visitors = $visitors;
+        $this->queue = $queue;
         $this->logger = $logger;
-        $this->publisher = $publisher;
     }
 
     /**
      * @param Observer $observer
+     * @return void
      */
     public function execute(Observer $observer)
     {
-        $order = $observer->getOrder();
-        $session = $this->session->getSession();
-        $tenantId = $this->getTenantId();
-
-        if (!isset($tenantId) || 
-            !is_array($session) || 
-            !isset($session['bluebarry']) || 
-            !isset($session['bluebarry']['advisor_id']) || 
-            !isset($session['bluebarry']['user_id']) || 
-            !isset($session['bluebarry']['session_id'])
-        ) {
-
-            if ($this->isWriteToLogEnabled()) {
-                $this->logger->debug("--- Bluebarry request ---");
-                $this->logger->debug("No bluebarry session found");
-                $this->logger->debug("--- Bluebarry request ---");
-            }
-
-            return $this;
+        /** @var \Magento\Sales\Model\Order $order */
+        $order = $observer->getEvent()->getOrder();
+        if (!$order || !$order->getId()) {
+            return;
+        }
+        $tenantId = $this->config->getTenantId($order->getStoreId());
+        if ($tenantId === null) {
+            return;
         }
 
         try {
-            $conversionData = [
-                'order_id' => $order->getId(),
-                'session_data' => $session,
-                'tenant_id' => $tenantId
-            ];
-
-            $this->publisher->publish(self::TOPIC_NAME, json_encode($conversionData));
-
-            if ($this->isWriteToLogEnabled()) {
-                $this->logger->debug("--- Bluebarry async processing ---");
-                $this->logger->debug("Conversion published to queue for order ID: " . $order->getId());
-                $this->logger->debug("--- Bluebarry async processing ---");
+            $visitor = $this->visitor->current($tenantId);
+            if ($visitor === null) {
+                if ($this->config->isDebugLogEnabled($order->getStoreId())) {
+                    $this->logger->debug('bluebarry: order has no bluebarry visitor (or no cookie consent)', ['order_id' => $order->getId()]);
+                }
+                return;
             }
-
+            $this->visitors->capture((int) $order->getId(), $visitor);
+            // Paid while it was placed (a card captured at checkout): queue it now.
+            if ($this->queue->isPaid($order)) {
+                $this->queue->queue((int) $order->getId());
+            }
         } catch (\Exception $e) {
-            $this->logger->error('Error publishing conversion to message queue: ' . $e->getMessage());
+            // Never in the way of an order.
+            $this->logger->error('bluebarry: could not link the order to its visitor: ' . $e->getMessage(), ['order_id' => $order->getId()]);
         }
-
-        return $this;
-    }
-
-    /**
-     * Returns the tenant id
-     * 
-     * @return null|string 
-     */
-    private function getTenantId() : ?string
-    {
-        return $this->scopeConfig->getValue("bluebarry_module/general/tenantid", 'stores', $this->storeManager->getStore()->getCode());
-    }
-
-    /**
-     * Returns the write to debug file status
-     * 
-     * @return bool 
-     */
-    private function isWriteToLogEnabled() : bool
-    {
-        return (bool) $this->scopeConfig->getValue("bluebarry_module/general/write_to_debug_file", 'stores', $this->storeManager->getStore()->getCode());
     }
 }

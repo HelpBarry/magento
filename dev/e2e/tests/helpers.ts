@@ -74,12 +74,25 @@ export const newAdvisorIds = (): AdvisorIds => ({
  * interception. The iframe therefore has the real origin, so the storefront's postMessage origin check
  * runs unmodified. Nothing reaches the real Bluebarry services.
  */
-export async function stubAdvisor(page: Page, ids: AdvisorIds | null) {
+export async function stubAdvisor(page: Page, ids: AdvisorIds | null, options: { visitor?: boolean } = {}) {
+  // Like the real SDK (ReactShared/src/lib/visitor-identity.ts): bb_uid for every visitor it sees,
+  // bb_session and bb_advisor once a quiz starts. `visitor: false` is a shopper the SDK never saw.
+  const uid = ids?.userId ?? randomUUID();
   await page.route('https://cdn.bluebarry.ai/**', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
       body: `
         window.__bbAdvisorLoaded = true;
+        function bbCookie(name, value) {
+          document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; max-age=31536000; SameSite=Lax';
+        }
+        ${options.visitor === false ? '' : `if (document.cookie.indexOf('bb_uid=') === -1) bbCookie('bb_uid', ${JSON.stringify(uid)});`}
+        window.addEventListener('message', function (message) {
+          var value = message.data && message.data.value;
+          if (message.origin !== 'https://advisor.bluebarry.ai' || !value || value.name !== 'bluebarry_start_advisor') return;
+          bbCookie('bb_session', value.data.bluebarry_session_id);
+          bbCookie('bb_advisor', value.data.bluebarry_advisor_id);
+        });
         (function mount() {
           if (!document.body) return document.addEventListener('DOMContentLoaded', mount);
           var f = document.createElement('iframe');
@@ -207,4 +220,23 @@ export async function checkoutAsGuest(page: Page, email: string): Promise<string
 
 export function orderEntityId(incrementId: string): string {
   return sql(`SELECT entity_id FROM sales_order WHERE increment_id = '${incrementId.replace(/\D/g, '')}'`);
+}
+
+export function orderGrandTotal(incrementId: string): number {
+  return Number(sql(`SELECT grand_total FROM sales_order WHERE increment_id = '${incrementId.replace(/\D/g, '')}'`));
+}
+
+/**
+ * Pays an order the way a merchant does for check / money order: invoice it (Magento REST, as the
+ * admin). The order moves to processing, which is when bluebarry counts it as a sale.
+ */
+export async function payForOrder(page: Page, incrementId: string): Promise<void> {
+  const token = await (
+    await page.request.post('/rest/V1/integration/admin/token', { data: { username: 'admin', password: 'Admin12345!' } })
+  ).json();
+  const invoice = await page.request.post(`/rest/V1/order/${orderEntityId(incrementId)}/invoice`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { capture: true, notify: false },
+  });
+  expect(invoice.status(), await invoice.text()).toBe(200);
 }

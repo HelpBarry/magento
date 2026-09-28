@@ -9,6 +9,7 @@ import {
   mockApi,
   newAdvisorIds,
   orderEntityId,
+  payForOrder,
   runConversionConsumer,
   startAdvisor,
   stubAdvisor,
@@ -32,6 +33,7 @@ async function quizCheckout(page: import('@playwright/test').Page) {
   await startAdvisor(page);
   await addToCart(page, 'bb-simple');
   const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+  await payForOrder(page, incrementId);
   runConversionConsumer();
   return orderEntityId(incrementId);
 }

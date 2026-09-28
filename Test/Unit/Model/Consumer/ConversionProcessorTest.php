@@ -3,245 +3,79 @@
 namespace Bluebarry\Bluebarry\Test\Unit\Model\Consumer;
 
 use Bluebarry\Bluebarry\Model\Consumer\ConversionProcessor;
-use Magento\Framework\App\Config\ScopeConfigInterface;
-use Magento\Framework\HTTP\Client\Curl;
+use Bluebarry\Bluebarry\Model\Conversion\Queue;
+use Bluebarry\Bluebarry\Model\Conversion\Sender;
+use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
+use Magento\Framework\MessageQueue\PublisherInterface;
 use Magento\Sales\Api\OrderRepositoryInterface;
 use Magento\Sales\Model\Order;
-use Magento\Sales\Model\Order\Item;
-use Magento\Store\Model\StoreManagerInterface;
-use PHPUnit\Framework\MockObject\Stub;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
 class ConversionProcessorTest extends TestCase
 {
-    private const ADVISOR_ID = '5b3a1c1e-0000-4000-8000-000000000001';
-    private const SESSION_ID = '5b3a1c1e-0000-4000-8000-000000000002';
-    private const USER_ID = '5b3a1c1e-0000-4000-8000-000000000003';
-
-    private OrderRepositoryInterface&Stub $orderRepository;
-    private Curl&Stub $curl;
-    private ConversionProcessor $processor;
-
-    /** @var array<int, array{url: string, body: array}> */
-    private array $posts = [];
-
-    protected function setUp(): void
+    public function testSendsTheOrderInTheMessage(): void
     {
-        $this->orderRepository = $this->createStub(OrderRepositoryInterface::class);
-        $this->curl = $this->createStub(Curl::class);
+        $sender = $this->createMock(Sender::class);
+        $sender->expects($this->once())->method('send')->with(42);
 
-        $this->curl->method('post')->willReturnCallback(function (string $url, $body) {
-            $this->posts[] = ['url' => $url, 'body' => json_decode($body, true), 'raw' => $body];
-        });
-        $this->curl->method('getStatus')->willReturn(201);
-        $this->curl->method('getBody')->willReturn('{"id":"abc"}');
-
-        $this->processor = $this->processor();
+        $this->processor($sender, $this->createStub(OrderVisitor::class), Order::STATE_NEW)->processConversion('42');
     }
 
-    private function processor(?LoggerInterface $logger = null, ?Curl $curl = null): ConversionProcessor
+    /** A message from before the upgrade carries the quiz session instead of relying on the table. */
+    public function testLegacyMessageIsRecordedAndSentWhenPaid(): void
     {
-        return new ConversionProcessor(
-            $this->orderRepository,
-            $this->createStub(ScopeConfigInterface::class),
-            $this->createStub(StoreManagerInterface::class),
-            $logger ?? $this->createStub(LoggerInterface::class),
-            $curl ?? $this->curl
-        );
-    }
-
-    public function testSendsConversionAndIdentify(): void
-    {
-        $this->givenOrder(42, 'shopper@example.com', [
-            // Values as Magento loads them from the database: decimals come back as strings.
-            $this->item('7', '2.0000', '100.0000', '21.0000', '121.0000'),
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->expects($this->once())->method('capture')->with(42, [
+            'user_id' => '11111111-1111-4111-8111-111111111111',
+            'session_id' => '22222222-2222-4222-8222-222222222222',
+            'advisor_id' => null,
+            'experiments' => [],
         ]);
+        $visitors->method('markQueued')->willReturn(true);
+        $sender = $this->createMock(Sender::class);
+        $sender->expects($this->once())->method('send')->with(42);
 
-        $this->processor->processConversion($this->message(42));
-
-        $this->assertCount(2, $this->posts);
-        [$conversion, $identify] = $this->posts;
-
-        $this->assertSame('https://data.bluebarry.ai/data/conversionevents', $conversion['url']);
-        $this->assertSame(self::ADVISOR_ID, $conversion['body']['advisorId']);
-        $this->assertSame(self::SESSION_ID, $conversion['body']['sessionId']);
-        $this->assertSame(self::USER_ID, $conversion['body']['userId']);
-        $this->assertSame('42', $conversion['body']['conversionId']);
-        $this->assertSame('EUR', $conversion['body']['currencyIso']);
-        $this->assertEqualsWithDelta(200.0, $conversion['body']['orderProductTotal'], 0.001);
-        $this->assertEqualsWithDelta(42.0, $conversion['body']['orderTaxTotal'], 0.001);
-        $this->assertEqualsWithDelta(242.0, $conversion['body']['orderGrandTotal'], 0.001);
-
-        $this->assertSame('https://data.bluebarry.ai/data/identify', $identify['url']);
-        $this->assertSame(
-            ['email' => 'shopper@example.com', 'sessionId' => self::SESSION_ID, 'userId' => self::USER_ID],
-            $identify['body']
-        );
-    }
-
-    /**
-     * The Bluebarry API accepts decimals as numbers or numeric strings, but string fields such as
-     * itemId must be JSON strings: a number there makes the API reject the whole conversion with 400.
-     */
-    public function testPayloadMatchesApiContractTypes(): void
-    {
-        // Magento forces PDO::ATTR_STRINGIFY_FETCHES, so loaded ids and decimals are strings.
-        $this->givenOrder(42, null, [$this->item('7', '1.0000', '100.0000', '21.0000', '121.0000')]);
-
-        $this->processor->processConversion($this->message(42));
-
-        $item = $this->posts[0]['body']['items'][0];
-        $this->assertIsString($item['itemId'], 'itemId must be a JSON string');
-        foreach (['quantity', 'value', 'taxPercentage', 'priceExclTax', 'priceInclTax'] as $field) {
-            $this->assertTrue(
-                is_int($item[$field]) || is_float($item[$field]) || is_numeric($item[$field]),
-                "$field must be numeric"
-            );
-        }
-        $this->assertSame(
-            [],
-            array_diff(
-                array_keys($this->posts[0]['body']),
-                ['advisorId', 'sessionId', 'userId', 'value', 'orderProductTotal', 'orderTaxTotal',
-                 'orderGrandTotal', 'currencyIso', 'conversionId', 'items']
-            ),
-            'unknown properties are rejected by the API'
-        );
-    }
-
-    /** Item prices are in the order currency, so that is the currency to report. */
-    public function testSendsOrderCurrency(): void
-    {
-        $this->givenOrder(42, null, [$this->item('7', '1.0000', '110.0000', '21.0000', '133.1000')], 'USD');
-
-        $this->processor->processConversion($this->message(42));
-
-        $this->assertSame('USD', $this->posts[0]['body']['currencyIso']);
-    }
-
-    /** Child lines (configurable variants, bundle parts) repeat the product the shopper bought. */
-    public function testSkipsChildLines(): void
-    {
-        $this->givenOrder(42, null, [
-            $this->item('39', '1.0000', '80.0000', '21.0000', '96.8000'),
-            $this->item('40', '1.0000', '0.0000', '0.0000', null, '39'),
-        ]);
-
-        $this->processor->processConversion($this->message(42));
-
-        $body = $this->posts[0]['body'];
-        $this->assertCount(1, $body['items']);
-        $this->assertSame('39', $body['items'][0]['itemId']);
-        $this->assertEqualsWithDelta(96.8, $body['orderGrandTotal'], 0.001);
-    }
-
-    /** A dynamic-price bundle line carries the summed price and tax, but no tax percentage of its own. */
-    public function testDynamicBundleLineUsesChargedTax(): void
-    {
-        $this->givenOrder(42, null, [$this->item('41', '1.0000', '50.0000', null, '60.5000')]);
-
-        $this->processor->processConversion($this->message(42));
-
-        $body = $this->posts[0]['body'];
-        $this->assertEqualsWithDelta(50.0, $body['orderProductTotal'], 0.001);
-        $this->assertEqualsWithDelta(10.5, $body['orderTaxTotal'], 0.001);
-        $this->assertEqualsWithDelta(60.5, $body['orderGrandTotal'], 0.001);
-        $this->assertEqualsWithDelta(21.0, $body['items'][0]['taxPercentage'], 0.001);
-        $this->assertEqualsWithDelta(60.5, $body['items'][0]['priceInclTax'], 0.001);
-    }
-
-    public function testFallsBackToTaxPercentWithoutInclTaxPrice(): void
-    {
-        $this->givenOrder(42, null, [$this->item('7', '3.0000', '10.0000', '21.0000', null)]);
-
-        $this->processor->processConversion($this->message(42));
-
-        $body = $this->posts[0]['body'];
-        $this->assertEqualsWithDelta(30.0, $body['orderProductTotal'], 0.001);
-        $this->assertEqualsWithDelta(6.3, $body['orderTaxTotal'], 0.001);
-        $this->assertEqualsWithDelta(12.1, $body['items'][0]['priceInclTax'], 0.001);
-    }
-
-    public function testNoIdentifyWithoutCustomerEmail(): void
-    {
-        $this->givenOrder(42, null, [$this->item('7', '1.0000', '10.0000', '0.0000', '10.0000')]);
-
-        $this->processor->processConversion($this->message(42));
-
-        $this->assertCount(1, $this->posts);
-        $this->assertStringEndsWith('/data/conversionevents', $this->posts[0]['url']);
-    }
-
-    public function testIgnoresMessageWithIncompleteSession(): void
-    {
-        $this->givenOrder(42, 'shopper@example.com', []);
-        $message = json_encode([
+        $this->processor($sender, $visitors, Order::STATE_PROCESSING)->processConversion(json_encode([
             'order_id' => 42,
             'tenant_id' => 'tenant',
-            'session_data' => ['bluebarry' => ['advisor_id' => self::ADVISOR_ID, 'user_id' => self::USER_ID]],
-        ]);
-
-        $this->processor->processConversion($message);
-
-        $this->assertSame([], $this->posts);
+            'session_data' => ['bluebarry' => [
+                'user_id' => '11111111-1111-4111-8111-111111111111',
+                'session_id' => '22222222-2222-4222-8222-222222222222',
+                'advisor_id' => 'not-a-uuid',
+            ]],
+        ]));
     }
 
-    public function testRejectsInvalidJsonWithoutThrowing(): void
+    public function testLegacyMessageOfAnUnpaidOrderWaits(): void
+    {
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->expects($this->once())->method('capture');
+        $sender = $this->createMock(Sender::class);
+        $sender->expects($this->never())->method('send');
+
+        $this->processor($sender, $visitors, Order::STATE_NEW)->processConversion(json_encode([
+            'order_id' => 42,
+            'session_data' => ['bluebarry' => ['user_id' => '11111111-1111-4111-8111-111111111111']],
+        ]));
+    }
+
+    public function testUnreadableMessageIsLoggedNotThrown(): void
     {
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects($this->once())->method('error');
 
-        $this->processor($logger)->processConversion('not json');
-
-        $this->assertSame([], $this->posts);
+        $this->processor($this->createStub(Sender::class), $this->createStub(OrderVisitor::class), Order::STATE_NEW, $logger)
+            ->processConversion('{"nope":true}');
     }
 
-    public function testApiErrorDoesNotThrow(): void
-    {
-        $curl = $this->createStub(Curl::class);
-        $curl->method('getStatus')->willReturn(503);
-        $curl->method('getBody')->willReturn('down');
-        $processor = $this->processor(null, $curl);
-        $this->givenOrder(42, 'shopper@example.com', [$this->item('7', '1.0000', '10.0000', '0.0000', '10.0000')]);
-
-        $processor->processConversion($this->message(42));
-
-        $this->addToAssertionCount(1);
-    }
-
-    private function message(int $orderId): string
-    {
-        return json_encode([
-            'order_id' => $orderId,
-            'tenant_id' => 'tenant',
-            'session_data' => ['bluebarry' => [
-                'session_id' => self::SESSION_ID,
-                'advisor_id' => self::ADVISOR_ID,
-                'user_id' => self::USER_ID,
-            ]],
-        ]);
-    }
-
-    private function givenOrder(int $id, ?string $email, array $items, string $currency = 'EUR'): void
+    private function processor(Sender $sender, OrderVisitor $visitors, string $state, ?LoggerInterface $logger = null): ConversionProcessor
     {
         $order = $this->createStub(Order::class);
-        $order->method('getId')->willReturn($id);
-        $order->method('getOrderCurrencyCode')->willReturn($currency);
-        $order->method('getCustomerEmail')->willReturn($email);
-        $order->method('getItems')->willReturn($items);
-        $this->orderRepository->method('get')->willReturnMap([[$id, $order]]);
-    }
-
-    private function item($id, $qty, $price, $taxPercent, $priceInclTax, $parentItemId = null): Item
-    {
-        $item = $this->createStub(Item::class);
-        $item->method('getItemId')->willReturn($id);
-        $item->method('getParentItemId')->willReturn($parentItemId);
-        $item->method('getQtyOrdered')->willReturn($qty);
-        $item->method('getPrice')->willReturn($price);
-        $item->method('getTaxPercent')->willReturn($taxPercent);
-        $item->method('getPriceInclTax')->willReturn($priceInclTax);
-        return $item;
+        $order->method('getState')->willReturn($state);
+        $orders = $this->createStub(OrderRepositoryInterface::class);
+        $orders->method('get')->willReturn($order);
+        $queue = new Queue($visitors, $this->createStub(PublisherInterface::class), $this->createStub(LoggerInterface::class));
+        return new ConversionProcessor($sender, $visitors, $queue, $orders, $logger ?? $this->createStub(LoggerInterface::class));
     }
 }
