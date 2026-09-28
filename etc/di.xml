@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <!-- Everything to var/log/bluebarry.log; warnings and errors also to system.log, where merchants look. -->
+    <virtualType name="BluebarryLogger" type="Magento\Framework\Logger\Monolog">
+        <arguments>
+            <argument name="name" xsi:type="string">bluebarry</argument>
+            <argument name="handlers" xsi:type="array">
+                <item name="bluebarry" xsi:type="object">Bluebarry\Bluebarry\Logger\Handler</item>
+                <item name="system" xsi:type="object">Magento\Framework\Logger\Handler\System</item>
+            </argument>
+        </arguments>
+    </virtualType>
+    <type name="Bluebarry\Bluebarry\Observer\ProcessConversion">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Consumer\ConversionProcessor">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+</config>
