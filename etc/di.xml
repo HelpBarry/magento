@@ -22,4 +22,7 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <type name="Magento\MysqlMq\Model\QueueManagement">
+        <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>
+    </type>
 </config>

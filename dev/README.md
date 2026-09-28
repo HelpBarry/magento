@@ -61,7 +61,7 @@ BB_ENV=mysql-queue dev/bin/setup
 BB_ENV=mysql-queue dev/bin/test-e2e
 ```
 
-CI (`.github/workflows/tests.yml`) runs `default` on every PR, and every variant plus the deploy-race
+CI (`.github/workflows/tests.yml`) runs `default` and `mysql-queue` on every PR, and every variant plus the deploy-race
 test on `main`, nightly and on demand.
 
 ## Useful commands
