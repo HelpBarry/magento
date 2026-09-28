@@ -11,7 +11,7 @@ ZIP="$OUT_DIR/bluebarry-magento2-module-$VERSION.zip"
 cd "$ROOT"
 rm -f "$ZIP"
 git ls-files -co --exclude-standard \
-    | grep -vE '^(dev/|dist/|Test/|\.github/|\.gitattributes|\.gitignore)' \
+    | grep -vE '^(dev/|dist/|Test/|\.github/|\.gitattributes|\.gitignore|scripts/package\.sh|scripts/prepare_release\.py)' \
     | while read -r f; do [ -f "$f" ] && echo "$f"; done \
     | zip -q -X "$ZIP" -@
 

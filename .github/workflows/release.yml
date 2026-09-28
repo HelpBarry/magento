@@ -1,0 +1,106 @@
+name: Release
+
+# Manual only: Actions → Release → Run workflow. Takes the "## [Unreleased]" entries from CHANGELOG.md,
+# bumps the version, installs the exact release on a production-mode Magento and tests it, then commits
+# "Release x.y.z", tags vx.y.z and publishes a GitHub release with the Marketplace zip attached.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Dry run (build and test only; no commit, tag or release). Works from any branch.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BUMP: ${{ inputs.bump }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Releases come from main
+        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "::error::Publish releases from main (or tick 'Dry run' to try another branch)."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dev/e2e/package-lock.json
+
+      - name: Bump version, CHANGELOG and RELEASE_NOTES
+        id: version
+        run: |
+          VERSION="$(python3 scripts/prepare_release.py "$BUMP" --notes-file "$RUNNER_TEMP/release-notes.md")"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+          git diff
+
+      - name: Install the release on production-mode Magento and test it
+        run: |
+          dev/bin/setup
+          dev/bin/test-static
+          dev/bin/test-unit
+          dev/bin/test-e2e
+
+      - name: Build the Marketplace zip
+        id: zip
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ZIP="$(scripts/package.sh "$RUNNER_TEMP/dist")"
+          unzip -p "$ZIP" composer.json | grep -q "\"version\": \"$VERSION\""
+          unzip -p "$ZIP" etc/module.xml | grep -q "setup_version=\"$VERSION\""
+          if unzip -Z1 "$ZIP" | grep -E '^(dev|Test|\.github)/'; then
+            echo "::error::Test tooling ended up in the zip."
+            exit 1
+          fi
+          unzip -Z1 "$ZIP"
+          echo "path=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the zip (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.version.outputs.version }}-dry-run
+          path: |
+            ${{ steps.zip.outputs.path }}
+            ${{ runner.temp }}/release-notes.md
+
+      - name: Commit, tag and publish the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.zip.outputs.path }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add composer.json etc/module.xml CHANGELOG.md RELEASE_NOTES.md
+          git commit -m "Release $VERSION"
+          git tag -a "v$VERSION" -m "Release $VERSION"
+          # Fails instead of overwriting if main moved while the tests ran; just run the workflow again.
+          git push origin HEAD:main "refs/tags/v$VERSION"
+          gh release create "v$VERSION" "$ZIP" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"

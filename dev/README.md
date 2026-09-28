@@ -79,3 +79,20 @@ dev/bin/compose down -v                    # delete this variant completely
 Third-party themes (Hyvä, headless), payment providers that create orders from webhooks, and hosting
 quirks such as restricted consumer lists in `env.php`, egress firewalls and Adobe Commerce Cloud's
 read-only filesystem still need a real staging shop before a release.
+
+## Releasing
+
+1. In each PR that changes the module, add a line under `## [Unreleased]` in `CHANGELOG.md`, grouped
+   under `### Added`, `### Changed` or `### Fixed`.
+2. Run **Actions → Release → Run workflow** on `main` and pick patch, minor or major. The workflow:
+   - bumps `composer.json` and `etc/module.xml`
+   - moves the Unreleased entries into a dated version section, and adds the Marketplace-style
+     entry to `RELEASE_NOTES.md`
+   - installs that exact version on a production-mode Magento and runs the static, unit and
+     end-to-end tests
+   - commits `Release x.y.z`, tags `vx.y.z` and publishes a GitHub release with the zip attached
+3. Download the zip from the release and upload it to the Magento Marketplace. Paste that version's
+   block from `RELEASE_NOTES.md` as the release notes.
+
+Tick **Dry run** to build and test without committing or publishing; the zip is kept as a workflow
+artifact. Dry runs work from any branch. `scripts/prepare_release.py` runs the same bump locally.
