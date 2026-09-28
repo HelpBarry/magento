@@ -21,4 +21,20 @@ class Handler extends Base
      * @var int
      */
     protected $loggerType = Logger::DEBUG;
+
+    /**
+     * A log file that can't be written (e.g. created by another system user) must not break checkout or the
+     * queue consumer, which also log errors through this handler. The record is dropped instead.
+     *
+     * @param array|\Monolog\LogRecord $record untyped: Monolog 2 (Magento 2.4.6) passes an array
+     * @return void
+     */
+    protected function write($record): void
+    {
+        try {
+            parent::write($record);
+        } catch (\Throwable $e) {
+            // Deliberately ignored, see above.
+        }
+    }
 }
