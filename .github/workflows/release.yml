@@ -105,6 +105,7 @@ jobs:
           git add composer.json etc/module.xml CHANGELOG.md RELEASE_NOTES.md
           git commit -m "Release $VERSION"
           git tag -a "v$VERSION" -m "Release $VERSION"
-          # Fails instead of overwriting if main moved while the tests ran; just run the workflow again.
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main "refs/tags/v$VERSION"
+          # Atomic: if main moved while the tests ran, neither the commit nor the tag lands, so the
+          # workflow can simply be run again.
+          git push --atomic "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main "refs/tags/v$VERSION"
           gh release create "v$VERSION" "$ZIP" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
