@@ -110,6 +110,16 @@ class ConversionProcessorTest extends TestCase
         );
     }
 
+    /** Item prices are in the order currency, so that is the currency to report. */
+    public function testSendsOrderCurrency(): void
+    {
+        $this->givenOrder(42, null, [$this->item('7', '1.0000', '110.0000', '21.0000', '133.1000')], 'USD');
+
+        $this->processor->processConversion($this->message(42));
+
+        $this->assertSame('USD', $this->posts[0]['body']['currencyIso']);
+    }
+
     /** Child lines (configurable variants, bundle parts) repeat the product the shopper bought. */
     public function testSkipsChildLines(): void
     {
@@ -213,10 +223,11 @@ class ConversionProcessorTest extends TestCase
         ]);
     }
 
-    private function givenOrder(int $id, ?string $email, array $items): void
+    private function givenOrder(int $id, ?string $email, array $items, string $currency = 'EUR'): void
     {
         $order = $this->createStub(Order::class);
         $order->method('getId')->willReturn($id);
+        $order->method('getOrderCurrencyCode')->willReturn($currency);
         $order->method('getCustomerEmail')->willReturn($email);
         $order->method('getItems')->willReturn($items);
         $this->orderRepository->method('get')->willReturnMap([[$id, $order]]);
