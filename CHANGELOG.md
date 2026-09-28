@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Configurable products and bundles are reported once, at the price the shopper paid. Their child lines are no longer sent as extra items, and dynamic-price bundles no longer double the reported revenue.
 - Conversions are reported in the order's currency instead of always EUR.
+- "Write conversion requests to debug log" now works in production mode: the requests are written to `var/log/bluebarry.log`, which Magento's production mode does not suppress. Errors also still go to `system.log`.
 
 ## [1.0.3] - 2026-09-24
 ### Fixed

@@ -39,7 +39,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 ## Configuration
 1. Go to **Stores > Configuration > Bluebarry > General** in the Magento Admin.
 2. Enter your **Tenant ID** (find it in your Bluebarry account integrations page).
-3. (Optional) Enable debug logging for conversion requests.
+3. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
 
 ## Usage
 - The Bluebarry advisor widget will appear on your storefront if Tenant ID is set.

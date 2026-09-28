@@ -1,2 +1,3 @@
 "Write conversion requests to debug log","Sla conversie requests op in de debug log."
 "You can find your Tenant ID on the integrations page in your bluebarry account.","Je kan jouw Tenant ID vinden op de integratie pagina van jouw Bluebarry account."
+"Written to var/log/bluebarry.log. Only turn this on while troubleshooting.","Wordt opgeslagen in var/log/bluebarry.log. Zet dit alleen aan tijdens het oplossen van problemen."
