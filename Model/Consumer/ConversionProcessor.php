@@ -108,22 +108,29 @@ class ConversionProcessor
             $itemTotalExlTax = 0;
             $itemTotalTax = 0;
             $items = [];
-            foreach ($order->getAllItems() as $item) 
+            // Only the lines the shopper bought: the child lines of configurable products and bundles
+            // repeat the product (at 0, or for dynamic-price bundles at the part prices already summed
+            // into the bundle line), so counting them duplicates items and revenue.
+            foreach ($order->getItems() as $item) 
             {
-                $itemTotalExlTax += ($item->getQtyOrdered() * $item->getPrice());
-
-                if ($item->getTaxPercent() > 0) { 
-                    $taxAmount = $item->getPrice() * ($item->getTaxPercent() / 100);
-                    $itemTotalTax += ($item->getQtyOrdered() * $taxAmount);
+                if ($item->getParentItemId()) {
+                    continue;
                 }
+
+                $quantity = (float) $item->getQtyOrdered();
+                $priceExclTax = (float) $item->getPrice();
+                $unitTax = $this->getUnitTax($item);
+
+                $itemTotalExlTax += ($quantity * $priceExclTax);
+                $itemTotalTax += ($quantity * $unitTax);
 
                 $items[] = (object) [
                     "itemId" => $item->getItemId(),
-                    "quantity" => (float) $item->getQtyOrdered(),
-                    "value" => $item->getPrice(),
-                    "taxPercentage" => (float) $item->getTaxPercent(),
-                    "priceExclTax" => $item->getPrice(),
-                    "priceInclTax" => (float) $item->getPriceInclTax(),
+                    "quantity" => $quantity,
+                    "value" => $priceExclTax,
+                    "taxPercentage" => $this->getTaxPercentage($item, $unitTax),
+                    "priceExclTax" => $priceExclTax,
+                    "priceInclTax" => $priceExclTax + $unitTax,
                 ];
             }
 
@@ -135,7 +142,7 @@ class ConversionProcessor
                 "orderProductTotal" => $itemTotalExlTax, 
                 "orderTaxTotal" => round(($itemTotalTax),2),
                 "orderGrandTotal" => (round(($itemTotalTax),2) + $itemTotalExlTax), 
-                "currencyIso" => "EUR",
+                "currencyIso" => $order->getOrderCurrencyCode(),
                 "conversionId" => (string) $order->getId(),
                 "items" => $items
             ];
@@ -176,6 +183,37 @@ class ConversionProcessor
             $this->logger->error('Error processing conversion in message queue: ' . $e->getMessage());
             throw $e;
         }
+    }
+
+    /**
+     * Tax per unit, as Magento charged it. Dynamic-price bundle lines have no tax percentage of their
+     * own (their parts do), so the difference between the incl. and excl. tax price is used when known.
+     *
+     * @param \Magento\Sales\Api\Data\OrderItemInterface $item
+     * @return float
+     */
+    private function getUnitTax($item): float
+    {
+        if ($item->getPriceInclTax() !== null) {
+            return max(0.0, (float) $item->getPriceInclTax() - (float) $item->getPrice());
+        }
+        return (float) $item->getPrice() * ((float) $item->getTaxPercent() / 100);
+    }
+
+    /**
+     * The line's tax rate, derived from the charged tax when Magento stores none on the line.
+     *
+     * @param \Magento\Sales\Api\Data\OrderItemInterface $item
+     * @param float $unitTax
+     * @return float
+     */
+    private function getTaxPercentage($item, float $unitTax): float
+    {
+        if ((float) $item->getTaxPercent() > 0) {
+            return (float) $item->getTaxPercent();
+        }
+        $price = (float) $item->getPrice();
+        return $price > 0 ? round($unitTax / $price * 100, 4) : 0.0;
     }
 
     /**

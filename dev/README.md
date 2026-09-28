@@ -36,7 +36,7 @@ caused, or could cause, a production-only bug.
 | Zero-downtime deploys, where the old release keeps running during and after `setup:upgrade` | `test-deploy-race` runs the new release's deploy while a copy of the old release keeps re-caching config into the shared Redis. It checks that the deploy succeeds (the 1.0.3 incident), then that a quiz order placed right after it is tracked once the documented post-deploy step (`cache:flush`) has run. `dev/bin/test-deploy-race dist/bluebarry-magento2-module-1.0.2.zip` reproduces the original failure. |
 | The real Bluebarry API rejects payloads it can't bind | The mock at `data.bluebarry.ai` enforces the same request contract (unknown fields, GUID and string types) and answers 400 like the real API. |
 | Real browsers, CSP, and cross-origin `postMessage` from the advisor iframe | Playwright serves the advisor stub *from* `https://advisor.bluebarry.ai` via request interception, so the origin check runs unmodified. CSP violations are collected. |
-| Dutch shops, prices entered excl. tax, 21% VAT | Fixtures: NL 21% tax rule, a simple product and a configurable product. |
+| Dutch shops, prices entered excl. tax, 21% VAT | Fixtures: NL 21% tax rule, a simple product, a configurable product, and dynamic- and fixed-price bundles. |
 
 The module's API URL is hardcoded. Inside the stack, `data.bluebarry.ai` resolves to the mock
 (`dev/mock-api`), which uses a certificate from a throwaway CA that only the PHP container trusts. The code
@@ -61,7 +61,7 @@ BB_ENV=mysql-queue dev/bin/setup
 BB_ENV=mysql-queue dev/bin/test-e2e
 ```
 
-CI (`.github/workflows/tests.yml`) runs `default` on every PR, and every variant plus the deploy-race
+CI (`.github/workflows/tests.yml`) runs `default` and `mysql-queue` on every PR, and every variant plus the deploy-race
 test on `main`, nightly and on demand.
 
 ## Useful commands

@@ -15,8 +15,9 @@
                     <label>Tenant ID</label>
                     <comment>You can find your Tenant ID on the integrations page in your bluebarry account.</comment>
                 </field>
-                <field id="write_to_debug_file" translate="label" type="select" sortOrder="20" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="write_to_debug_file" translate="label comment" type="select" sortOrder="20" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Write conversion requests to debug log</label>
+                    <comment>Written to var/log/bluebarry.log. Only turn this on while troubleshooting.</comment>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
             </group>
