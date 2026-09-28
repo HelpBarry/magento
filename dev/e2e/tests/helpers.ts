@@ -137,8 +137,13 @@ export async function collectCspViolations(page: Page) {
 
 // --- Storefront checkout (Luma) -----------------------------------------------------------------------
 
-export async function addToCart(page: Page, urlKey: string, options: { color?: string } = {}) {
+export async function addToCart(page: Page, urlKey: string, options: { color?: string; bundle?: boolean } = {}) {
   await page.goto(`/${urlKey}.html`);
+  if (options.bundle) {
+    // Luma shows bundle options after "Customize and Add to Cart"; the fixtures preselect every part.
+    await page.locator('#bundle-slide').click();
+    await expect(page.locator('#product-addtocart-button')).toBeVisible();
+  }
   if (options.color) {
     await page.locator('.swatch-attribute.color .swatch-option, select.super-attribute-select').first().waitFor();
     const swatch = page.locator(`.swatch-attribute.color .swatch-option[data-option-label="${options.color}"]`);
