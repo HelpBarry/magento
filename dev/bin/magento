@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# bin/magento inside the php container, as the web user.
+exec "$(dirname "$0")/compose" exec -T -u www-data php php bin/magento "$@"

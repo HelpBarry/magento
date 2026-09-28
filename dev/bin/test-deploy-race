@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Reproduces a zero-downtime (symlink/release-directory) deploy that installs the module for the first
+# time, the setup behind the 1.0.3 incident: while the new release runs setup:upgrade, the still-live
+# old release keeps re-caching queue config into the shared cache. Then checks the state it leaves.
+#
+# Usage: dev/bin/test-deploy-race [module.zip]      (default: the working tree)
+#   e.g. dev/bin/test-deploy-race dist/bluebarry-magento2-module-1.0.2.zip   -> expected to FAIL (pre-fix)
+#
+# Always leaves the module installed from the working tree, so the stack is usable again.
+# errexit stays off on purpose: several statuses are captured; every preparation step is checked.
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+compose() { "$BIN/compose" "$@"; }
+in_php() { compose exec -T -u www-data php bash -ec "$1"; }
+recache_count() { compose exec -T php cat /tmp/recache.ok 2>/dev/null || echo 0; }
+ZIP="${1:-}"
+[ -n "$ZIP" ] && ZIP="$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
+
+# From the baseline reset on, every exit stops the old release and restores the working-tree module.
+cleanup() {
+    compose exec -T php touch /tmp/recache.stop
+    for _ in $(seq 1 60); do
+        compose exec -T php test -f /tmp/recache.done && break
+        compose exec -T php pgrep -f recache-communication-config >/dev/null || break
+        sleep 1
+    done
+    in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a; php bin/magento cache:flush >/dev/null'
+    if [ -n "$ZIP" ] || ! in_php 'composer show --locked bluebarry/magento2-module >/dev/null 2>&1'; then
+        echo "==> Restoring the working-tree module"
+        "$BIN/deploy-module" >/dev/null 2>&1 || echo "WARNING: restoring the module failed; run dev/bin/deploy-module"
+    fi
+}
+trap cleanup EXIT
+
+echo "==> Baseline: live shop without the module"
+compose exec -T php rm -f /tmp/recache.stop /tmp/recache.ok /tmp/recache.done
+if ! in_php '
+    composer remove --no-interaction --no-progress bluebarry/magento2-module >/dev/null 2>&1 || true
+    mysql -hdb -umagento -pmagento magento -e "DELETE FROM setup_module WHERE module = \"Bluebarry_Bluebarry\"; DELETE FROM queue WHERE name = \"bluebarry_conversion_process\";"
+    php bin/magento setup:upgrade --no-interaction >/dev/null
+    php bin/magento setup:di:compile >/dev/null 2>&1
+    php bin/magento cache:flush >/dev/null
+'; then
+    echo "ERROR: could not reset the shop to a no-module baseline; the simulation would prove nothing."
+    exit 1
+fi
+compose exec -T rabbitmq sh -c 'rabbitmqctl delete_queue bluebarry_conversion_process; rabbitmqctl eval "rabbit_exchange:delete(rabbit_misc:r(<<\"/\">>, exchange, <<\"bluebarry-conversion-exchange\">>), false, <<\"test\">>)."' >/dev/null 2>&1 || true
+
+echo "==> Snapshot the live release (release-a) and keep it busy re-caching config"
+if ! in_php 'rm -rf /var/www/release-a && rsync -a --exclude var/cache --exclude var/page_cache --exclude pub/media /var/www/html/ /var/www/release-a/'; then
+    echo "ERROR: could not snapshot the live release."
+    exit 1
+fi
+# Counts only rounds that actually loaded (and so possibly re-cached) the old release's config.
+compose exec -d -u www-data -w /var/www/release-a php bash -c '
+    ok=0
+    echo 0 > /tmp/recache.ok
+    while [ ! -f /tmp/recache.stop ]; do
+        if php /module/dev/tools/recache-communication-config.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
+    done
+    touch /tmp/recache.done'
+# Only deploy once the old release demonstrably runs; otherwise nothing would race the deploy.
+for _ in $(seq 1 60); do [ "$(recache_count)" -ge 1 ] && break; sleep 1; done
+if [ "$(recache_count)" -lt 1 ]; then
+    echo "ERROR: the old release never loaded its config; the simulation would prove nothing."
+    exit 1
+fi
+
+echo "==> Deploying the new release (installs the module) while release-a is live"
+OUTPUT="$("$BIN/deploy-module" ${ZIP:+"$ZIP"} 2>&1)"
+STATUS=$?
+DURING="$(recache_count)"
+echo "    (release-a loaded its config $DURING times during the deploy)"
+
+if [ $STATUS -ne 0 ]; then
+    echo "$OUTPUT" | tail -25
+    echo
+    echo "FAIL: deploy with a live old release failed"
+    grep -q "is synchronous" <<<"$OUTPUT" && echo "      (the 1.0.3 failure: topic missing from the re-cached communication config)"
+    exit 1
+fi
+echo "$OUTPUT" | tail -3
+echo "PASS: first-install deploy survived the live old release"
+
+# The old release keeps running after the deploy, as long-running consumers and cron do in production.
+# Two more successful rounds guarantee at least one started after the deploy's final cache flush.
+for _ in $(seq 1 60); do [ "$(recache_count)" -ge $((DURING + 2)) ] && break; sleep 1; done
+if [ "$(recache_count)" -lt $((DURING + 2)) ]; then
+    echo "INCONCLUSIVE: release-a never re-cached its config after the deploy finished, so the post-deploy"
+    echo "              state was not exercised."
+    exit 1
+fi
+compose exec -T php touch /tmp/recache.stop
+
+# Can the new release still publish conversions with what the old release left in the shared cache?
+echo "==> After the deploy: is the conversion topic in the (shared) cached queue config?"
+TOPIC_STATE="$(in_php 'php -r "
+    require \"app/bootstrap.php\";
+    \$om = Magento\\Framework\\App\\Bootstrap::create(BP, \$_SERVER)->getObjectManager();
+    echo isset(\$om->get(Magento\\Framework\\Communication\\ConfigInterface::class)->getTopics()[\"bluebarry.conversion.process\"]) ? \"present\" : \"missing\";
+"')"
+if [ "$TOPIC_STATE" != "present" ]; then
+    echo "FAIL: topic $TOPIC_STATE. Until the next cache flush every conversion is dropped at checkout"
+    echo "      (system.log: Error publishing conversion to message queue: Topic ... is not configured)."
+    exit 1
+fi
+echo "PASS: conversions can be published after the deploy"

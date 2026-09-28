@@ -1,0 +1,8 @@
+# Keep test tooling out of archives built from git (e.g. Composer installs from a VCS source).
+/dev export-ignore
+/Test export-ignore
+/.github export-ignore
+/.gitattributes export-ignore
+/CLAUDE.md export-ignore
+/scripts/package.sh export-ignore
+/scripts/prepare_release.py export-ignore

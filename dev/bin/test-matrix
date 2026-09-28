@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Sets up and tests each variant in turn (default: all of dev/env/*.env), stopping each afterwards.
+# Usage: dev/bin/test-matrix [variant ...]     e.g. dev/bin/test-matrix default mysql-queue
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+VARIANTS=("$@")
+[ ${#VARIANTS[@]} -gt 0 ] || VARIANTS=($(ls "$BIN/../env" | sed 's/\.env$//'))
+results=()
+
+for v in "${VARIANTS[@]}"; do
+    export BB_ENV="$v"
+    # Variants share host ports: stop whatever else is running first.
+    for other in $(ls "$BIN/../env" | sed 's/\.env$//'); do
+        [ "$other" = "$v" ] || BB_ENV="$other" "$BIN/compose" stop >/dev/null 2>&1
+    done
+    if "$BIN/setup" > "/tmp/bb-setup-$v.log" 2>&1; then
+        "$BIN/test-all" 2>&1 | tee "/tmp/bb-test-$v.log" | grep -E '^########|✓|✘|passed|failed|FAIL|PASS|OK \(' || true
+        grep -q "all suites passed" "/tmp/bb-test-$v.log" && results+=("$v: passed") || results+=("$v: FAILED (see /tmp/bb-test-$v.log)")
+    else
+        results+=("$v: SETUP FAILED (see /tmp/bb-setup-$v.log)")
+    fi
+    "$BIN/compose" stop >/dev/null 2>&1
+done
+
+printf '\n==== Matrix ====\n'; printf '%s\n' "${results[@]}"
+printf '%s\n' "${results[@]}" | grep -qv ': passed$' && exit 1 || exit 0

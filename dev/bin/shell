@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Shell (or a command, via: dev/bin/shell -c '...') inside the php container, as the web user.
+if [ -t 0 ] && [ $# -eq 0 ]; then
+    exec "$(dirname "$0")/compose" exec -u www-data php bash
+fi
+exec "$(dirname "$0")/compose" exec -T -u www-data php bash "$@"

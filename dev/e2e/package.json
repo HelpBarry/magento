@@ -1,0 +1,12 @@
+{
+  "name": "bluebarry-magento-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0"
+  }
+}

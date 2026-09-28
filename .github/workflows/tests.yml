@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  magento:
+    name: ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # PRs run the typical shop; main, nightly and manual runs cover the whole matrix (dev/env/*.env).
+        env: ${{ fromJSON(github.event_name == 'pull_request' && '["default"]' || '["default", "mysql-queue", "legacy", "2.4.7", "latest"]') }}
+    env:
+      BB_ENV: ${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dev/e2e/package-lock.json
+
+      - name: Build and install Magento + module
+        run: dev/bin/setup
+
+      - name: Static checks
+        run: dev/bin/test-static
+
+      - name: Unit tests
+        run: dev/bin/test-unit
+
+      - name: End-to-end tests
+        run: dev/bin/test-e2e
+
+      - name: Zero-downtime first-install deploy
+        if: github.event_name != 'pull_request'
+        run: dev/bin/test-deploy-race
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          mkdir -p artifacts
+          dev/bin/compose logs --no-color > artifacts/docker.log 2>&1 || true
+          dev/bin/shell -c 'tar -C var -czf - log report 2>/dev/null' > artifacts/magento-var.tgz || true
+          cp -r dev/e2e/playwright-report dev/e2e/test-results artifacts/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: failure-${{ matrix.env }}
+          path: artifacts

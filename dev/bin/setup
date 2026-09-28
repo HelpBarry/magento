@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Builds a production-mode Magento for the selected variant (BB_ENV, default "default"), installs the
+# module from a packaged zip exactly like a merchant would, and loads test fixtures. Safe to re-run.
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+DEV_DIR="$(dirname "$BIN")"
+export BB_ENV="${BB_ENV:-default}"
+set -a; source "$DEV_DIR/env/$BB_ENV.env"; set +a
+HTTP_PORT="${HTTP_PORT:-8080}"
+
+compose() { "$BIN/compose" "$@"; }
+in_php() { compose exec -T -u www-data php bash -ec "$1"; }
+step() { printf '\n==> %s\n' "$*"; }
+
+step "[$BB_ENV] Magento $MAGENTO_VERSION, PHP $PHP_VERSION, queue=$QUEUE"
+"$BIN/certs"
+mkdir -p "$DEV_DIR/.artifacts"
+
+step "Starting services"
+compose build php
+compose up -d db opensearch redis rabbitmq mock-api php
+
+# Written only after the whole install block succeeds (env.php alone exists halfway through an install)
+# and records what was installed, so a variant whose Magento/PHP/queue settings changed is rebuilt.
+INSTALLED_MARKER=app/etc/.bb-install-complete
+WANTED="magento=$MAGENTO_VERSION php=$PHP_VERSION queue=$QUEUE"
+INSTALLED="$(in_php "cat $INSTALLED_MARKER" 2>/dev/null || true)"
+if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$WANTED" ]; then
+    step "[$BB_ENV] installed '$INSTALLED' but the variant now asks for '$WANTED': rebuilding from scratch"
+    compose down -v
+    compose up -d db opensearch redis rabbitmq mock-api php
+    INSTALLED=""
+fi
+if [ "$INSTALLED" != "$WANTED" ]; then
+    step "Downloading Magento $MAGENTO_VERSION from the Mage-OS mirror (no marketplace keys needed)"
+    in_php "
+        rm -rf /tmp/magento
+        composer create-project --no-install --no-interaction \
+            --repository-url=https://mirror.mage-os.org/ \
+            magento/project-community-edition=$MAGENTO_VERSION /tmp/magento
+        cp -a /tmp/magento/. /var/www/html/ && rm -rf /tmp/magento
+        composer config --unset repositories.0 || true
+        composer config repositories.mage-os composer https://mirror.mage-os.org/
+        composer config repositories.bluebarry artifact /artifacts
+        # Older Magento lines pin packages that now carry security advisories, which current Composer
+        # refuses to install. Test stack only; merchants on those versions face the same prompt.
+        composer config policy.advisories.block false
+        composer install --no-interaction --no-progress
+        composer require --dev --no-interaction --no-progress bitexpert/phpstan-magento
+    "
+
+    step "Installing Magento"
+    AMQP_ARGS=""
+    if [ "$QUEUE" = "amqp" ]; then
+        AMQP_ARGS="--amqp-host=rabbitmq --amqp-port=5672 --amqp-user=guest --amqp-password=guest --amqp-virtualhost=/"
+    fi
+    in_php "
+        php bin/magento setup:install --no-interaction --cleanup-database \
+            --base-url=http://localhost:$HTTP_PORT/ \
+            --db-host=db --db-name=magento --db-user=magento --db-password=magento \
+            --admin-firstname=Admin --admin-lastname=User --admin-email=admin@example.com \
+            --admin-user=admin --admin-password=Admin12345! --backend-frontname=admin \
+            --language=en_US --currency=EUR --timezone=Europe/Amsterdam --use-rewrites=1 \
+            --search-engine=opensearch --opensearch-host=opensearch --opensearch-port=9200 \
+            --session-save=redis --session-save-redis-host=redis --session-save-redis-db=0 \
+            --cache-backend=redis --cache-backend-redis-server=redis --cache-backend-redis-db=1 \
+            --page-cache=redis --page-cache-redis-server=redis --page-cache-redis-db=2 \
+            --consumers-wait-for-messages=0 \
+            $AMQP_ARGS
+        php bin/magento module:disable Magento_TwoFactorAuth Magento_AdminAdobeImsTwoFactorAuth 2>/dev/null \
+            || php bin/magento module:disable Magento_TwoFactorAuth
+        php bin/magento deploy:mode:set production --skip-compilation
+    "
+
+    step "Store configuration"
+    in_php "
+        php bin/magento config:set general/country/default NL
+        php bin/magento config:set general/locale/code en_US
+        php bin/magento config:set shipping/origin/country_id NL
+        php bin/magento config:set tax/defaults/country NL
+        php bin/magento config:set admin/security/session_lifetime 86400
+        php bin/magento config:set admin/security/admin_account_sharing 1
+        php bin/magento config:set system/smtp/disable 1
+        echo '$WANTED' > $INSTALLED_MARKER
+    "
+fi
+
+"$BIN/deploy-module"
+in_php "
+    php bin/magento config:set bluebarry_module/general/tenantid test-tenant
+    php bin/magento config:set bluebarry_module/general/write_to_debug_file 1
+"
+
+step "Loading fixtures"
+compose exec -T -u www-data php php /module/dev/fixtures/fixtures.php
+in_php "php bin/magento indexer:reindex >/dev/null && php bin/magento cache:flush >/dev/null"
+
+compose up -d nginx waf
+step "Ready: storefront http://localhost:$HTTP_PORT  admin http://localhost:$HTTP_PORT/admin (admin / Admin12345!)"
+echo "    WAF-fronted storefront: http://localhost:${WAF_PORT:-8081}   mock API control: http://localhost:${MOCK_API_PORT:-8099}/__requests"
