@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 ### Fixed
 - Configurable products and bundles are reported once, at the price the shopper paid. Their child lines are no longer sent as extra items, and dynamic-price bundles no longer double the reported revenue.
+- Conversions are reported in the order's currency instead of always EUR.
 
 ## [1.0.3] - 2026-09-24
 ### Fixed
