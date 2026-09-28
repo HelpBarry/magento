@@ -20,9 +20,18 @@ step "Starting services"
 compose build php
 compose up -d db opensearch redis rabbitmq mock-api php
 
-# Written only after the whole install block succeeds; env.php alone exists halfway through an install.
+# Written only after the whole install block succeeds (env.php alone exists halfway through an install)
+# and records what was installed, so a variant whose Magento/PHP/queue settings changed is rebuilt.
 INSTALLED_MARKER=app/etc/.bb-install-complete
-if ! in_php "test -f $INSTALLED_MARKER" 2>/dev/null; then
+WANTED="magento=$MAGENTO_VERSION php=$PHP_VERSION queue=$QUEUE"
+INSTALLED="$(in_php "cat $INSTALLED_MARKER" 2>/dev/null || true)"
+if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$WANTED" ]; then
+    step "[$BB_ENV] installed '$INSTALLED' but the variant now asks for '$WANTED': rebuilding from scratch"
+    compose down -v
+    compose up -d db opensearch redis rabbitmq mock-api php
+    INSTALLED=""
+fi
+if [ "$INSTALLED" != "$WANTED" ]; then
     step "Downloading Magento $MAGENTO_VERSION from the Mage-OS mirror (no marketplace keys needed)"
     in_php "
         rm -rf /tmp/magento
@@ -72,7 +81,7 @@ if ! in_php "test -f $INSTALLED_MARKER" 2>/dev/null; then
         php bin/magento config:set admin/security/session_lifetime 86400
         php bin/magento config:set admin/security/admin_account_sharing 1
         php bin/magento config:set system/smtp/disable 1
-        touch $INSTALLED_MARKER
+        echo '$WANTED' > $INSTALLED_MARKER
     "
 fi
 
