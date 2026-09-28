@@ -7,7 +7,10 @@ import {
   mockApi,
   newAdvisorIds,
   orderEntityId,
+  orderGrandTotal,
+  payForOrder,
   runConversionConsumer,
+  sql,
   startAdvisor,
   stubAdvisor,
 } from './helpers';
@@ -57,7 +60,12 @@ test('quiz session is stored server-side and returned by GET', async ({ page }) 
   });
 });
 
-test('simple product: checkout after quiz sends a valid conversion and identify', async ({ page }) => {
+const conversionsSent = async () =>
+  (await mockApi.requests()).filter((r) => r.path.toLowerCase() === '/data/conversionevents');
+
+const productId = (sku: string) => sql(`SELECT entity_id FROM catalog_product_entity WHERE sku = '${sku}'`);
+
+test('simple product: checkout after quiz sends a valid conversion and identify once paid', async ({ page }) => {
   const ids = newAdvisorIds();
   const email = `shopper+${Date.now()}@example.com`;
   await stubAdvisor(page, ids);
@@ -66,6 +74,11 @@ test('simple product: checkout after quiz sends a valid conversion and identify'
   await addToCart(page, 'bb-simple');
   const incrementId = await checkoutAsGuest(page, email);
 
+  // Check / money order: pending until the merchant invoices it, and not a sale before that.
+  runConversionConsumer();
+  expect(await conversionsSent(), 'nothing sent for an unpaid order').toEqual([]);
+
+  await payForOrder(page, incrementId);
   runConversionConsumer();
   const requests = await mockApi.requests();
   const conversion = requests.find((r) => r.path.toLowerCase() === '/data/conversionevents');
@@ -81,15 +94,20 @@ test('simple product: checkout after quiz sends a valid conversion and identify'
     advisorId: ids.advisorId,
     sessionId: ids.sessionId,
     userId: ids.userId,
+    commerceSource: 'Magento',
+    commerceStoreKey: 'localhost',
     currencyIso: 'EUR',
     conversionId: orderEntityId(incrementId),
   });
-  // EUR 100.00 excl. tax, NL 21% VAT, shipping excluded.
+  expect(Date.parse(body.occurredAtUtc)).toBeGreaterThan(Date.now() - 10 * 60_000);
+  // EUR 100.00 excl. tax, NL 21% VAT; the grand total is the order's, shipping included.
   expect(Number(body.orderProductTotal)).toBeCloseTo(100, 2);
   expect(Number(body.orderTaxTotal)).toBeCloseTo(21, 2);
-  expect(Number(body.orderGrandTotal)).toBeCloseTo(121, 2);
-  expect(Number(body.value)).toBeCloseTo(100, 2);
+  expect(Number(body.orderGrandTotal)).toBeCloseTo(orderGrandTotal(incrementId), 2);
+  expect(Number(body.orderGrandTotal)).toBeGreaterThan(121);
+  expect(Number(body.value)).toBeCloseTo(Number(body.orderGrandTotal), 2);
   expect(body.items).toHaveLength(1);
+  expect(body.items[0].itemId).toBe(productId('bb-simple'));
   expect(Number(body.items[0].quantity)).toBe(1);
   expect(Number(body.items[0].priceExclTax)).toBeCloseTo(100, 2);
   expect(Number(body.items[0].priceInclTax)).toBeCloseTo(121, 2);
@@ -100,11 +118,33 @@ test('simple product: checkout after quiz sends a valid conversion and identify'
   expect(identify!.body).toEqual({ email, sessionId: ids.sessionId, userId: ids.userId });
 });
 
-// Composite products must be reported as the line the shopper bought: once, at the price paid (#20).
-for (const [name, urlKey, options, net] of [
-  ['configurable product', 'bb-configurable', { color: 'BB Red' }, 80],
-  ['dynamic-price bundle', 'bb-bundle-dynamic', { bundle: true }, 50],
-  ['fixed-price bundle', 'bb-bundle-fixed', { bundle: true }, 45],
+test('search-only shopper: the order is recorded with the visitor id alone (#13)', async ({ page }) => {
+  const uid = newAdvisorIds().userId;
+  const email = `shopper+${Date.now()}@example.com`;
+  await stubAdvisor(page, { ...newAdvisorIds(), userId: uid }); // bb_uid from the SDK, no quiz started
+  await page.goto('/');
+  await addToCart(page, 'bb-simple');
+  const incrementId = await checkoutAsGuest(page, email);
+  await payForOrder(page, incrementId);
+  runConversionConsumer();
+
+  const requests = await mockApi.requests();
+  const conversion = requests.find((r) => r.path.toLowerCase() === '/data/conversionevents');
+  expect(conversion).toBeDefined();
+  expect(conversion!.contractErrors).toEqual([]);
+  expect(conversion!.body.userId).toBe(uid);
+  expect(conversion!.body.sessionId).toBeUndefined();
+  expect(conversion!.body.advisorId).toBeUndefined();
+  const identify = requests.find((r) => r.path.toLowerCase() === '/data/identify');
+  expect(identify!.body).toEqual({ email, userId: uid });
+});
+
+// Composite products must be reported as the line the shopper bought: once, at the price paid (#20),
+// named by the catalog's reference (the variant for a configurable product).
+for (const [name, urlKey, options, net, sku] of [
+  ['configurable product', 'bb-configurable', { color: 'BB Red' }, 80, 'bb-configurable-red'],
+  ['dynamic-price bundle', 'bb-bundle-dynamic', { bundle: true }, 50, 'bb-bundle-dynamic'],
+  ['fixed-price bundle', 'bb-bundle-fixed', { bundle: true }, 45, 'bb-bundle-fixed'],
 ] as const) {
   test(`${name}: reported once, at the price paid`, async ({ page }) => {
     const ids = newAdvisorIds();
@@ -112,18 +152,20 @@ for (const [name, urlKey, options, net] of [
     await page.goto('/');
     await startAdvisor(page);
     await addToCart(page, urlKey, options);
-    await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+    const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+    await payForOrder(page, incrementId);
 
     runConversionConsumer();
-    const conversion = (await mockApi.requests()).find((r) => r.path.toLowerCase() === '/data/conversionevents');
+    const conversion = (await conversionsSent())[0];
     expect(conversion).toBeDefined();
-    expect(conversion!.contractErrors).toEqual([]);
-    const body = conversion!.body;
+    expect(conversion.contractErrors).toEqual([]);
+    const body = conversion.body;
     const gross = Math.round(net * 121) / 100; // NL 21% VAT
     expect(Number(body.orderProductTotal)).toBeCloseTo(net, 2);
     expect(Number(body.orderTaxTotal)).toBeCloseTo(gross - net, 2);
-    expect(Number(body.orderGrandTotal)).toBeCloseTo(gross, 2);
+    expect(Number(body.orderGrandTotal)).toBeCloseTo(orderGrandTotal(incrementId), 2);
     expect(body.items, 'one line per purchased product').toHaveLength(1);
+    expect(body.items[0].itemId).toBe(productId(sku));
     expect(Number(body.items[0].quantity)).toBe(1);
     expect(Number(body.items[0].priceExclTax)).toBeCloseTo(net, 2);
     expect(Number(body.items[0].priceInclTax)).toBeCloseTo(gross, 2);
@@ -131,26 +173,62 @@ for (const [name, urlKey, options, net] of [
   });
 }
 
-test('checkout without a quiz session sends nothing', async ({ page }) => {
-  await stubAdvisor(page, null);
+test('a shopper bluebarry never saw sends nothing, even when paid', async ({ page }) => {
+  await stubAdvisor(page, null, { visitor: false });
   await addToCart(page, 'bb-simple');
-  await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+  const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+  await payForOrder(page, incrementId);
 
   runConversionConsumer();
   expect(await mockApi.requests()).toEqual([]);
 });
 
-test('Bluebarry API outage does not affect checkout or wedge the queue', async ({ page }) => {
+test.describe('cookie restriction mode', () => {
+  test.afterAll(() => {
+    magento('config:set', 'web/cookie/cookie_restriction', '0');
+    magento('cache:flush');
+  });
+
+  test('without the shopper\'s cookie consent the order is not linked', async ({ page }) => {
+    magento('config:set', 'web/cookie/cookie_restriction', '1');
+    magento('cache:flush');
+    await stubAdvisor(page, newAdvisorIds());
+    await page.goto('/');
+    await addToCart(page, 'bb-simple');
+    const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+    await payForOrder(page, incrementId);
+
+    runConversionConsumer();
+    expect(await mockApi.requests()).toEqual([]);
+  });
+});
+
+test('Bluebarry API outage: the conversion is retried later and arrives once', async ({ page }) => {
   await mockApi.respondWith({ status: 503, body: { error: 'down' } });
   const ids = newAdvisorIds();
   await stubAdvisor(page, ids);
   await page.goto('/');
   await startAdvisor(page);
   await addToCart(page, 'bb-simple');
-  await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+  const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+  await payForOrder(page, incrementId);
 
-  // The consumer must finish (not crash or loop on the failed message).
+  // The consumer finishes (no crash, no requeue loop) and schedules a retry.
   runConversionConsumer();
-  const attempts = (await mockApi.requests()).filter((r) => r.path.toLowerCase() === '/data/conversionevents');
-  expect(attempts.length).toBeGreaterThanOrEqual(1);
+  expect(await conversionsSent()).toHaveLength(1);
+  const orderId = orderEntityId(incrementId);
+  expect(sql(`SELECT CONCAT(status, '/', attempts) FROM bluebarry_order_visitor WHERE order_id = ${orderId}`)).toBe('1/1');
+
+  // bluebarry is back and the retry is due: the cron's job sends it.
+  await mockApi.reset();
+  sql(`UPDATE bluebarry_order_visitor SET next_attempt_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE order_id = ${orderId}`);
+  magento('bluebarry:conversions:send-due');
+  const retried = await conversionsSent();
+  expect(retried).toHaveLength(1);
+  expect(retried[0].responseStatus).toBe(201);
+  expect(sql(`SELECT status FROM bluebarry_order_visitor WHERE order_id = ${orderId}`)).toBe('2');
+
+  // Nothing left to send.
+  magento('bluebarry:conversions:send-due');
+  expect(await conversionsSent()).toHaveLength(1);
 });

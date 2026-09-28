@@ -2,313 +2,108 @@
 
 namespace Bluebarry\Bluebarry\Model\Consumer;
 
+use Bluebarry\Bluebarry\Model\Conversion\Queue;
+use Bluebarry\Bluebarry\Model\Conversion\Sender;
+use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
+use Bluebarry\Bluebarry\Model\Visitor;
 use Magento\Sales\Api\OrderRepositoryInterface;
-use Magento\Framework\App\Config\ScopeConfigInterface;
-use Magento\Store\Model\StoreManagerInterface;
-use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
 
 /**
- * Class ConversionProcessor
- * @package Bluebarry\Bluebarry\Model\Consumer
+ * Queue consumer for bluebarry.conversion.process: delivers a paid order's conversion right away.
+ * The message is the order id. Failures never reach the queue (no requeue loops): the Sender
+ * schedules a retry, and the cron takes it from there.
  */
 class ConversionProcessor
 {
     /**
+     * @var Sender
+     */
+    private $sender;
+
+    /**
+     * @var OrderVisitor
+     */
+    private $visitors;
+
+    /**
+     * @var Queue
+     */
+    private $queue;
+
+    /**
      * @var OrderRepositoryInterface
      */
-    protected $orderRepository;
-
-    /**
-     * @var ScopeConfigInterface
-     */
-    protected $scopeConfig;
-
-    /**
-     * @var StoreManagerInterface
-     */
-    protected $storeManager;
+    private $orders;
 
     /**
      * @var LoggerInterface
      */
-    protected $logger;
+    private $logger;
 
     /**
-     * @var Curl
-     */
-    protected $curl;
-
-    /**
-     * @param OrderRepositoryInterface $orderRepository
-     * @param ScopeConfigInterface $scopeConfig
-     * @param StoreManagerInterface $storeManager
+     * @param Sender $sender
+     * @param OrderVisitor $visitors
+     * @param Queue $queue
+     * @param OrderRepositoryInterface $orders
      * @param LoggerInterface $logger
-     * @param Curl $curl
      */
     public function __construct(
-        OrderRepositoryInterface $orderRepository,
-        ScopeConfigInterface $scopeConfig,
-        StoreManagerInterface $storeManager,
-        LoggerInterface $logger,
-        Curl $curl
+        Sender $sender,
+        OrderVisitor $visitors,
+        Queue $queue,
+        OrderRepositoryInterface $orders,
+        LoggerInterface $logger
     ) {
-        $this->orderRepository = $orderRepository;
-        $this->scopeConfig = $scopeConfig;
-        $this->storeManager = $storeManager;
+        $this->sender = $sender;
+        $this->visitors = $visitors;
+        $this->queue = $queue;
+        $this->orders = $orders;
         $this->logger = $logger;
-        $this->curl = $curl;
     }
 
     /**
-     * Process conversion event from message queue
-     *
-     * @param string $conversionDataJson
+     * @param string $message the order id; JSON with the quiz session from module versions before 1.1
      * @return void
      */
-    public function processConversion($conversionDataJson)
+    public function processConversion($message)
     {
         try {
-            $conversionData = json_decode($conversionDataJson, true);
-            $loggingEnabled = $this->isWriteToLogEnabled();
-            
-            if (!$conversionData) {
-                $this->logger->error('Invalid JSON data received in conversion consumer: ' . $conversionDataJson);
+            $message = trim((string) $message);
+            if (ctype_digit($message)) {
+                $this->sender->send((int) $message);
                 return;
             }
-
-            $orderId = $conversionData['order_id'] ?? null;
-            $sessionData = $conversionData['session_data'] ?? null;
-            $tenantId = $conversionData['tenant_id'] ?? null;
-
-            if (!$orderId || !$sessionData || !$tenantId) {
-                $this->logger->error('Missing required data in conversion message: ' . $conversionDataJson);
-                return;
-            }
-
-            if ($loggingEnabled) {
-                $this->logger->debug("--- Bluebarry async processing started ---");
-                $this->logger->debug("Processing order ID: " . $orderId);
-            }
-
-            $order = $this->orderRepository->get($orderId);
-
-            if (!is_array($sessionData) || 
-                !isset($sessionData['bluebarry']) || 
-                !isset($sessionData['bluebarry']['advisor_id']) || 
-                !isset($sessionData['bluebarry']['user_id']) || 
-                !isset($sessionData['bluebarry']['session_id'])
-            ) {
-                if ($loggingEnabled) {
-                    $this->logger->debug("No valid bluebarry session found for order: " . $orderId);
-                }
-                return;
-            }
-
-            $itemTotalExlTax = 0;
-            $itemTotalTax = 0;
-            $items = [];
-            // Only the lines the shopper bought: the child lines of configurable products and bundles
-            // repeat the product (at 0, or for dynamic-price bundles at the part prices already summed
-            // into the bundle line), so counting them duplicates items and revenue.
-            foreach ($order->getItems() as $item) 
-            {
-                if ($item->getParentItemId()) {
-                    continue;
-                }
-
-                $quantity = (float) $item->getQtyOrdered();
-                $priceExclTax = (float) $item->getPrice();
-                $unitTax = $this->getUnitTax($item);
-
-                $itemTotalExlTax += ($quantity * $priceExclTax);
-                $itemTotalTax += ($quantity * $unitTax);
-
-                $items[] = (object) [
-                    "itemId" => $item->getItemId(),
-                    "quantity" => $quantity,
-                    "value" => $priceExclTax,
-                    "taxPercentage" => $this->getTaxPercentage($item, $unitTax),
-                    "priceExclTax" => $priceExclTax,
-                    "priceInclTax" => $priceExclTax + $unitTax,
-                ];
-            }
-
-            $request = (object) [
-                "advisorId" => $sessionData['bluebarry']['advisor_id'],
-                "userId" => $sessionData['bluebarry']['user_id'],
-                "sessionId" => $sessionData['bluebarry']['session_id'],
-                "value" => $itemTotalExlTax,
-                "orderProductTotal" => $itemTotalExlTax, 
-                "orderTaxTotal" => round(($itemTotalTax),2),
-                "orderGrandTotal" => (round(($itemTotalTax),2) + $itemTotalExlTax), 
-                "currencyIso" => $order->getOrderCurrencyCode(),
-                "conversionId" => (string) $order->getId(),
-                "items" => $items
-            ];
-
-            if ($loggingEnabled) {
-                $this->logger->debug("--- Bluebarry request ---");
-                $this->logger->debug(json_encode($request));
-                $this->logger->debug("--- Bluebarry request ---");
-            }
-
-            $result = $this->curlConversionRequest($request, $tenantId, $loggingEnabled);
-
-            // Attach the customer email to the quiz session so post-checkout
-            // automations (Klaviyo / Omnisend) can be matched to a profile.
-            $customerEmail = $order->getCustomerEmail();
-            if (!empty($customerEmail)) {
-                $this->curlIdentifyRequest(
-                    (object) [
-                        "email" => $customerEmail,
-                        "sessionId" => $sessionData['bluebarry']['session_id'],
-                        "userId" => $sessionData['bluebarry']['user_id'],
-                    ],
-                    $tenantId,
-                    $loggingEnabled
-                );
-            }
-
-            if ($loggingEnabled) {
-                if (isset($result) && isset($result->id)) {
-                    $this->logger->debug("Conversion successfully sent to Bluebarry. Response ID: " . $result->id);
-                }
-                else {
-                    $this->logger->debug("Failed to send conversion to Bluebarry");
-                }
-            }
-
+            $this->processLegacyMessage($message);
         } catch (\Exception $e) {
-            $this->logger->error('Error processing conversion in message queue: ' . $e->getMessage());
-            throw $e;
+            $this->logger->error('bluebarry: conversion message not processed: ' . $e->getMessage());
         }
     }
 
     /**
-     * Tax per unit, as Magento charged it. Dynamic-price bundle lines have no tax percentage of their
-     * own (their parts do), so the difference between the incl. and excl. tax price is used when known.
+     * A message queued by an older version before an upgrade: `{order_id, session_data, tenant_id}`.
+     * Its quiz visitor is recorded like a new capture, and the order goes out once it is paid.
      *
-     * @param \Magento\Sales\Api\Data\OrderItemInterface $item
-     * @return float
-     */
-    private function getUnitTax($item): float
-    {
-        if ($item->getPriceInclTax() !== null) {
-            return max(0.0, (float) $item->getPriceInclTax() - (float) $item->getPrice());
-        }
-        return (float) $item->getPrice() * ((float) $item->getTaxPercent() / 100);
-    }
-
-    /**
-     * The line's tax rate, derived from the charged tax when Magento stores none on the line.
-     *
-     * @param \Magento\Sales\Api\Data\OrderItemInterface $item
-     * @param float $unitTax
-     * @return float
-     */
-    private function getTaxPercentage($item, float $unitTax): float
-    {
-        if ((float) $item->getTaxPercent() > 0) {
-            return (float) $item->getTaxPercent();
-        }
-        $price = (float) $item->getPrice();
-        return $price > 0 ? round($unitTax / $price * 100, 4) : 0.0;
-    }
-
-    /**
-     * Returns the write to debug file status
-     * 
-     * @return bool 
-     */
-    private function isWriteToLogEnabled(): bool
-    {
-        return (bool) $this->scopeConfig->getValue(
-            "bluebarry_module/general/write_to_debug_file"
-        );
-    }
-
-    /**
-     * Send conversion request to Bluebarry API
-     *
-     * @param object $data
-     * @param string $tenantId
-     * @return null
-     */
-    private function curlConversionRequest(object $data, string $tenantId, bool $loggingEnabled)
-    {
-        $url = "https://data.bluebarry.ai/data/conversionevents";
-        
-        $this->curl->addHeader("Content-Type", "application/json");
-        $this->curl->addHeader("BB-Tenant-Id", $tenantId);
-        $this->curl->setTimeout(30);
-        
-        $jsonData = json_encode($data);
-        
-        try {
-            $this->curl->post($url, $jsonData);
-            
-            $responseBody = $this->curl->getBody();
-            $httpStatus = $this->curl->getStatus();
-
-            if ($loggingEnabled) {
-                $this->logger->debug("--- Bluebarry API Response ---");
-                $this->logger->debug("HTTP Status: " . $httpStatus);
-                $this->logger->debug("Response Body: " . $responseBody);
-                $this->logger->debug("--- Bluebarry API Response ---");
-            }
-            
-            if ($httpStatus >= 200 && $httpStatus < 300) {
-                return json_decode($responseBody);
-            } else {
-                if ($loggingEnabled) {
-                    $this->logger->debug("--- Bluebarry API Error ---");
-                    $this->logger->debug("HTTP Status: " . $httpStatus);
-                    $this->logger->debug("Request URL: " . $url);
-                    $this->logger->debug("Request Data: " . $jsonData);
-                    $this->logger->debug("Response Body: " . $responseBody);
-                    $this->logger->debug("--- Bluebarry API Error ---");
-                }
-                return null;
-            }
-            
-        } catch (\Exception $e) {
-            if ($loggingEnabled) {
-                $this->logger->debug("--- Bluebarry API Exception ---");
-                $this->logger->debug("Exception Message: " . $e->getMessage());
-                $this->logger->debug("Request URL: " . $url);
-                $this->logger->debug("Request Data: " . $jsonData);
-                $this->logger->debug("--- Bluebarry API Exception ---");
-            }
-            return null;
-        }
-    }
-
-    /**
-     * Send identify (email <-> session) request to Bluebarry API.
-     * Best-effort; failures are logged but never thrown.
-     *
-     * @param object $data
-     * @param string $tenantId
+     * @param string $message
      * @return void
      */
-    private function curlIdentifyRequest(object $data, string $tenantId, bool $loggingEnabled): void
+    private function processLegacyMessage(string $message): void
     {
-        $url = "https://data.bluebarry.ai/data/identify";
-
-        try {
-            $this->curl->addHeader("Content-Type", "application/json");
-            $this->curl->addHeader("BB-Tenant-Id", $tenantId);
-            $this->curl->setTimeout(30);
-            $this->curl->post($url, json_encode($data));
-
-            if ($loggingEnabled) {
-                $this->logger->debug("Bluebarry identify HTTP " . $this->curl->getStatus());
-            }
-        } catch (\Exception $e) {
-            if ($loggingEnabled) {
-                $this->logger->debug("Bluebarry identify exception: " . $e->getMessage());
-            }
+        $data = json_decode($message, true);
+        $orderId = (int) ($data['order_id'] ?? 0);
+        $quiz = $data['session_data']['bluebarry'] ?? null;
+        if ($orderId <= 0 || !is_array($quiz) || !Visitor::isUuid($quiz['user_id'] ?? null)) {
+            $this->logger->error('bluebarry: unreadable conversion message', ['message' => substr($message, 0, 500)]);
+            return;
+        }
+        $this->visitors->capture($orderId, [
+            'user_id' => strtolower($quiz['user_id']),
+            'session_id' => Visitor::isUuid($quiz['session_id'] ?? null) ? strtolower($quiz['session_id']) : null,
+            'advisor_id' => Visitor::isUuid($quiz['advisor_id'] ?? null) ? strtolower($quiz['advisor_id']) : null,
+            'experiments' => [],
+        ]);
+        if ($this->queue->isPaid($this->orders->get($orderId)) && $this->visitors->markQueued($orderId)) {
+            $this->sender->send($orderId);
         }
     }
 }

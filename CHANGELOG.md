@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
+- Every paid order from a shopper who used bluebarry is recorded, not only quiz orders: search, recommendations, product chat and popups attribute through the visitor's `bb_uid` cookie, and the buyer's email is identified on every recorded order.
+- Conversions are sent from the background with retries (after 1, 4, 9 and 16 minutes), and a cron job sends what no queue consumer picked up. `bin/magento bluebarry:conversions:send-due` runs that job on demand.
 - Installation notes for zero-downtime deployments: flush the cache once the previous release's PHP processes (cron jobs, queue consumers, PHP-FPM workers) have stopped, or orders from a first install aren't tracked until the next cache rebuild.
+### Changed
+- An order counts once it's paid (processing or complete); bank transfer, check and cash on delivery orders count once they're invoiced. With Magento's cookie restriction mode on, an order is only linked when the shopper allowed cookies.
+- Conversion amounts follow the same definition as bluebarry's other integrations: line amounts after discounts, and a grand total that includes tax and shipping. Items are named by their catalog product id (the variant for a configurable product).
 ### Fixed
 - Configurable products and bundles are reported once, at the price the shopper paid. Their child lines are no longer sent as extra items, and dynamic-price bundles no longer double the reported revenue.
 - Conversions are reported in the order's currency instead of always EUR.

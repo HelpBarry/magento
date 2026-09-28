@@ -4,7 +4,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 
 ## Features
 - Injects Bluebarry advisor script into your storefront
-- Tracks conversions and sends order/session data to Bluebarry
+- Records every paid order from a shopper who used bluebarry (quiz, search, recommendations, product chat, popups) and identifies the buyer's email, from the background so checkout never waits
 - Admin configuration for Tenant ID and debug logging
 
 ## Installation

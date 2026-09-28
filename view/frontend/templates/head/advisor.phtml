@@ -9,6 +9,7 @@ if ($tenantId != null && $tenantId != "") {
 <script nonce="<?= $block->escapeHtmlAttr($block->getNonce()); ?>">
     window.barry = window.barry || {};
     window.barry.tenantId = "<?= $block->escapeJs($tenantId); ?>";
+    window.barry.platform = "magento";
     var advisorScript = document.createElement('script');
     advisorScript.async = true;
     advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";
