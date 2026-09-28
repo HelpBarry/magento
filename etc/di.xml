@@ -1,7 +1,9 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
-    <!-- Everything to var/log/bluebarry.log; warnings and errors also to system.log, where merchants look. -->
-    <virtualType name="BluebarryLogger" type="Magento\Framework\Logger\Monolog">
+    <!-- Everything to var/log/bluebarry.log; warnings and errors also to system.log, where merchants look.
+         Based on Monolog\Logger, not Magento\Framework\Logger\Monolog: that type's handlers (debug, syslog)
+         would be merged into this list and copy the module's debug lines there. -->
+    <virtualType name="BluebarryLogger" type="Monolog\Logger">
         <arguments>
             <argument name="name" xsi:type="string">bluebarry</argument>
             <argument name="handlers" xsi:type="array">
