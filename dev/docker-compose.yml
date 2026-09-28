@@ -96,6 +96,8 @@ services:
       MODSEC_RULE_ENGINE: "On"
       ANOMALY_INBOUND: 5
       SERVER_NAME: localhost
+      # Forward the Host header as the browser sent it (with port), like production proxies do.
+      PROXY_HOST_HEADER: $$http_host
     volumes:
       - ./waf/proxy-buffers.conf:/etc/nginx/conf.d/zz-proxy-buffers.conf:ro
     ports:

@@ -38,7 +38,11 @@ jobs:
           echo "::error::Publish releases from main (or tick 'Dry run' to try another branch)."
           exit 1
 
+      # No credentials in .git/config while Composer and npm packages run during the tests; the push
+      # step below authenticates explicitly.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -102,5 +106,5 @@ jobs:
           git commit -m "Release $VERSION"
           git tag -a "v$VERSION" -m "Release $VERSION"
           # Fails instead of overwriting if main moved while the tests ran; just run the workflow again.
-          git push origin HEAD:main "refs/tags/v$VERSION"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main "refs/tags/v$VERSION"
           gh release create "v$VERSION" "$ZIP" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"

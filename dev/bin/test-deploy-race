@@ -16,31 +16,53 @@ ZIP="${1:-}"
 [ -n "$ZIP" ] && ZIP="$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
 
 echo "==> Baseline: live shop without the module"
-in_php '
+if ! in_php '
     composer remove --no-interaction --no-progress bluebarry/magento2-module >/dev/null 2>&1 || true
     mysql -hdb -umagento -pmagento magento -e "DELETE FROM setup_module WHERE module = \"Bluebarry_Bluebarry\"; DELETE FROM queue WHERE name = \"bluebarry_conversion_process\";"
     php bin/magento setup:upgrade --no-interaction >/dev/null
     php bin/magento setup:di:compile >/dev/null 2>&1
     php bin/magento cache:flush >/dev/null
-'
+'; then
+    echo "ERROR: could not reset the shop to a no-module baseline; the simulation would prove nothing."
+    exit 1
+fi
 compose exec -T rabbitmq sh -c 'rabbitmqctl delete_queue bluebarry_conversion_process; rabbitmqctl eval "rabbit_exchange:delete(rabbit_misc:r(<<\"/\">>, exchange, <<\"bluebarry-conversion-exchange\">>), false, <<\"test\">>)."' >/dev/null 2>&1 || true
 
 echo "==> Snapshot the live release (release-a) and keep it busy re-caching config"
-compose exec -T php rm -f /tmp/stop-recache /tmp/recache.count
+compose exec -T php rm -f /tmp/recache.stop /tmp/recache.ok /tmp/recache.done
 in_php 'rm -rf /var/www/release-a && rsync -a --exclude var/cache --exclude var/page_cache --exclude pub/media /var/www/html/ /var/www/release-a/'
-compose exec -d -u www-data -w /var/www/release-a php \
-    bash -c 'n=0; while [ ! -f /tmp/stop-recache ]; do php /module/dev/tools/recache-communication-config.php; n=$((n+1)); echo $n > /tmp/recache.count; done'
+# Counts only rounds that actually loaded (and so possibly re-cached) the old release's config.
+compose exec -d -u www-data -w /var/www/release-a php bash -c '
+    ok=0
+    echo 0 > /tmp/recache.ok
+    while [ ! -f /tmp/recache.stop ]; do
+        if php /module/dev/tools/recache-communication-config.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
+    done
+    touch /tmp/recache.done'
+recache_count() { compose exec -T php cat /tmp/recache.ok 2>/dev/null || echo 0; }
 
 echo "==> Deploying the new release (installs the module) while release-a is live"
-set +e
 OUTPUT="$("$BIN/deploy-module" ${ZIP:+"$ZIP"} 2>&1)"
 STATUS=$?
-set -e
+DURING="$(recache_count)"
+echo "    (release-a loaded its config $DURING times during the deploy)"
 
-compose exec -T php touch /tmp/stop-recache
-echo "    (release-a re-cached the config $(compose exec -T php cat /tmp/recache.count 2>/dev/null || echo 0) times during the deploy)"
-sleep 3  # let the loop see the stop file before release-a disappears
-in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a'
+# The old release keeps running after the deploy, as long-running consumers and cron do in production.
+# Two more successful rounds guarantee at least one started after the deploy's final cache flush.
+AFTER_DEPLOY=0
+if [ $STATUS -eq 0 ]; then
+    for _ in $(seq 1 60); do
+        [ "$(recache_count)" -ge $((DURING + 2)) ] && { AFTER_DEPLOY=1; break; }
+        sleep 1
+    done
+fi
+
+stop_old_release() {
+    compose exec -T php touch /tmp/recache.stop
+    for _ in $(seq 1 60); do compose exec -T php test -f /tmp/recache.done && break; sleep 1; done
+    in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a'
+}
+stop_old_release
 
 if [ $STATUS -ne 0 ]; then
     echo "$OUTPUT" | tail -25
@@ -52,6 +74,12 @@ if [ $STATUS -ne 0 ]; then
 fi
 echo "$OUTPUT" | tail -3
 echo "PASS: first-install deploy survived the live old release"
+if [ $AFTER_DEPLOY -ne 1 ]; then
+    echo "INCONCLUSIVE: release-a never re-cached its config after the deploy finished, so the post-deploy"
+    echo "              state was not exercised."
+    [ -n "$ZIP" ] && "$BIN/deploy-module" >/dev/null 2>&1
+    exit 1
+fi
 
 # The deploy finishing is not enough: the old release kept running past the final cache flush, as
 # long-running consumers and cron do in production. Can the new release still publish conversions?
