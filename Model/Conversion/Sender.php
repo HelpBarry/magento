@@ -94,6 +94,23 @@ class Sender
         $attempt = (int) $visitor['attempts'] + 1;
 
         try {
+            $this->deliver($orderId, $visitor, $attempt);
+        } catch (\Exception $e) {
+            // Counted like a failed delivery, so one broken order neither holds up the rest of a batch
+            // nor comes back forever.
+            $this->retryOrFail($orderId, $attempt, true, ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * @param int $orderId
+     * @param array $visitor
+     * @param int $attempt
+     * @return void
+     */
+    private function deliver(int $orderId, array $visitor, int $attempt): void
+    {
+        try {
             $order = $this->orders->get($orderId);
         } catch (NoSuchEntityException $e) {
             $this->visitors->markFailed($orderId, $attempt);
@@ -126,20 +143,29 @@ class Sender
             return;
         }
 
-        if ($response->isRetryable() && $attempt < self::MAX_ATTEMPTS) {
-            // 1, 4, 9, 16 minutes.
+        $this->retryOrFail($orderId, $attempt, $response->isRetryable(), [
+            'status' => $response->getStatus(), 'body' => substr($response->getBody(), 0, 500), 'error' => $response->getError(),
+        ]);
+    }
+
+    /**
+     * Retries after 1, 4, 9 and 16 minutes, then gives up.
+     *
+     * @param int $orderId
+     * @param int $attempt
+     * @param bool $retryable
+     * @param array $context
+     * @return void
+     */
+    private function retryOrFail(int $orderId, int $attempt, bool $retryable, array $context): void
+    {
+        if ($retryable && $attempt < self::MAX_ATTEMPTS) {
             $this->visitors->scheduleRetry($orderId, $attempt, $attempt * $attempt);
-            $this->logger->warning('bluebarry: conversion not delivered, will retry', [
-                'order_id' => $orderId, 'status' => $response->getStatus(), 'attempt' => $attempt, 'error' => $response->getError(),
-            ]);
+            $this->logger->warning('bluebarry: conversion not delivered, will retry', ['order_id' => $orderId, 'attempt' => $attempt] + $context);
             return;
         }
-
         $this->visitors->markFailed($orderId, $attempt);
-        $this->logger->error('bluebarry: conversion not delivered', [
-            'order_id' => $orderId, 'status' => $response->getStatus(), 'attempt' => $attempt,
-            'body' => substr($response->getBody(), 0, 500), 'error' => $response->getError(),
-        ]);
+        $this->logger->error('bluebarry: conversion not delivered', ['order_id' => $orderId, 'attempt' => $attempt] + $context);
     }
 
     /**

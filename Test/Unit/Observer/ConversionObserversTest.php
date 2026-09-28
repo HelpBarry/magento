@@ -8,6 +8,7 @@ use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
 use Bluebarry\Bluebarry\Model\Visitor;
 use Bluebarry\Bluebarry\Observer\ProcessConversion;
 use Bluebarry\Bluebarry\Observer\QueuePaidOrder;
+use Magento\Framework\App\State;
 use Magento\Framework\Event;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\MessageQueue\PublisherInterface;
@@ -57,6 +58,14 @@ class ConversionObserversTest extends TestCase
         $this->placement($visitors, self::VISITOR, null, $logger)->execute($this->event($this->order(Order::STATE_NEW)));
     }
 
+    public function testAnOrderEnteredInTheAdminIsNotLinkedToTheMerchantsCookies(): void
+    {
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->expects($this->never())->method('capture');
+
+        $this->placement($visitors, self::VISITOR, area: 'adminhtml')->execute($this->event($this->order(Order::STATE_PROCESSING)));
+    }
+
     public function testPaymentQueuesOnlyOnTheChangeToPaid(): void
     {
         $visitors = $this->createMock(OrderVisitor::class);
@@ -80,14 +89,16 @@ class ConversionObserversTest extends TestCase
         (new Queue($visitors, $publisher, $logger))->queue(5);
     }
 
-    private function placement(OrderVisitor $visitors, ?array $visitor, ?PublisherInterface $publisher = null, ?LoggerInterface $logger = null): ProcessConversion
+    private function placement(OrderVisitor $visitors, ?array $visitor, ?PublisherInterface $publisher = null, ?LoggerInterface $logger = null, string $area = 'webapi_rest'): ProcessConversion
     {
         $config = $this->createStub(Config::class);
         $config->method('getTenantId')->willReturn('tenant');
         $reader = $this->createStub(Visitor::class);
         $reader->method('current')->willReturn($visitor);
         $queue = new Queue($visitors, $publisher ?? $this->createStub(PublisherInterface::class), $this->createStub(LoggerInterface::class));
-        return new ProcessConversion($config, $reader, $visitors, $queue, $logger ?? $this->createStub(LoggerInterface::class));
+        $state = $this->createStub(State::class);
+        $state->method('getAreaCode')->willReturn($area);
+        return new ProcessConversion($config, $reader, $visitors, $queue, $logger ?? $this->createStub(LoggerInterface::class), $state);
     }
 
     private function order(string $state, bool $stateChanged = true): Order

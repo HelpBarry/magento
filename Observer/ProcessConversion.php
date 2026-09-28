@@ -6,6 +6,8 @@ use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Conversion\Queue;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
 use Bluebarry\Bluebarry\Model\Visitor;
+use Magento\Framework\App\Area;
+use Magento\Framework\App\State;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
 use Psr\Log\LoggerInterface;
@@ -45,24 +47,32 @@ class ProcessConversion implements ObserverInterface
     private $logger;
 
     /**
+     * @var State
+     */
+    private $appState;
+
+    /**
      * @param Config $config
      * @param Visitor $visitor
      * @param OrderVisitor $visitors
      * @param Queue $queue
      * @param LoggerInterface $logger
+     * @param State $appState
      */
     public function __construct(
         Config $config,
         Visitor $visitor,
         OrderVisitor $visitors,
         Queue $queue,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        State $appState
     ) {
         $this->config = $config;
         $this->visitor = $visitor;
         $this->visitors = $visitors;
         $this->queue = $queue;
         $this->logger = $logger;
+        $this->appState = $appState;
     }
 
     /**
@@ -82,6 +92,10 @@ class ProcessConversion implements ObserverInterface
         }
 
         try {
+            // An order entered in the admin carries the merchant's own cookies, not the shopper's.
+            if ($this->appState->getAreaCode() === Area::AREA_ADMINHTML) {
+                return;
+            }
             $visitor = $this->visitor->current($tenantId);
             if ($visitor === null) {
                 if ($this->config->isDebugLogEnabled($order->getStoreId())) {
