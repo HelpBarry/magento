@@ -91,8 +91,17 @@ if [ "$(recache_count)" -lt $((DURING + 2)) ]; then
     echo "              state was not exercised."
     exit 1
 fi
+# The documented step comes after the previous release's processes have stopped, so make sure it has.
 compose exec -T php touch /tmp/recache.stop
 for _ in $(seq 1 60); do compose exec -T php test -f /tmp/recache.done && break; sleep 1; done
+if ! compose exec -T php test -f /tmp/recache.done; then
+    compose exec -T php pkill -f old-release-round >/dev/null 2>&1
+    for _ in $(seq 1 10); do compose exec -T php test -f /tmp/recache.done && break; sleep 1; done
+fi
+if ! compose exec -T php test -f /tmp/recache.done; then
+    echo "INCONCLUSIVE: the old release did not stop, so it could re-cache config after the flush."
+    exit 1
+fi
 
 # The old release has now left the shared cache as it would in production: every config it loaded
 # (events, queue, routes, ...) was cached from code without the module, so Magento does not run the
