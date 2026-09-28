@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Fixed
+- Conversions are no longer lost on shops without RabbitMQ. The conversion queue now uses the shop's own queue connection (RabbitMQ when configured, otherwise the MySQL queue) instead of requiring RabbitMQ.
 
 ## [1.0.3] - 2026-09-24
 ### Fixed
