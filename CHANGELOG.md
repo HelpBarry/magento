@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- Installation notes for zero-downtime deployments: flush the cache once the previous release's PHP processes (cron jobs, queue consumers, PHP-FPM workers) have stopped, or orders from a first install aren't tracked until the next cache rebuild.
 ### Fixed
 - Configurable products and bundles are reported once, at the price the shopper paid. Their child lines are no longer sent as extra items, and dynamic-price bundles no longer double the reported revenue.
 - Conversions are reported in the order's currency instead of always EUR.

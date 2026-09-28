@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Reproduces a zero-downtime (symlink/release-directory) deploy that installs the module for the first
 # time, the setup behind the 1.0.3 incident: while the new release runs setup:upgrade, the still-live
-# old release keeps re-caching queue config into the shared cache. Then checks the state it leaves.
+# old release keeps re-caching config into the shared cache. Then checks that, with the documented
+# post-deploy step, a quiz order placed right after the deploy is tracked.
 #
 # Usage: dev/bin/test-deploy-race [module.zip]      (default: the working tree)
 #   e.g. dev/bin/test-deploy-race dist/bluebarry-magento2-module-1.0.2.zip   -> expected to FAIL (pre-fix)
@@ -21,9 +22,10 @@ cleanup() {
     compose exec -T php touch /tmp/recache.stop
     for _ in $(seq 1 60); do
         compose exec -T php test -f /tmp/recache.done && break
-        compose exec -T php pgrep -f recache-communication-config >/dev/null || break
+        compose exec -T php pgrep -f old-release-round >/dev/null || break
         sleep 1
     done
+    compose exec -T php pkill -f old-release-round >/dev/null 2>&1
     in_php 'php bin/magento maintenance:disable >/dev/null; rm -rf /var/www/release-a; php bin/magento cache:flush >/dev/null'
     if [ -n "$ZIP" ] || ! in_php 'composer show --locked bluebarry/magento2-module >/dev/null 2>&1'; then
         echo "==> Restoring the working-tree module"
@@ -56,7 +58,7 @@ compose exec -d -u www-data -w /var/www/release-a php bash -c '
     ok=0
     echo 0 > /tmp/recache.ok
     while [ ! -f /tmp/recache.stop ]; do
-        if php /module/dev/tools/recache-communication-config.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
+        if php /module/dev/tools/old-release-round.php 2>/dev/null; then ok=$((ok+1)); echo $ok > /tmp/recache.ok; fi
     done
     touch /tmp/recache.done'
 # Only deploy once the old release demonstrably runs; otherwise nothing would race the deploy.
@@ -90,18 +92,50 @@ if [ "$(recache_count)" -lt $((DURING + 2)) ]; then
     echo "              state was not exercised."
     exit 1
 fi
+# The documented step comes after the previous release's processes have stopped, so make sure it has.
 compose exec -T php touch /tmp/recache.stop
-
-# Can the new release still publish conversions with what the old release left in the shared cache?
-echo "==> After the deploy: is the conversion topic in the (shared) cached queue config?"
-TOPIC_STATE="$(in_php 'php -r "
-    require \"app/bootstrap.php\";
-    \$om = Magento\\Framework\\App\\Bootstrap::create(BP, \$_SERVER)->getObjectManager();
-    echo isset(\$om->get(Magento\\Framework\\Communication\\ConfigInterface::class)->getTopics()[\"bluebarry.conversion.process\"]) ? \"present\" : \"missing\";
-"')"
-if [ "$TOPIC_STATE" != "present" ]; then
-    echo "FAIL: topic $TOPIC_STATE. Until the next cache flush every conversion is dropped at checkout"
-    echo "      (system.log: Error publishing conversion to message queue: Topic ... is not configured)."
+for _ in $(seq 1 60); do compose exec -T php test -f /tmp/recache.done && break; sleep 1; done
+if ! compose exec -T php test -f /tmp/recache.done; then
+    compose exec -T php pkill -f old-release-round >/dev/null 2>&1
+    for _ in $(seq 1 10); do compose exec -T php test -f /tmp/recache.done && break; sleep 1; done
+fi
+if ! compose exec -T php test -f /tmp/recache.done; then
+    echo "INCONCLUSIVE: the old release did not stop, so it could re-cache config after the flush."
     exit 1
 fi
-echo "PASS: conversions can be published after the deploy"
+
+# The old release has now left the shared cache as it would in production: every config it loaded
+# (events, queue, routes, ...) was cached from code without the module, so Magento does not run the
+# module at all until that cache is rebuilt. No module code can prevent this; the deploy has to flush
+# the cache once the previous release's processes have stopped (README, "Zero-downtime deployments").
+# (cache:clean config is not enough: those entries are tagged COMPILED_CONFIG/MAGE, not CONFIG.)
+echo "==> After the deploy: is the conversion observer registered, or is the old release's config cached?"
+OBSERVER_STATE="$(in_php 'php -r "
+    require \"app/bootstrap.php\";
+    \$om = Magento\\Framework\\App\\Bootstrap::create(BP, \$_SERVER)->getObjectManager();
+    \$om->get(Magento\\Framework\\App\\State::class)->setAreaCode(\"webapi_rest\");
+    \$observers = \$om->get(Magento\\Framework\\Event\\ConfigInterface::class)->getObservers(\"sales_model_service_quote_submit_success\");
+    echo isset(\$observers[\"bluebarry_checkout_conversion_tracking\"]) ? \"registered\" : \"missing\";
+"')"
+if [ "$OBSERVER_STATE" != "missing" ]; then
+    echo "INCONCLUSIVE: the observer is registered, so the old release did not leave its config behind this"
+    echo "              time and the documented step below would prove nothing."
+    exit 1
+fi
+echo "    observer missing: the old release's config is cached (expected; quiz orders are not tracked yet)"
+
+echo "==> Documented post-deploy step: bin/magento cache:flush"
+if ! in_php 'php bin/magento cache:flush >/dev/null'; then
+    echo "ERROR: cache:flush failed; the post-deploy step itself did not run."
+    exit 1
+fi
+
+# The real question: after the documented deploy, does a shopper's quiz order reach Bluebarry?
+echo "==> A quiz checkout right after the deploy"
+# No retries: a second order succeeding must not hide a lost first one.
+if ! "$BIN/test-e2e" -g "simple product: checkout after quiz" --retries=0 >/tmp/bb-deploy-race-e2e.log 2>&1; then
+    grep -E "✘|Error" /tmp/bb-deploy-race-e2e.log | head -5
+    echo "FAIL: a quiz order placed right after the deploy did not reach Bluebarry"
+    exit 1
+fi
+echo "PASS: a quiz order placed right after the deploy reaches Bluebarry"
