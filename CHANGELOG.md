@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- Installation notes for zero-downtime deployments: flush the cache once the previous release's cron jobs and queue consumers have stopped, or orders from a first install aren't tracked until the next cache rebuild.
 
 ## [1.0.3] - 2026-09-24
 ### Fixed

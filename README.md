@@ -36,6 +36,19 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
    php bin/magento cron:install
    ```
 
+### Zero-downtime deployments
+If you deploy with release directories and a symlink switch (Deployer, Hypernode Deploy, Adobe Commerce
+Cloud, or similar), the previous release's cron jobs and queue consumers keep running for a while after
+the switch. They share the Magento cache with the new release and fill it with configuration built from
+the previous release's code. On a first install, that configuration doesn't know about this module, so
+orders aren't tracked until the cache is rebuilt.
+
+Once the previous release's cron jobs and queue consumers have stopped, run:
+```bash
+php bin/magento cache:flush
+```
+Use `cache:flush`, not `cache:clean`: the previous release's entries aren't reliably removed by a tag-based clean. Most deploy tools can run this as their final step, after PHP-FPM and the queue consumers have restarted.
+
 ## Configuration
 1. Go to **Stores > Configuration > Bluebarry > General** in the Magento Admin.
 2. Enter your **Tenant ID** (find it in your Bluebarry account integrations page).
