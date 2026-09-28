@@ -4,3 +4,5 @@
 /.github export-ignore
 /.gitattributes export-ignore
 /CLAUDE.md export-ignore
+/scripts/package.sh export-ignore
+/scripts/prepare_release.py export-ignore

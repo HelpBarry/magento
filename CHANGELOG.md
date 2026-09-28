@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
 ## [1.0.3] - 2026-09-24
 ### Fixed
 - Changed the AMQP conversion queue binding to a wildcard topic so first-install deployments do not fail during `setup:upgrade` when a live release refreshes the communication configuration.
