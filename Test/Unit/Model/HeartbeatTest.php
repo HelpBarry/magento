@@ -26,6 +26,8 @@ class HeartbeatTest extends TestCase
     private array $flag = [];
     /** @var callable|null */
     private $onSave;
+    /** @var callable|null */
+    private $onPost;
 
     public function testPingsEachConnectedWebsiteWithItsKey(): void
     {
@@ -177,6 +179,43 @@ class HeartbeatTest extends TestCase
         $this->assertSame(['siteUrl' => 'https://shop2.example'], $this->calls[1][1]);
     }
 
+    public function testUninstallTakesBackWhatWasRegistered_NotWhatTheSettingsSayNow(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        $this->calls = [];
+
+        // The settings no longer name the website's company (or name a key bluebarry refused).
+        $this->heartbeat([200], connected: [1 => false])->deactivateAll();
+
+        $this->assertSame([['/data/magento/deactivate', ['siteUrl' => 'https://shop1.example'], self::TENANT, 'key-1']], $this->calls);
+    }
+
+    public function testAnUnreadableKeyWaitingToBeTakenBackDoesNotStopTheHeartbeat(): void
+    {
+        $this->flag = ['retire' => [['tenant' => self::TENANT, 'site' => 'https://old.example', 'key' => 'corrupt']]];
+
+        $this->heartbeat([200])->sendDue();
+
+        $this->assertSame(['/data/magento/ping'], array_column($this->calls, 0));
+        $this->assertSame([], $this->flag['retire']);
+    }
+
+    public function testATakeBackQueuedByAnotherRunMeanwhileIsKept(): void
+    {
+        $old = ['tenant' => self::TENANT, 'site' => 'https://old.example', 'key' => 'enc:key-old'];
+        $other = ['tenant' => self::TENANT, 'site' => 'https://other.example', 'key' => 'enc:key-other'];
+        $this->flag = ['retire' => [$old]];
+        // While this run tells bluebarry about the old one, an admin save queues another.
+        $this->onPost = function () use ($other) {
+            $this->flag['retire'][] = $other;
+            $this->onPost = null;
+        };
+
+        $this->heartbeat([200, 200], connected: [])->sendDue();
+
+        $this->assertSame([$other], $this->flag['retire']);
+    }
+
     private function website(int $id): Website
     {
         $store = $this->createStub(Store::class);
@@ -209,6 +248,9 @@ class HeartbeatTest extends TestCase
         $client = $this->createStub(Client::class);
         $client->method('post')->willReturnCallback(function ($path, $body, $tenant, $key) use (&$statuses) {
             $this->calls[] = [$path, $body, $tenant, $key];
+            if ($this->onPost) {
+                ($this->onPost)();
+            }
             return new Response((int) array_shift($statuses), (string) json_encode(['success' => true, 'tenantId' => self::TENANT]));
         });
 
@@ -235,7 +277,12 @@ class HeartbeatTest extends TestCase
 
         $encryptor = $this->createStub(EncryptorInterface::class);
         $encryptor->method('encrypt')->willReturnCallback(fn ($value) => "enc:$value");
-        $encryptor->method('decrypt')->willReturnCallback(fn ($value) => substr((string) $value, 4));
+        $encryptor->method('decrypt')->willReturnCallback(function ($value) {
+            if ($value === 'corrupt') {
+                throw new \Exception('Unable to decrypt the key.');
+            }
+            return substr((string) $value, 4);
+        });
 
         $url = $this->createStub(Url::class);
         $url->method('setScope')->willReturnCallback(function ($storeId) use ($url) {
