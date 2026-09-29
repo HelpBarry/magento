@@ -36,6 +36,11 @@ class ProductBuilderTest extends TestCase
         $this->assertSame(['instock', 0.5], ProductBuilder::stockOf($this->row(['qty' => '0.5000']), true, false, true));
     }
 
+    public function testABundleTheStockIndexCallsOutOfStockIsOutOfStock_WhateverItsOwnSettings(): void
+    {
+        $this->assertSame(['outofstock', null], ProductBuilder::stockOf($this->row(['is_in_stock' => '0', 'use_config_manage_stock' => '0', 'manage_stock' => '0']), true, false, false));
+    }
+
     public function testNothingLeftIsOutOfStock(): void
     {
         $this->assertSame(['outofstock', 0], ProductBuilder::stockOf($this->row(['qty' => '0']), true, false, true));

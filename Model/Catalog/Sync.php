@@ -231,6 +231,7 @@ class Sync
         $start = time();
         $after = 0;
         $sent = 0;
+        $failedThisRun = [];
         while ($active && ($seconds === 0 || time() - $start < $seconds)) {
             $claim = bin2hex(random_bytes(8));
             $queued = $this->queue->claimNext(self::BATCH, $after, $claim);
@@ -238,6 +239,10 @@ class Sync
                 break;
             }
             $after = (int) max(array_keys($queued));
+            // A product that failed earlier in this run waits for the next: one attempt per run.
+            $again = array_keys(array_intersect_key($queued, $failedThisRun));
+            $this->queue->release($again, $claim);
+            $queued = array_diff_key($queued, $failedThisRun);
             $waiting = $this->builder->awaitingIndexes($queued);
             $this->queue->release($waiting, $claim);
             $ids = array_values(array_diff(array_keys($queued), $waiting));
@@ -283,6 +288,7 @@ class Sync
             }
 
             $failed = array_values(array_unique($failed));
+            $failedThisRun += array_flip($failed);
             // A configurable product's child that could not be read has no queue row of its own.
             $this->queue->ensureQueued(array_diff($failed, $ids));
             $dropped = $this->queue->fail($failed);

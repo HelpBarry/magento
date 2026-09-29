@@ -329,6 +329,11 @@ class ProductBuilder
         if ($row === null) {
             return ['instock', null];
         }
+        // A bundle's or configurable product's status is its parts' (the stock index), whatever its
+        // own stock settings say.
+        if (!$counted && !(int) $row['is_in_stock']) {
+            return ['outofstock', null];
+        }
         $managed = (int) $row['use_config_manage_stock'] ? $manageByDefault : (bool) (int) $row['manage_stock'];
         if (!$managed) {
             return ['instock', null];
