@@ -79,6 +79,25 @@ class ProductSyncQueue
     }
 
     /**
+     * A configurable product's children.
+     *
+     * @param int $parentId
+     * @return int[]
+     */
+    public function configurableChildren(int $parentId): array
+    {
+        $links = $this->resource->getTableName('catalog_product_super_link');
+        if (!$this->connection()->isTableExists($links)) {
+            return [];
+        }
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        return array_map('intval', $this->connection()->fetchCol($this->connection()->select()->distinct()
+            ->from(['link' => $links], ['product_id'])
+            ->join(['parent' => $this->resource->getTableName('catalog_product_entity')], "parent.$linkField = link.parent_id", [])
+            ->where('parent.entity_id = ?', $parentId)));
+    }
+
+    /**
      * Queues the bundles that have one of these products as a selection, in one statement.
      *
      * @param int[] $productIds

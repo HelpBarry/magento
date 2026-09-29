@@ -30,6 +30,7 @@ class SyncTest extends TestCase
     /** @var array<int, int[]> queued configurable product => the children build() adds */
     private array $expanded = [];
     private bool $locked = false;
+    private string $now = '2026-09-29 14:00:00 UTC';
     /** @var callable|null */
     private $onPost;
 
@@ -177,6 +178,29 @@ class SyncTest extends TestCase
 
         $this->assertSame(['key-3'], array_column($this->calls, 'key'));
         $this->assertTrue($this->flag['targets']['a']['stale']);
+    }
+
+    public function testEveryNightBetweenOneAndFive_WhenTheLastFullSyncWasTheDayBefore(): void
+    {
+        $this->now = '2026-09-29 02:00:00 UTC';
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => strtotime('2026-09-28 14:00:00 UTC')]; // connected yesterday afternoon
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+
+        $this->now = '2026-09-29 03:00:00 UTC'; // later that night: done already
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testADisconnectedCompanysFailureIsForgotten(): void
+    {
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'targets' => ['b' => ['retry_at' => time() + 60, 'error' => 'x']]];
+
+        $sync = $this->sync([], tenants: [1 => 'a']);
+        $sync->run();
+
+        $this->assertArrayNotHasKey('targets', $this->flag);
+        $this->assertNull($sync->status()['error']);
     }
 
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
@@ -345,7 +369,9 @@ class SyncTest extends TestCase
         $locks = $this->createStub(LockManagerInterface::class);
         $locks->method('lock')->willReturnCallback(fn () => !$this->locked);
         $timezone = $this->createStub(TimezoneInterface::class);
-        $timezone->method('date')->willReturn(new \DateTime('2026-09-29 14:00:00'));
+        // The store's time: now, or the time given.
+        $timezone->method('date')->willReturnCallback(fn ($date = null) => $date instanceof \DateTimeInterface
+            ? \DateTime::createFromInterface($date) : new \DateTime($this->now));
 
         return new Sync($config, $client, $storeManager, $queue, $builder, $flags, $locks, $timezone, new NullLogger());
     }
