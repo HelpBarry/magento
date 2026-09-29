@@ -234,6 +234,22 @@ test.describe('catalog sync', () => {
     }
   });
 
+  test('the variants of a configurable product marked out of stock are out of stock', async ({ request }) => {
+    const stock = (inStock: boolean) => rest(request, 'put', '/rest/all/V1/products/bb-configurable', {
+      product: { sku: 'bb-configurable', extension_attributes: { stock_item: { is_in_stock: inStock } } },
+    });
+    await stock(false);
+    try {
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+      syncCatalog();
+      const [red] = await sent(productId('bb-configurable-red'));
+      expect(property(red, 'stock_status')).toBe('outofstock');
+    } finally {
+      await stock(true);
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+    }
+  });
+
   test("a configurable product's order queues the variant sold, not every variant", async ({ page }) => {
     syncCatalog();
     sql('DELETE FROM bluebarry_product_sync');

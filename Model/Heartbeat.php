@@ -276,10 +276,25 @@ class Heartbeat
      */
     private function retirePending(): void
     {
-        $pending = $this->state()['retire'] ?? [];
-        if (!$pending) {
+        if (!($this->state()['retire'] ?? [])) {
             return;
         }
+        // Under the heartbeat lock, like a heartbeat: a settings save registering the same website
+        // again cannot slip in between reading this list and bluebarry switching the website off.
+        if (!$this->holding) {
+            if (!$this->locks->lock(self::FLAG, 30)) {
+                return; // the next run
+            }
+            $this->holding = true;
+            try {
+                $this->retirePending();
+            } finally {
+                $this->holding = false;
+                $this->locks->unlock(self::FLAG);
+            }
+            return;
+        }
+        $pending = $this->state()['retire'] ?? [];
         $finished = [];
         foreach ($pending as $registration) {
             try {
