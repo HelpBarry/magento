@@ -59,7 +59,8 @@ test.describe('orders', () => {
     magento('cache:flush');
   });
 
-  let orderId = '';
+  let orderId = ''; // the entity id, for Magento's REST API
+  let orderNumber = ''; // what bluebarry keys the order by
 
   test('a checkout that gives an email starts the abandoned checkout flow, and ends it as an order', async ({ page }) => {
     await stubAdvisor(page, null, { visitor: false });
@@ -83,6 +84,7 @@ test.describe('orders', () => {
     await mockApi.reset();
     const incrementId = await checkoutAsGuest(page, 'checkout@example.com');
     orderId = orderEntityId(incrementId);
+    orderNumber = incrementId;
     syncOrders();
     const [completed] = await sent('/data/magento/checkout-started');
     expect(completed.body).toMatchObject({ token: started.body.token, completed: true });
@@ -94,7 +96,7 @@ test.describe('orders', () => {
     syncOrders();
     const [paid] = await sentOrders();
     expect(paid).toMatchObject({
-      id: orderId, live: true, financialStatus: 'PAID', email: 'checkout@example.com', checkoutToken: started.body.token,
+      id: orderNumber, live: true, financialStatus: 'PAID', email: 'checkout@example.com', checkoutToken: started.body.token,
       lines: [{ reference: productId('bb-configurable-red'), quantity: 1 }],
     });
     const [request] = await sent('/data/magento/orders/sync');
@@ -111,7 +113,7 @@ test.describe('orders', () => {
     expect(refund.status(), await refund.text()).toBe(200);
     syncOrders();
     const [refunded] = await sentOrders();
-    expect(refunded).toMatchObject({ id: orderId, live: false });
+    expect(refunded).toMatchObject({ id: orderNumber, live: false });
     expect(['REFUNDED', 'PARTIALLY_REFUNDED']).toContain(refunded.financialStatus);
   });
 
@@ -122,7 +124,7 @@ test.describe('orders', () => {
     const orders = await sentOrders();
     expect(orders.length).toBeGreaterThan(0);
     expect(orders.every((o: any) => o.live === false)).toBe(true);
-    expect(orders.map((o: any) => o.id)).toContain(orderId);
+    expect(orders.map((o: any) => o.id)).toContain(orderNumber);
     const progress = (await sent('/data/magento/orders/sync')).map((r) => r.body.import).filter(Boolean);
     expect(progress.at(-1)).toBe('Completed');
     // Imported orders are known now: a later change is not a new purchase.

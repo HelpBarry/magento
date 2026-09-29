@@ -9,6 +9,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 - Keeps bluebarry's copy of your catalog current without a product feed: products, variants, attributes, categories, prices, sale prices, images and stock
 - Adds to the cart from a quiz result, the search widget and recommendation blocks, and updates the mini-cart (Luma and Hyvä)
 - Turns on bluebarry search and its results page from bluebarry (Search > Launch), without settings in Magento
+- Sends your orders (as they are paid, refunded or cancelled, and the last 12 months on request) and checkouts that gave an email, for best sellers, loyalty points, purchase segments and the order placed and abandoned checkout emails
 - Tells bluebarry what shoppers look at (page views, product views, adds to the cart), with the shopper's consent under Magento's cookie restriction mode, for recently viewed, personalized order, behaviour segments, popup rules and product chat
 
 ## Installation
