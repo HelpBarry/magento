@@ -27,7 +27,7 @@ class CheckoutNotes
     }
 
     /**
-     * Notes the email of a checkout; a changed email, name or cart waits to go again.
+     * Notes the email of a checkout; a changed email, name, cart or store view waits to go again.
      *
      * @param int $quoteId
      * @param int $storeId
@@ -39,7 +39,8 @@ class CheckoutNotes
     public function note(int $quoteId, int $storeId, string $email, ?string $firstName, array $lines = []): void
     {
         $connection = $this->connection();
-        $changed = 'email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)) OR NOT (cart <=> VALUES(cart))';
+        $changed = 'email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)) OR NOT (cart <=> VALUES(cart))'
+            . ' OR store_id <> VALUES(store_id)';
         $connection->query(sprintf(
             'INSERT INTO %s (quote_id, store_id, email, first_name, cart, noted_at) VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP())'
             // In this order: MySQL evaluates each assignment with the ones before it applied.
