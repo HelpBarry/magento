@@ -43,7 +43,8 @@ class OrderSyncQueue
         $connection->query(sprintf(
             'INSERT INTO %s (order_id, queued_at, live) VALUES (?, UTC_TIMESTAMP(), ?)'
             . ' ON DUPLICATE KEY UPDATE queued_at = UTC_TIMESTAMP(), claim = NULL, attempts = 0,'
-            . ' live = IF(?, 0, GREATEST(live, VALUES(live)))',
+            // Sent (or imported) once, it is never a new purchase again, whatever the caller read before.
+            . ' live = IF(? OR synced_at IS NOT NULL, 0, GREATEST(live, VALUES(live)))',
             $connection->quoteIdentifier($this->table())
         ), [$orderId, $live ? 1 : 0, $notLive ? 1 : 0]);
     }

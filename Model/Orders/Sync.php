@@ -102,6 +102,11 @@ class Sync
     private $logger;
 
     /**
+     * @var array<int, true> websites whose API key could not be read in this run: waiting, not disconnected
+     */
+    private $unreadable = [];
+
+    /**
      * @param Config $config
      * @param Client $client
      * @param StoreManagerInterface $storeManager
@@ -167,17 +172,16 @@ class Sync
             return $done;
         }
         try {
+            // Without any connected website there is still what was queued before the disconnect: it is
+            // not for bluebarry any more (as when another website stays connected), so it is cleared.
             $targets = $this->targets();
-            if (!$targets) {
-                return $done;
-            }
             $start = time();
             $inTime = function () use ($start, $seconds) {
                 return $seconds === 0 || time() - $start < $seconds;
             };
             // bluebarry's tasks (an import it asked for), every 10 minutes, for a store its command
             // could not reach: here, in the orders' own cron group.
-            if (time() - (int) $this->flags->getFlagData(self::TASKS_FLAG) >= self::TASKS_EVERY) {
+            if ($targets && time() - (int) $this->flags->getFlagData(self::TASKS_FLAG) >= self::TASKS_EVERY) {
                 $this->flags->saveFlag(self::TASKS_FLAG, time());
                 $this->pollTasks($inTime);
             }
@@ -339,11 +343,16 @@ class Sync
         }
         if (!empty($state['done'])) {
             // Stopped, with the Failed report still to reach bluebarry (its Orders page shows Running until then).
-            if (!empty($state['report']) && $this->client->post('/data/magento/orders/sync', [
-                'storeKey' => $target['storeKey'], 'orders' => [], 'import' => $state['report'], 'importedCount' => (int) $state['count'],
-            ], $target['tenantId'], $target['apiKey'], 30)->isSuccess()) {
-                unset($state['report']);
-                $this->saveImport($websiteId, $state);
+            if (!empty($state['report'])) {
+                $response = $this->client->post('/data/magento/orders/sync', [
+                    'storeKey' => $target['storeKey'], 'orders' => [], 'import' => $state['report'], 'importedCount' => (int) $state['count'],
+                ], $target['tenantId'], $target['apiKey'], 30);
+                if ($response->isSuccess()) {
+                    unset($state['report']);
+                    $this->saveImport($websiteId, $state);
+                } elseif ($this->isOutage($response)) {
+                    $this->noteOutage($websiteId, $response); // tried again after the website's backoff
+                }
             }
             return false;
         }
@@ -588,6 +597,7 @@ class Sync
      */
     private function targets(): array
     {
+        $this->unreadable = [];
         $targets = [];
         foreach ($this->storeManager->getWebsites() as $website) {
             $tenantId = $this->config->getWebsiteTenantId($website->getId());
@@ -597,6 +607,7 @@ class Sync
                 // An undecryptable key (a database restored under another crypt key): this website's
                 // orders wait until its key is saved again, the others still go.
                 $this->logger->warning('bluebarry: skipping the orders of a website whose API key cannot be read: ' . $e->getMessage(), ['website' => $website->getId()]);
+                $this->unreadable[(int) $website->getId()] = true; // its orders wait, they are not dropped
                 continue;
             }
             if ($tenantId === null || $apiKey === null) {
@@ -682,7 +693,7 @@ class Sync
      */
     private function waitingWebsites(): array
     {
-        $waiting = [];
+        $waiting = $this->unreadable;
         foreach ($this->state() as $websiteId => $row) {
             if ((int) ($row['retry_at'] ?? 0) > time()) {
                 $waiting[(int) $websiteId] = true;
