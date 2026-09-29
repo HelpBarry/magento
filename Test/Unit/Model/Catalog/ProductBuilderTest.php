@@ -24,6 +24,13 @@ class ProductBuilderTest extends TestCase
         $this->assertSame(['instock', 12], ProductBuilder::stockOf($this->row(), true, false, true));
     }
 
+    public function testTheOutOfStockThresholdIsNotForSale(): void
+    {
+        // Store-wide threshold 5, then a product's own 11 (the product has 12).
+        $this->assertSame(['instock', 7], ProductBuilder::stockOf($this->row(), true, false, true, 5.0));
+        $this->assertSame(['outofstock', 0], ProductBuilder::stockOf($this->row(['use_config_min_qty' => '0', 'min_qty' => '12']), true, false, true, 5.0));
+    }
+
     public function testNothingLeftIsOutOfStock(): void
     {
         $this->assertSame(['outofstock', 0], ProductBuilder::stockOf($this->row(['qty' => '0']), true, false, true));

@@ -26,6 +26,9 @@ class Sync
     public const FLAG = 'bluebarry_catalog';
 
     private const BATCH = 100;
+
+    /** DataApi's limit per request (MagentoProductSyncRequest.MaxProducts). */
+    private const MAX_PER_REQUEST = 500;
     private const LOCK = 'bluebarry_catalog_sync';
 
     /** After a failed request, the queue waits this long. */
@@ -141,7 +144,7 @@ class Sync
 
     /**
      * Sends queued changes until the queue is empty or the time is up. Queues the whole catalog first
-     * when a new company was connected, or at night once a day.
+     * when a company was (re)connected, or at night once a day.
      *
      * @param int $seconds 0 for no limit
      * @return array{sent: int, queued: int}
@@ -154,13 +157,13 @@ class Sync
         try {
             $targets = $this->targets();
             if (!$targets) {
+                // Nothing was queued while disconnected: reconnecting sends the whole catalog again.
+                if (isset($this->state()['tenants'])) {
+                    $this->saveState(['tenants' => null]);
+                }
                 return ['sent' => 0, 'queued' => $this->queue->count()];
             }
             $this->queueCatalogIfDue($targets);
-            $state = $this->state();
-            if (($state['retry_at'] ?? 0) > time()) {
-                return ['sent' => 0, 'queued' => $this->queue->count()];
-            }
             $sent = $this->drain($targets, $seconds);
             return ['sent' => $sent, 'queued' => $this->queue->count()];
         } finally {
@@ -179,7 +182,7 @@ class Sync
         $tenants = array_map(function ($target) {
             return strtolower($target['tenantId']);
         }, $this->targets());
-        $this->saveState(['tenants' => $tenants, 'full_at' => time(), 'retry_at' => null]);
+        $this->saveState(['tenants' => $tenants, 'full_at' => time(), 'targets' => null]);
     }
 
     /**
@@ -190,76 +193,175 @@ class Sync
     public function status(): array
     {
         $state = $this->state();
+        $error = null;
+        foreach ($state['targets'] ?? [] as $target) {
+            $error = $error ?? ($target['error'] ?? null);
+        }
         return [
             'queued' => $this->queue->count(),
             'sent_at' => $state['sent_at'] ?? null,
             'full_at' => $state['full_at'] ?? null,
-            'error' => $state['error'] ?? null,
+            'error' => $error,
         ];
     }
 
     /**
+     * Sends batches to every company whose connection works. One that fails waits five minutes
+     * without holding up the others; if they received changes it missed, it gets the whole catalog
+     * again once it works.
+     *
      * @param array $targets
      * @param int $seconds
      * @return int products sent
      */
     private function drain(array $targets, int $seconds): int
     {
+        $active = [];
+        foreach ($targets as $target) {
+            if (($this->state()['targets'][strtolower($target['tenantId'])]['retry_at'] ?? 0) <= time()) {
+                $active[strtolower($target['tenantId'])] = $target;
+            }
+        }
         $start = time();
         $after = 0;
         $sent = 0;
-        while ($seconds === 0 || time() - $start < $seconds) {
-            $queued = $this->queue->next(self::BATCH, $after);
+        while ($active && ($seconds === 0 || time() - $start < $seconds)) {
+            $claim = bin2hex(random_bytes(8));
+            $queued = $this->queue->claimNext(self::BATCH, $after, $claim);
             if (!$queued) {
                 break;
             }
             $after = (int) max(array_keys($queued));
-            $ids = array_values(array_diff(array_keys($queued), $this->builder->awaitingPriceIndex($queued)));
+            $waiting = $this->builder->awaitingPriceIndex($queued);
+            $this->queue->release($waiting, $claim);
+            $ids = array_values(array_diff(array_keys($queued), $waiting));
             if (!$ids) {
                 continue;
             }
 
-            $claim = bin2hex(random_bytes(8));
-            $this->queue->claim($ids, $claim);
             $failed = [];
-            foreach ($targets as $target) {
+            $delivered = [];
+            $refused = [];
+            foreach ($active as $key => $target) {
                 $batch = $this->builder->build($ids, $target['store']);
                 $failed = array_merge($failed, $batch['failed']);
-                if (!$batch['products'] && !$batch['reconcileGroupIds']) {
-                    continue;
+                $error = $this->deliver($target, $batch);
+                if ($error === null) {
+                    $delivered[] = $key;
+                } else {
+                    $refused[$key] = $error;
                 }
-                $response = $this->client->post('/data/magento/products/sync', [
-                    // bluebarry refuses a key from another company, so the catalog never lands there.
-                    'tenantId' => $target['tenantId'],
-                    'products' => $batch['products'],
-                    'reconcileGroupIds' => $batch['reconcileGroupIds'],
-                ], $target['tenantId'], $target['apiKey'], 60);
-                if (!$response->isSuccess()) {
-                    if ($response->getStatus() === 409) {
-                        $error = 'The API key belongs to another bluebarry company than the Tenant ID.';
-                    } elseif (in_array($response->getStatus(), [401, 403], true)) {
-                        $error = 'bluebarry refused the API key.';
-                    } else {
-                        $error = $response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.';
-                    }
-                    $this->logger->warning('bluebarry: catalog sync failed, retrying in 5 minutes: ' . $error);
-                    $this->saveState(['retry_at' => time() + self::RETRY_AFTER, 'error' => $error]);
-                    return $sent;
+            }
+            if (!$delivered) {
+                // Nobody received this batch: it stays queued for the next attempt.
+                foreach ($refused as $key => $error) {
+                    $this->updateTarget($key, ['retry_at' => time() + self::RETRY_AFTER, 'error' => $error]);
                 }
+                return $sent;
+            }
+            foreach ($refused as $key => $error) {
+                // The others received changes this company missed.
+                $this->updateTarget($key, ['retry_at' => time() + self::RETRY_AFTER, 'error' => $error, 'stale' => true]);
+                unset($active[$key]);
+            }
+            foreach ($delivered as $key) {
+                if (!empty($this->state()['targets'][$key]['stale'])) {
+                    $this->queue->enqueueAll();
+                }
+                $this->updateTarget($key, null);
             }
 
             $failed = array_values(array_unique($failed));
+            // A configurable product's child that could not be read has no queue row of its own.
+            $this->queue->ensureQueued(array_diff($failed, $ids));
             $dropped = $this->queue->fail($failed);
             if ($dropped) {
                 $this->logger->error('bluebarry: gave up syncing products that could not be read', ['product_ids' => $dropped]);
             }
             $this->queue->remove(array_values(array_diff($ids, $failed)), $claim);
-            $sent += count($ids) - count($failed);
+            $sent += count(array_diff($ids, $failed));
         }
         if ($sent > 0) {
-            $this->saveState(['sent_at' => time(), 'error' => null, 'retry_at' => null]);
+            $this->saveState(['sent_at' => time()]);
         }
         return $sent;
+    }
+
+    /**
+     * Sends one batch to one company, in requests the API takes (at most 500 products), keeping a
+     * configurable product's children together with the switch-off of the ones it lost.
+     *
+     * @param array $target
+     * @param array $batch from ProductBuilder::build()
+     * @return string|null the error, or null when it all arrived
+     */
+    private function deliver(array $target, array $batch): ?string
+    {
+        foreach (self::requests($batch['products'], $batch['reconcileGroupIds']) as $request) {
+            $response = $this->client->post('/data/magento/products/sync', [
+                // bluebarry refuses a key from another company, so the catalog never lands there.
+                'tenantId' => $target['tenantId'],
+                'products' => $request['products'],
+                'reconcileGroupIds' => $request['reconcileGroupIds'],
+            ], $target['tenantId'], $target['apiKey'], 60);
+            if ($response->isSuccess()) {
+                continue;
+            }
+            if ($response->getStatus() === 409) {
+                $error = 'The API key belongs to another bluebarry company than the Tenant ID.';
+            } elseif (in_array($response->getStatus(), [401, 403], true)) {
+                $error = 'bluebarry refused the API key.';
+            } else {
+                $error = $response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.';
+            }
+            $this->logger->warning('bluebarry: catalog sync failed, retrying in 5 minutes: ' . $error, ['tenant' => $target['tenantId']]);
+            return $error;
+        }
+        return null;
+    }
+
+    /**
+     * Splits a batch into requests of at most MAX_PER_REQUEST products. A group (a configurable
+     * product's children) goes in one request with its switch-off; a group too big for one request is
+     * split and not switched off, since no single request holds all of its children.
+     *
+     * @param array[] $products
+     * @param string[] $reconcileGroupIds
+     * @return array<int, array{products: array[], reconcileGroupIds: string[]}>
+     */
+    public static function requests(array $products, array $reconcileGroupIds): array
+    {
+        $groups = [];
+        foreach ($products as $product) {
+            $groups[(string) ($product['groupId'] ?? '')][] = $product;
+        }
+        $reconcile = array_flip($reconcileGroupIds);
+        $requests = [];
+        $current = ['products' => [], 'reconcileGroupIds' => []];
+        foreach ($groups as $groupId => $members) {
+            if (count($members) > self::MAX_PER_REQUEST) {
+                unset($reconcile[$groupId]);
+                foreach (array_chunk($members, self::MAX_PER_REQUEST) as $part) {
+                    $requests[] = ['products' => $part, 'reconcileGroupIds' => []];
+                }
+                continue;
+            }
+            if (count($current['products']) + count($members) > self::MAX_PER_REQUEST) {
+                $requests[] = $current;
+                $current = ['products' => [], 'reconcileGroupIds' => []];
+            }
+            $current['products'] = array_merge($current['products'], $members);
+            if ($groupId !== '' && isset($reconcile[$groupId])) {
+                $current['reconcileGroupIds'][] = (string) $groupId;
+                unset($reconcile[$groupId]);
+            }
+        }
+        // Groups without a product left in the batch (a deleted configurable product) ride along.
+        $current['reconcileGroupIds'] = array_merge($current['reconcileGroupIds'], array_map('strval', array_keys($reconcile)));
+        if ($current['products'] || $current['reconcileGroupIds']) {
+            $requests[] = $current;
+        }
+        return $requests;
     }
 
     /**
@@ -279,7 +381,26 @@ class Sync
             return;
         }
         $this->queue->enqueueAll();
-        $this->saveState(['tenants' => $tenants, 'full_at' => time()] + ($newCompany ? ['retry_at' => null] : []));
+        $this->saveState(['tenants' => $tenants, 'full_at' => time()]);
+    }
+
+    /**
+     * @param string $tenant
+     * @param array|null $changes null forgets the company's failure
+     * @return void
+     */
+    private function updateTarget(string $tenant, ?array $changes): void
+    {
+        $state = $this->state();
+        if ($changes === null) {
+            if (!isset($state['targets'][$tenant])) {
+                return;
+            }
+            unset($state['targets'][$tenant]);
+        } else {
+            $state['targets'][$tenant] = $changes + ($state['targets'][$tenant] ?? []);
+        }
+        $this->flags->saveFlag(self::FLAG, $state);
     }
 
     /**
