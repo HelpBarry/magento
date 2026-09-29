@@ -101,6 +101,32 @@ test.describe('page tracking', () => {
 
     // Luma relays customer data's cart update, Hyvä its private-content-loaded (after its reload).
     await expect.poll(() => page.evaluate(() => ((window as any).__cartEvents ?? []).some((d: any) => Number(d?.cart?.summary_count) > 0))).toBe(true);
+
+    // The next page, the cart unchanged: its cart is relayed too, for popup cart rules.
+    await page.goto('/');
+    await expect.poll(() => page.evaluate(() => ((window as any).__cartEvents ?? []).some((d: any) => Number(d?.cart?.summary_count) > 0))).toBe(true);
+  });
+
+  test('advanced search results are a search page', async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await page.goto('/catalogsearch/advanced/result/?name=bluebarry');
+    expect(await pageContext(page)).toMatchObject({ type: 'search' });
+  });
+
+  test('a variant with a page of its own is still its configurable product in product chat', async ({ page, request }) => {
+    const setVisibility = (visibility: number) => rest(request, 'post', '/rest/all/V1/products', {
+      product: { sku: 'bb-configurable-red', visibility, custom_attributes: [{ attribute_code: 'url_key', value: 'bb-configurable-red' }] },
+    });
+    await setVisibility(4);
+    try {
+      await stubAdvisor(page, null, { visitor: false });
+      await page.goto('/bb-configurable-red.html');
+      expect(await page.evaluate(() => (window as any).barry.chat)).toMatchObject({
+        groupReference: productId('bb-configurable'), variantReference: productId('bb-configurable-red'),
+      });
+    } finally {
+      await setVisibility(1);
+    }
   });
 
   test('a shopper bluebarry never saw is not noted', async ({ page }) => {
@@ -113,6 +139,8 @@ test.describe('page tracking', () => {
     magento('config:set', 'web/cookie/cookie_restriction', '1');
     magento('cache:flush');
     await stubAdvisor(page, newAdvisorIds());
+    // A consent tool that allows everything does not override Magento's missing consent.
+    await page.addInitScript(() => { (window as any).barry = { ...(window as any).barry, analyticsAllowed: () => true }; });
     await page.goto('/bb-simple.html');
     expect(await page.evaluate(() => (window as any).barry.analyticsAllowed())).toBe(false);
     await addToCart(page, 'bb-simple');

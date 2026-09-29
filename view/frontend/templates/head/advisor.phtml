@@ -24,10 +24,18 @@ if ($tenantId != null && $tenantId != "") {
 <?php $consentWebsite = $block->getCookieConsentWebsite(); ?>
 <?php if ($consentWebsite !== null): ?>
     // Magento's cookie restriction mode: nothing is tracked until the shopper allowed cookies.
-    window.barry.analyticsAllowed = window.barry.analyticsAllowed || function () {
-        var match = document.cookie.match(/(?:^|; )user_allowed_save_cookie=([^;]*)/);
-        try { return !!match && JSON.parse(decodeURIComponent(match[1]))[<?= (int) $consentWebsite ?>] == 1; } catch (e) { return false; }
-    };
+    // Along with any consent check the theme or a consent tool set: both must allow it.
+    (function (existing) {
+        window.barry.analyticsAllowed = function () {
+            var match = document.cookie.match(/(?:^|; )user_allowed_save_cookie=([^;]*)/);
+            try {
+                if (!match || JSON.parse(decodeURIComponent(match[1]))[<?= (int) $consentWebsite ?>] != 1) return false;
+            } catch (e) {
+                return false;
+            }
+            return typeof existing !== 'function' || existing() !== false;
+        };
+    })(window.barry.analyticsAllowed);
 <?php endif; ?>
     // The cart changed (Luma's customer data, Hyvä's private content): the SDK reports the adds noted
     // since and updates popup cart rules.
@@ -40,7 +48,9 @@ if ($tenantId != null && $tenantId != "") {
         document.addEventListener('DOMContentLoaded', function () {
             if (typeof window.require !== 'function') return;
             window.require(['Magento_Customer/js/customer-data'], function (customerData) {
-                customerData.get('cart').subscribe(cartChanged);
+                var cart = customerData.get('cart');
+                cart.subscribe(cartChanged);
+                cartChanged(cart()); // the cart the shopper arrived with
             });
         });
     })();
