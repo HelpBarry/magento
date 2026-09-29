@@ -32,6 +32,8 @@ class Sync
 {
     public const IMPORT_FLAG = 'bluebarry_order_import';
     public const STATE_FLAG = 'bluebarry_order_sync';
+    private const TASKS_FLAG = 'bluebarry_order_tasks';
+    private const TASKS_EVERY = 600;
 
     private const BATCH = 50;
     private const LOCK = 'bluebarry_order_sync';
@@ -173,9 +175,16 @@ class Sync
             $inTime = function () use ($start, $seconds) {
                 return $seconds === 0 || time() - $start < $seconds;
             };
-            $done['orders'] = $this->drain($targets, $inTime);
-            // Before the history: a checkout reminder is timely, an import can take many runs.
+            // bluebarry's tasks (an import it asked for), every 10 minutes, for a store its command
+            // could not reach: here, in the orders' own cron group.
+            if (time() - (int) $this->flags->getFlagData(self::TASKS_FLAG) >= self::TASKS_EVERY) {
+                $this->flags->saveFlag(self::TASKS_FLAG, time());
+                $this->pollTasks($inTime);
+            }
+            // Checkouts first: a completion must reach bluebarry before a reminder does, whatever
+            // the order backlog. Then orders, then the history, which can take many runs.
             $done['checkouts'] = $this->sendCheckouts($targets, $inTime);
+            $done['orders'] = $this->drain($targets, $inTime);
             // One batch per website in turn, so a big history does not hold up the others'.
             $importing = $targets;
             while ($importing && $inTime()) {
@@ -212,14 +221,18 @@ class Sync
     }
 
     /**
-     * Asks bluebarry what each website should do (the 10-minute cron): today, whether to import the
-     * order history, for a store bluebarry could not reach with its command.
+     * Asks bluebarry what each website should do (every 10 minutes from run(), or the command): today,
+     * whether to import the order history, for a store bluebarry could not reach with its command.
      *
+     * @param callable|null $inTime stops between websites once the run's time is up
      * @return void
      */
-    public function pollTasks(): void
+    public function pollTasks(?callable $inTime = null): void
     {
         foreach ($this->targets() as $websiteId => $target) {
+            if ($inTime !== null && !call_user_func($inTime)) {
+                break;
+            }
             $response = $this->client->get('/data/magento/tasks?storeKey=' . rawurlencode($target['storeKey']), $target['apiKey'], 10);
             $tasks = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
             if (is_array($tasks) && !empty($tasks['importOrders'])) {
