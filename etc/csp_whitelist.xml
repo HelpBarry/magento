@@ -17,6 +17,8 @@
             <values>
                 <value id="bluebarry_data_api" type="host">data.bluebarry.ai</value>
                 <value id="bluebarry_advisor_connect" type="host">advisor.bluebarry.ai</value>
+                <value id="bluebarry_search_api" type="host">search.bluebarry.ai</value>
+                <value id="bluebarry_api" type="host">api.bluebarry.ai</value>
             </values>
         </policy>
     </policies>
