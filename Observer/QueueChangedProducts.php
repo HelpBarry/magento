@@ -11,10 +11,11 @@ use Psr\Log\LoggerInterface;
 
 /**
  * Queues the products a change touched, for the catalog sync: saves and deletes, mass actions, imports,
- * category assignments, stock updates and the products of a placed order (their stock went down).
+ * category assignments, stock updates, and the products of an order placed, cancelled or refunded
+ * (their stock changed).
  *
- * One insert on the module's own table; nothing here calls bluebarry, and nothing is queued while no
- * website is connected.
+ * One insert on the module's own table; nothing here calls bluebarry. While no website is connected
+ * only deletions are queued: a deleted product cannot be found again when the catalog is resent.
  */
 class QueueChangedProducts implements ObserverInterface
 {
@@ -59,10 +60,12 @@ class QueueChangedProducts implements ObserverInterface
     public function execute(Observer $observer)
     {
         try {
-            if (!$this->anyWebsiteConnected()) {
+            $event = $observer->getEvent();
+            $deletion = in_array($event->getName(), ['catalog_product_delete_before', 'catalog_product_import_bunch_delete_commit_before'], true);
+            if (!$deletion && !$this->anyWebsiteConnected()) {
                 return;
             }
-            $ids = $this->productIds($observer->getEvent());
+            $ids = $this->productIds($event);
             if ($ids) {
                 $this->queue->enqueue($ids);
             }
@@ -118,8 +121,15 @@ class QueueChangedProducts implements ObserverInterface
             case 'cataloginventory_stock_item_save_after':
                 return [(int) $event->getData('item')->getProductId()];
             case 'sales_model_service_quote_submit_success':
+            case 'order_cancel_after':
                 $ids = [];
                 foreach ($event->getData('order')->getAllItems() as $item) {
+                    $ids[] = (int) $item->getProductId();
+                }
+                return $ids;
+            case 'sales_order_creditmemo_save_after':
+                $ids = [];
+                foreach ($event->getData('creditmemo')->getAllItems() as $item) {
                     $ids[] = (int) $item->getProductId();
                 }
                 return $ids;

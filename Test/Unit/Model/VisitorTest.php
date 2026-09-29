@@ -54,6 +54,20 @@ class VisitorTest extends TestCase
         $this->assertSame([self::USER, self::SESSION, self::ADVISOR], [$current['user_id'], $current['session_id'], $current['advisor_id']]);
     }
 
+    public function testAnOlderQuizInTheSessionNeverTakesTheOrderFromTheVisitorCookie(): void
+    {
+        $other = '44444444-4444-4444-8444-444444444444';
+        $session = ['bluebarry' => ['user_id' => $other, 'session_id' => self::SESSION, 'advisor_id' => self::ADVISOR]];
+
+        $current = $this->visitor(['bb_uid' => self::USER], session: $session)->current(self::TENANT);
+        $this->assertSame([self::USER, null, null], [$current['user_id'], $current['session_id'], $current['advisor_id']]);
+
+        // The same visitor's quiz still comes along.
+        $session['bluebarry']['user_id'] = self::USER;
+        $current = $this->visitor(['bb_uid' => self::USER], session: $session)->current(self::TENANT);
+        $this->assertSame([self::USER, self::SESSION, self::ADVISOR], [$current['user_id'], $current['session_id'], $current['advisor_id']]);
+    }
+
     public function testExperimentsAreFilteredToThisTenantAndSupportedDomains(): void
     {
         $contexts = [['domain' => 'quiz', 'targetId' => self::SESSION, 'exposureId' => self::ADVISOR]];
