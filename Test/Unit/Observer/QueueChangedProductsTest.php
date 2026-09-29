@@ -38,6 +38,17 @@ class QueueChangedProductsTest extends TestCase
         $this->assertSame([[9]], $this->bundlesOf);
     }
 
+    public function testADeletedConfigurableProductQueuesItsVariants(): void
+    {
+        $product = $this->createStub(Product::class);
+        $product->method('getId')->willReturn(20);
+        $product->method('getTypeId')->willReturn('configurable');
+
+        $this->observer()->execute($this->event('catalog_product_delete_before', ['product' => $product]));
+
+        $this->assertSame([[20, 21, 22]], $this->queued);
+    }
+
     public function testAMassUpdateIsQueuedOnlyWhileConnected(): void
     {
         $this->observer(connected: false)->queueChanged([1, 2]);
@@ -62,6 +73,7 @@ class QueueChangedProductsTest extends TestCase
         $queue->method('enqueue')->willReturnCallback(function ($ids) {
             $this->queued[] = $ids;
         });
+        $queue->method('configurableChildren')->willReturn([21, 22]);
         $queue->method('enqueueBundlesWith')->willReturnCallback(function ($ids) {
             $this->bundlesOf[] = $ids;
         });

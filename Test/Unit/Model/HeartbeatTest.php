@@ -29,6 +29,7 @@ class HeartbeatTest extends TestCase
     private $onSave;
     /** @var callable|null */
     private $onPost;
+    private bool $lockTaken = false;
 
     public function testPingsEachConnectedWebsiteWithItsKey(): void
     {
@@ -217,6 +218,17 @@ class HeartbeatTest extends TestCase
         $this->assertSame([$other], $this->flag['retire']);
     }
 
+    public function testWhileAnotherHeartbeatRunsNothingIsSentOrSaved(): void
+    {
+        $this->lockTaken = true;
+
+        $outcome = $this->heartbeat([200])->send($this->website(1));
+
+        $this->assertFalse($outcome['ok']);
+        $this->assertSame([], $this->calls);
+        $this->assertSame([], $this->flag);
+    }
+
     private function website(int $id): Website
     {
         $store = $this->createStub(Store::class);
@@ -286,7 +298,7 @@ class HeartbeatTest extends TestCase
         });
 
         $locks = $this->createStub(LockManagerInterface::class);
-        $locks->method('lock')->willReturn(true);
+        $locks->method('lock')->willReturnCallback(fn () => !$this->lockTaken);
         $url = $this->createStub(Url::class);
         $url->method('setScope')->willReturnCallback(function ($storeId) use ($url) {
             $this->urlScope = (int) $storeId;
