@@ -57,8 +57,9 @@ test.describe('add to cart from bluebarry', () => {
       { reference: bundle, quantity: 1 }, // with its default selections
       { reference: '999999', quantity: 1 }, // no such product
       { reference: { id: 1 } as any, quantity: 1 }, // malformed
+      'not a line' as any,
     ]);
-    expect(result.body).toEqual({ success: true, skipped: ['999999', ''] });
+    expect(result.body).toEqual({ success: true, skipped: ['999999', '', ''] });
 
     const { items } = await cart(page);
     // A bundle's line carries its parts in its SKU.
@@ -112,6 +113,19 @@ test.describe('add to cart from bluebarry', () => {
       sql(`UPDATE cataloginventory_stock_item SET is_in_stock = 1 WHERE product_id = ${id}`);
       sql(`UPDATE cataloginventory_stock_status SET stock_status = 1 WHERE product_id = ${id}`);
     }
+  });
+
+  test('items not sent as JSON are a bad request', async ({ page }) => {
+    const status = await page.evaluate(async () => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch((window as any).barry.magento.addToCartUrl, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: `form_key=${formKey}&items[]=x`,
+      });
+      return response.status;
+    });
+    expect(status).toBe(400);
   });
 
   test('without the form key nothing is added', async ({ page }) => {
