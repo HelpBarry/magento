@@ -222,11 +222,11 @@ class Heartbeat
     public function deactivateAll(): void
     {
         // What each website registered with, which is what bluebarry knows it by; the settings may
-        // hold a newer key it refused since.
-        // Under the heartbeat lock from moving them to taking them back: a heartbeat in between would
-        // register a website again and take it off the list.
+        // hold a newer key it refused since. Under the heartbeat lock throughout: a heartbeat in
+        // between would register a website again. An uninstall goes ahead even without it (after
+        // 30 s): the module is going, and what it recorded is the only way to take its websites back.
         $locked = $this->locks->lock(self::FLAG, 30);
-        $this->holding = $locked;
+        $this->holding = true;
         $registered = [];
         try {
             $this->update(function (array $state) use (&$registered) {
@@ -238,25 +238,25 @@ class Heartbeat
                 return $state;
             });
             $this->retirePending();
-        } finally {
-            if ($locked) {
-                $this->holding = false;
-                $this->locks->unlock(self::FLAG);
-            }
-        }
-        foreach ($this->storeManager->getWebsites() as $website) {
-            if (in_array((int) $website->getId(), $registered, true)) {
-                continue;
-            }
-            try {
-                // Registered before this module kept its registrations: its settings are all there is.
-                $tenantId = $this->config->getWebsiteTenantId($website->getId());
-                $apiKey = $this->config->getWebsiteApiKey($website->getId());
-                if ($tenantId !== null && $apiKey !== null) {
-                    $this->client->post('/data/magento/deactivate', ['siteUrl' => $this->siteUrl($website)], $tenantId, $apiKey, 5);
+            foreach ($this->storeManager->getWebsites() as $website) {
+                if (in_array((int) $website->getId(), $registered, true)) {
+                    continue;
                 }
-            } catch (\Exception $e) {
-                // One broken website does not keep the others registered.
+                try {
+                    // Registered before this module kept its registrations: its settings are all there is.
+                    $tenantId = $this->config->getWebsiteTenantId($website->getId());
+                    $apiKey = $this->config->getWebsiteApiKey($website->getId());
+                    if ($tenantId !== null && $apiKey !== null) {
+                        $this->client->post('/data/magento/deactivate', ['siteUrl' => $this->siteUrl($website)], $tenantId, $apiKey, 5);
+                    }
+                } catch (\Exception $e) {
+                    // One broken website does not keep the others registered.
+                }
+            }
+        } finally {
+            $this->holding = false;
+            if ($locked) {
+                $this->locks->unlock(self::FLAG);
             }
         }
     }
