@@ -3,6 +3,7 @@
 namespace Bluebarry\Bluebarry\Block;
 
 use Bluebarry\Bluebarry\Model\Storefront;
+use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Csp\Helper\CspNonceProvider;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\DataObject\IdentityInterface;
@@ -54,12 +55,18 @@ class Advisor extends Template implements IdentityInterface
     private $registry;
 
     /**
+     * @var CategoryCollectionFactory
+     */
+    private $categories;
+
+    /**
      * @param Context $context
      * @param ScopeConfigInterface $scopeConfig
      * @param StoreManagerInterface $storeManager
      * @param CspNonceProvider $cspNonceProvider
      * @param Storefront $storefront
      * @param Registry $registry
+     * @param CategoryCollectionFactory $categories
      * @param array $data
      */
     public function __construct(
@@ -69,6 +76,7 @@ class Advisor extends Template implements IdentityInterface
         CspNonceProvider $cspNonceProvider,
         Storefront $storefront,
         Registry $registry,
+        CategoryCollectionFactory $categories,
         array $data = []
     ) {
         $this->scopeConfig = $scopeConfig;
@@ -76,6 +84,7 @@ class Advisor extends Template implements IdentityInterface
         $this->cspNonceProvider = $cspNonceProvider;
         $this->storefront = $storefront;
         $this->registry = $registry;
+        $this->categories = $categories;
 
         parent::__construct($context, $data);
     }
@@ -137,12 +146,13 @@ class Advisor extends Template implements IdentityInterface
         switch ($this->fullActionName()) {
             case 'catalog_product_view':
                 $product = $this->registry->registry('current_product');
-                return $product ? [
-                    'type' => 'product',
-                    // Popup product rules name the product, like Shopify's product id.
-                    'productId' => (string) $product->getId(),
-                    'productReference' => $this->defaultReference($product),
-                ] : ['type' => 'other'];
+                if (!$product) {
+                    return ['type' => 'other'];
+                }
+                // Popup product rules name the product, like Shopify's product id.
+                $page = ['type' => 'product', 'productId' => (string) $product->getId()];
+                $reference = $this->defaultReference($product);
+                return $reference === null ? $page : $page + ['productReference' => $reference];
             case 'catalog_category_view':
                 $category = $this->registry->registry('current_category');
                 return ['type' => 'collection'] + ($category ? ['collectionId' => (string) $category->getId()] : []);
@@ -153,7 +163,11 @@ class Advisor extends Template implements IdentityInterface
             case 'checkout_index_index':
                 return ['type' => 'checkout'];
             default:
-                return ['type' => 'other'];
+                // Multi-address checkout's steps, up to its order confirmation.
+                $action = $this->fullActionName();
+                return strpos($action, 'multishipping_checkout_') === 0 && $action !== 'multishipping_checkout_success'
+                    ? ['type' => 'checkout']
+                    : ['type' => 'other'];
         }
     }
 
@@ -172,8 +186,10 @@ class Advisor extends Template implements IdentityInterface
             if ($product->getTypeId() === 'configurable') {
                 $config['groupReference'] = (string) $product->getId();
             }
-            $config['variantReference'] = $page['productReference'];
-            $context['productCollectionIds'] = array_map('strval', array_slice((array) $product->getCategoryIds(), 0, 100));
+            if (isset($page['productReference'])) {
+                $config['variantReference'] = $page['productReference'];
+            }
+            $context['productCollectionIds'] = $this->collectionIds($product);
         } elseif ($page['type'] === 'collection') {
             $category = $this->registry->registry('current_category');
             if ($category) {
@@ -201,12 +217,16 @@ class Advisor extends Template implements IdentityInterface
     /**
      * The variant a product page opens with, for its product view: a configurable product's first
      * variant for sale (by id, as the catalog sync orders them), else its first; any other product itself.
+     * None for a grouped product: the catalog sync sends its products, not the group.
      *
      * @param \Magento\Catalog\Model\Product $product
-     * @return string
+     * @return string|null
      */
-    private function defaultReference($product): string
+    private function defaultReference($product): ?string
     {
+        if ($product->getTypeId() === 'grouped') {
+            return null;
+        }
         if ($product->getTypeId() !== 'configurable') {
             return (string) $product->getId();
         }
@@ -222,6 +242,26 @@ class Advisor extends Template implements IdentityInterface
             }
         }
         return $children ? (string) $children[0]->getId() : (string) $product->getId();
+    }
+
+    /**
+     * The product's categories in this store's category tree, as the catalog sync sends them: category
+     * assignments are shared by every website.
+     *
+     * @param \Magento\Catalog\Model\Product $product
+     * @return string[]
+     */
+    private function collectionIds($product): array
+    {
+        $ids = (array) $product->getCategoryIds();
+        $store = $this->storeManager->getStore();
+        if (!$ids || !$store instanceof \Magento\Store\Model\Store) {
+            return [];
+        }
+        return array_map('strval', $this->categories->create()
+            ->addIdFilter($ids)
+            ->addAttributeToFilter('path', ['like' => '1/' . (int) $store->getRootCategoryId() . '/%'])
+            ->getAllIds(100));
     }
 
     /**

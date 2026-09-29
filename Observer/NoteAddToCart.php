@@ -57,6 +57,11 @@ class NoteAddToCart implements ObserverInterface
     private $logger;
 
     /**
+     * @var array|null the adds noted so far in this request
+     */
+    private $pending;
+
+    /**
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param CookieManagerInterface $cookies
@@ -92,32 +97,42 @@ class NoteAddToCart implements ObserverInterface
                 || !Visitor::isUuid($this->cookies->getCookie('bb_uid'))) {
                 return;
             }
-            /** @var \Magento\Quote\Model\Quote\Item $item */
-            $item = $observer->getEvent()->getData('quote_item');
-            $product = $observer->getEvent()->getData('product');
-            if (!$item) {
+            $added = [];
+            // Every line one add made: a grouped product's products each have their own.
+            foreach ((array) $observer->getEvent()->getData('items') as $item) {
+                /** @var \Magento\Quote\Model\Quote\Item $item */
+                if ($item->getParentItem()) {
+                    continue; // a configurable product's variant or a bundle's part: its line is the parent's
+                }
+                // The catalog's reference: the variant for a configurable product.
+                $variant = $item->getOptionByCode('simple_product');
+                $reference = (int) ($variant ? $variant->getValue() : $item->getProductId());
+                if ($reference > 0) {
+                    $added[] = [
+                        'r' => (string) $reference,
+                        // What this add put in, not the line's total; bluebarry counts whole units.
+                        'q' => max(1, min(999, (int) round((float) $item->getQtyToAdd() ?: 1))),
+                        't' => time(),
+                        'i' => bin2hex(random_bytes(8)),
+                    ];
+                }
+            }
+            if (!$added) {
                 return;
             }
-            // The catalog's reference: the variant for a configurable product.
-            $variant = $item->getOptionByCode('simple_product');
-            $reference = (int) ($variant ? $variant->getValue() : $item->getProductId());
-            if ($reference <= 0) {
-                return;
+            // Several adds in one request (a kit from bluebarry) all go in: the request's cookie does
+            // not show what this request already set.
+            if ($this->pending === null) {
+                $this->pending = self::pending((string) $this->cookies->getCookie(self::COOKIE));
             }
-            $pending = self::pending((string) $this->cookies->getCookie(self::COOKIE));
-            $pending[] = [
-                'r' => (string) $reference,
-                'q' => max(1, min(999, (int) round((float) ($product ? $product->getCartQty() : 0) ?: 1))),
-                't' => time(),
-                'i' => bin2hex(random_bytes(8)),
-            ];
+            $this->pending = array_slice(array_merge($this->pending, $added), -self::KEEP);
             $metadata = $this->cookieMetadata->createPublicCookieMetadata()
                 // Host-only on the whole host, where the SDK clears it.
                 ->setPath('/')
                 ->setDuration(86400)
                 ->setHttpOnly(false)
                 ->setSameSite('Lax');
-            $this->cookies->setPublicCookie(self::COOKIE, (string) json_encode(array_slice($pending, -self::KEEP)), $metadata);
+            $this->cookies->setPublicCookie(self::COOKIE, (string) json_encode($this->pending), $metadata);
         } catch (\Exception $e) {
             // Never in the way of an add to the cart.
             $this->logger->warning('bluebarry: could not note the add to the cart: ' . $e->getMessage());
