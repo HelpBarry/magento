@@ -27,6 +27,8 @@ class SyncTest extends TestCase
     private array $flag = [];
     private array $awaitingIndex = [];
     private array $unreadable = [];
+    /** @var int[] products deleted from the catalog */
+    private array $gone = [];
     /** @var array<int, int[]> queued configurable product => the children build() adds */
     private array $expanded = [];
     private bool $locked = false;
@@ -213,6 +215,19 @@ class SyncTest extends TestCase
         $this->assertArrayNotHasKey('targets', $this->flag);
     }
 
+    public function testADeletionStaysQueuedUntilEveryCompanyHasIt(): void
+    {
+        $sync = $this->sync([503, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->queued = [5 => '', 9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame([9], array_keys($this->queued)); // 5 went; 9's switch-off still has to reach a
+        $this->assertSame('', $this->queued[9]);
+    }
+
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
         $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
@@ -330,6 +345,7 @@ class SyncTest extends TestCase
                 'products' => array_map(fn ($id) => ['reference' => (string) $id], array_values(array_diff($all, $this->unreadable))),
                 'reconcileGroupIds' => [],
                 'failed' => array_values(array_intersect($all, $this->unreadable)),
+                'deleted' => array_values(array_intersect($all, $this->gone)),
             ];
         });
 
