@@ -67,7 +67,8 @@ class SyncCatalog extends Command
         $result = $this->sync->run();
         $status = $this->sync->status();
         $output->writeln(sprintf('Sent %d products; %d waiting.', $result['sent'], $result['queued']));
-        if ($result['queued'] > 0 && $status['error'] !== null) {
+        // A company that failed stays failed while the others emptied the queue.
+        if ($status['error'] !== null) {
             $output->writeln('<error>' . $status['error'] . '</error>');
             return 1;
         }
