@@ -101,8 +101,9 @@ class Adder
         $soldOut = false;
         $otherFailure = false;
         foreach (array_values($items) as $index => $item) {
-            $reference = (string) ($item['reference'] ?? '');
-            $quantity = $item['quantity'] ?? 1;
+            // Whatever the request holds: an array here is a malformed line, skipped like an unknown one.
+            $reference = is_array($item) && is_scalar($item['reference'] ?? null) ? (string) $item['reference'] : '';
+            $quantity = is_array($item) ? ($item['quantity'] ?? 1) : null;
             // Beyond the limits nothing is guessed: the line is reported as not added. A fraction goes
             // as is; Magento refuses it for a product not sold in decimal quantities.
             if ($index >= self::MAX_LINES || !is_numeric($quantity) || $quantity <= 0 || $quantity > self::MAX_QUANTITY) {
