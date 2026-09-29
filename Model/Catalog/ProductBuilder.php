@@ -17,6 +17,7 @@ use Magento\Framework\EntityManager\MetadataPool;
 use Magento\Framework\Indexer\IndexerRegistry;
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface;
 use Magento\Framework\UrlInterface;
+use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\Store;
 use Magento\Tax\Model\Calculation as TaxCalculation;
 use Magento\Tax\Model\Config as TaxConfig;
@@ -280,7 +281,7 @@ class ProductBuilder
      * @param bool $backordersByDefault
      * @param bool $counted whether the product type has a quantity of its own
      * @param float $minQtyByDefault the out-of-stock threshold: what is left at or below it is not for sale
-     * @return array{0: string, 1: int|null} status, quantity
+     * @return array{0: string, 1: int|float|null} status, quantity
      */
     public static function stockOf(?array $row, bool $manageByDefault, bool $backordersByDefault, bool $counted, float $minQtyByDefault = 0.0): array
     {
@@ -296,8 +297,10 @@ class ProductBuilder
         }
         $backorders = (int) $row['use_config_backorders'] ? $backordersByDefault : (bool) (int) $row['backorders'];
         $minQty = (int) ($row['use_config_min_qty'] ?? 1) ? $minQtyByDefault : (float) ($row['min_qty'] ?? 0);
-        // A negative threshold (with backorders) lets Magento sell below zero; it is kept as is.
-        $quantity = (int) floor((float) $row['qty'] - $minQty);
+        // A negative threshold (with backorders) lets Magento sell below zero; it is kept as is. A
+        // product sold in decimal quantities keeps its fraction.
+        $quantity = round((float) $row['qty'] - $minQty, 4);
+        $quantity = $quantity == floor($quantity) ? (int) $quantity : $quantity;
         if ($backorders) {
             return [$counted && $quantity <= 0 ? 'onbackorder' : 'instock', null];
         }
@@ -361,10 +364,11 @@ class ProductBuilder
         }
         [$stockStatus, $quantity] = self::stockOf(
             $stock,
-            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock'),
-            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders'),
+            // In the store's scope, as Magento's stock configuration reads them.
+            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock', ScopeInterface::SCOPE_STORE, $store),
+            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders', ScopeInterface::SCOPE_STORE, $store),
             in_array($type, self::COUNTED_TYPES, true),
-            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty')
+            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, $store)
         );
 
         $properties = [
@@ -569,11 +573,14 @@ class ProductBuilder
             return isset($items[$id], $stock[$id]) && !in_array($items[$id]->getTypeId(), self::COUNTED_TYPES, true);
         }));
         if ($composite) {
-            foreach ($connection->fetchPairs($connection->select()
+            // Magento indexes it for all websites (0); a row of the website's own, if any, comes last and wins.
+            foreach ($connection->fetchAll($connection->select()
                 ->from($this->resource->getTableName('cataloginventory_stock_status'), ['product_id', 'stock_status'])
                 ->where('product_id IN (?)', $composite)
-                ->where('stock_id = ?', 1)) as $productId => $status) {
-                $stock[(int) $productId]['is_in_stock'] = $status;
+                ->where('stock_id = ?', 1)
+                ->where('website_id IN (?)', [0, (int) $store->getWebsiteId()])
+                ->order('website_id')) as $row) {
+                $stock[(int) $row['product_id']]['is_in_stock'] = $row['stock_status'];
             }
         }
 
@@ -714,10 +721,16 @@ class ProductBuilder
             return [];
         }
         $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        $entities = $this->resource->getTableName('catalog_product_entity');
         $select = $connection->select()->distinct()
             ->from(['link' => $table], ['child' => 'product_id'])
-            ->join(['parent' => $this->resource->getTableName('catalog_product_entity')], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
+            ->join(['parent' => $entities], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
             ->where($by === 'parent' ? 'parent.entity_id IN (?)' : 'link.product_id IN (?)', $ids);
+        if ($linkField !== 'entity_id' && $connection->tableColumnExists($entities, 'created_in')) {
+            // Content staging keeps a row per scheduled version, each with its own links: the one live now.
+            $now = time();
+            $select->where('parent.created_in <= ?', $now)->where('parent.updated_in > ?', $now);
+        }
         $links = [];
         foreach ($connection->fetchAll($select) as $row) {
             $links[(int) $row['child']][] = (int) $row['parent'];

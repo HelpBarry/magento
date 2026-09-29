@@ -37,7 +37,7 @@ class SyncTest extends TestCase
     {
         // Websites 1 (default) and 2 share a company; 3 has its own.
         $sync = $this->sync([200, 200], tenants: [1 => 'a', 2 => 'a', 3 => 'b']);
-        $this->flag = ['tenants' => ['a', 'b'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
         $this->queued = [5 => '', 7 => ''];
 
         $result = $sync->run();
@@ -56,13 +56,13 @@ class SyncTest extends TestCase
         $sync->run();
 
         $this->assertSame(1, $this->catalogQueued);
-        $this->assertSame(['a'], $this->flag['tenants']);
+        $this->assertSame(['a' => 1], $this->flag['tenants']);
     }
 
     public function testAFailedRequestKeepsTheBatchAndWaitsFiveMinutes(): void
     {
         $sync = $this->sync([503, 200]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => ''];
 
         $this->assertSame(0, $sync->run()['sent']);
@@ -77,7 +77,7 @@ class SyncTest extends TestCase
     public function testARefusedKeyIsReported(): void
     {
         $sync = $this->sync([401]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => ''];
 
         $sync->run();
@@ -88,7 +88,7 @@ class SyncTest extends TestCase
     public function testAKeyFromAnotherCompanyIsReported(): void
     {
         $sync = $this->sync([409]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => ''];
 
         $sync->run();
@@ -101,7 +101,7 @@ class SyncTest extends TestCase
     public function testAProductThatCannotBeReadStaysQueued_TheOthersGo(): void
     {
         $sync = $this->sync([200]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => '', 6 => ''];
         $this->unreadable = [6];
 
@@ -112,7 +112,7 @@ class SyncTest extends TestCase
     public function testAChangeWaitsForMagentosPriceIndex(): void
     {
         $sync = $this->sync([200]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => '', 6 => ''];
         $this->awaitingIndex = [6];
 
@@ -125,7 +125,7 @@ class SyncTest extends TestCase
     public function testAChangeMadeWhileItsBatchWasSentStaysQueued(): void
     {
         $sync = $this->sync([200]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [5 => ''];
         $this->onPost = function () {
             $this->queued[5] = ''; // saved again: the claim is cleared
@@ -139,7 +139,7 @@ class SyncTest extends TestCase
     public function testOneCompanysFailureDoesNotHoldUpAnother_ItGetsTheWholeCatalogOnceItWorks(): void
     {
         $sync = $this->sync([503, 200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
-        $this->flag = ['tenants' => ['a', 'b'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
         $this->queued = [5 => ''];
 
         $this->assertSame(1, $sync->run()['sent']); // b received it; a waits
@@ -159,7 +159,7 @@ class SyncTest extends TestCase
     public function testACompanyThatMissedChangesGetsTheCatalogWhenItIsRetried_EvenWithNothingNewQueued(): void
     {
         $sync = $this->sync([200], tenants: [1 => 'a']);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() - 1, 'error' => 'x', 'stale' => true]]];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() - 1, 'error' => 'x', 'stale' => true]]];
 
         $sync->run();
 
@@ -169,18 +169,38 @@ class SyncTest extends TestCase
 
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->sync([], tenants: [])->run(); // disconnected
-        $this->assertArrayNotHasKey('tenants', $this->flag);
+        $this->assertSame([], $this->flag['tenants']);
 
         $this->sync([200], tenants: [1 => 'a'])->run();
         $this->assertSame(1, $this->catalogQueued);
     }
 
+    public function testACompanyReconnectingWhileAnotherStayedConnectedGetsTheCatalog(): void
+    {
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->sync([], tenants: [1 => 'a'])->run(); // b disconnected; a keeps receiving changes
+        $this->assertSame(0, $this->catalogQueued);
+
+        $this->sync([], tenants: [1 => 'a', 3 => 'b'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testACompanyReadFromAnotherWebsiteGetsTheCatalogAgain(): void
+    {
+        // Websites 2 and 3 share company b; 2 is disconnected, so 3 now speaks for it.
+        $this->flag = ['tenants' => ['b' => 2], 'full_at' => time()];
+        $this->sync([], tenants: [3 => 'b'])->run();
+
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertSame(['b' => 3], $this->flag['tenants']);
+    }
+
     public function testAVariantThatCannotBeReadIsQueuedOnItsOwn(): void
     {
         $sync = $this->sync([200]);
-        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
         $this->queued = [4 => '']; // the configurable product; its child 68 fails to build
         $this->unreadable = [68];
         $this->expanded = [4 => [68, 69]];
@@ -238,6 +258,7 @@ class SyncTest extends TestCase
         });
         $storeManager->method('getStore')->willReturnCallback(function ($id) {
             $store = $this->createStub(Store::class);
+            $store->method('getId')->willReturn((int) $id);
             $store->method('getCode')->willReturn("store-$id");
             return $store;
         });

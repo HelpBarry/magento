@@ -7,6 +7,7 @@
     <!-- Multi-address checkout: its orders only come with this event. -->
     <event name="checkout_submit_all_after">
         <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
     <event name="sales_order_save_after">
         <observer name="bluebarry_queue_paid_order" instance="Bluebarry\Bluebarry\Observer\QueuePaidOrder" />
@@ -16,9 +17,6 @@
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
     <event name="catalog_product_delete_before">
-        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
-    </event>
-    <event name="catalog_product_attribute_update_before">
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
     <event name="catalog_product_to_website_change">
