@@ -175,7 +175,9 @@ class QueueChangedProducts implements ObserverInterface
             case 'catalog_product_to_website_change':
                 return (array) $event->getData('products');
             case 'catalog_product_import_bunch_delete_commit_before':
-                return (array) $event->getData('ids_to_delete');
+                // With the variants of configurable products among them, while the links still exist.
+                $ids = array_map('intval', (array) $event->getData('ids_to_delete'));
+                return array_merge($ids, $this->queue->configurableChildren($ids));
             case 'catalog_product_import_bunch_save_after':
                 $adapter = $event->getData('adapter');
                 $ids = [];
