@@ -129,7 +129,14 @@ class Sync
         $targets = [];
         foreach ($websites as $website) {
             $tenantId = $this->config->getWebsiteTenantId($website->getId());
-            $apiKey = $this->config->getWebsiteApiKey($website->getId());
+            try {
+                $apiKey = $this->config->getWebsiteApiKey($website->getId());
+            } catch (\Exception $e) {
+                // An undecryptable key (a database restored under another crypt key): this website waits
+                // until its key is saved again, the others still sync. The Connection status shows it.
+                $this->logger->warning('bluebarry: skipping the catalog of a website whose API key cannot be read: ' . $e->getMessage(), ['website' => $website->getId()]);
+                continue;
+            }
             if ($tenantId === null || $apiKey === null || isset($targets[strtolower($tenantId)])) {
                 continue;
             }
@@ -223,7 +230,15 @@ class Sync
         }
         foreach (array_keys($active) as $key) {
             if (!empty($this->state()['targets'][$key]['stale'])) {
-                // It missed changes the others received: the whole catalog again, now it may work.
+                // It missed changes the others received: the whole catalog again once it works. Asked
+                // with an empty request first, so a company that still fails never sends the others'
+                // sync back to the first product every five minutes.
+                $error = $this->post($active[$key], ['products' => [], 'reconcileGroupIds' => []]);
+                if ($error !== null) {
+                    $this->updateTarget($key, ['retry_at' => time() + self::RETRY_AFTER, 'error' => $error]);
+                    unset($active[$key]);
+                    continue;
+                }
                 $this->queue->enqueueAll();
                 $this->updateTarget($key, ['stale' => false]);
             }
@@ -319,26 +334,39 @@ class Sync
     private function deliver(array $target, array $batch): ?string
     {
         foreach (self::requests($batch['products'], $batch['reconcileGroupIds']) as $request) {
-            $response = $this->client->post('/data/magento/products/sync', [
-                // bluebarry refuses a key from another company, so the catalog never lands there.
-                'tenantId' => $target['tenantId'],
-                'products' => $request['products'],
-                'reconcileGroupIds' => $request['reconcileGroupIds'],
-            ], $target['tenantId'], $target['apiKey'], 60);
-            if ($response->isSuccess()) {
-                continue;
+            $error = $this->post($target, $request);
+            if ($error !== null) {
+                return $error;
             }
-            if ($response->getStatus() === 409) {
-                $error = 'The API key belongs to another bluebarry company than the Tenant ID.';
-            } elseif (in_array($response->getStatus(), [401, 403], true)) {
-                $error = 'bluebarry refused the API key.';
-            } else {
-                $error = $response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.';
-            }
-            $this->logger->warning('bluebarry: catalog sync failed, retrying in 5 minutes: ' . $error, ['tenant' => $target['tenantId']]);
-            return $error;
         }
         return null;
+    }
+
+    /**
+     * @param array $target
+     * @param array{products: array[], reconcileGroupIds: string[]} $request
+     * @return string|null the error, or null when it arrived
+     */
+    private function post(array $target, array $request): ?string
+    {
+        $response = $this->client->post('/data/magento/products/sync', [
+            // bluebarry refuses a key from another company, so the catalog never lands there.
+            'tenantId' => $target['tenantId'],
+            'products' => $request['products'],
+            'reconcileGroupIds' => $request['reconcileGroupIds'],
+        ], $target['tenantId'], $target['apiKey'], 60);
+        if ($response->isSuccess()) {
+            return null;
+        }
+        if ($response->getStatus() === 409) {
+            $error = 'The API key belongs to another bluebarry company than the Tenant ID.';
+        } elseif (in_array($response->getStatus(), [401, 403], true)) {
+            $error = 'bluebarry refused the API key.';
+        } else {
+            $error = $response->getError() ?? 'bluebarry answered HTTP ' . $response->getStatus() . '.';
+        }
+        $this->logger->warning('bluebarry: catalog sync failed, retrying in 5 minutes: ' . $error, ['tenant' => $target['tenantId']]);
+        return $error;
     }
 
     /**
