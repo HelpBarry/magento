@@ -93,6 +93,7 @@ class Heartbeat
      */
     public function sendDue(): void
     {
+        $this->retirePending();
         $state = $this->state();
         $force = !empty($state['force']);
         foreach ($this->storeManager->getWebsites() as $website) {
@@ -138,18 +139,20 @@ class Heartbeat
         $websiteId = (int) $website->getId();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
         $apiKey = $this->config->getWebsiteApiKey($websiteId);
-        $previous = $this->outcomes()[$websiteId] ?? null;
+        $registration = $this->state()['registrations'][$websiteId] ?? null;
         if ($tenantId === null || $apiKey === null) {
             // Disconnected on purpose: bluebarry hears it now rather than when the heartbeat goes quiet.
-            $this->deactivatePrevious($previous);
+            if ($registration !== null) {
+                $this->retire($websiteId);
+            }
             $this->record($websiteId, null);
             return null;
         }
 
         $siteUrl = $this->siteUrl($website);
         // Moved to another company, or to another address: the old registration goes.
-        if ($previous !== null && (($previous['tenant'] ?? $tenantId) !== strtolower($tenantId) || ($previous['site'] ?? $siteUrl) !== $siteUrl)) {
-            $this->deactivatePrevious($previous);
+        if ($registration !== null && ($registration['tenant'] !== strtolower($tenantId) || $registration['site'] !== $siteUrl)) {
+            $this->retire($websiteId);
         }
         $response = $this->client->post('/data/magento/ping', [
             // bluebarry refuses a key from another company before it registers anything.
@@ -164,9 +167,11 @@ class Heartbeat
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];
         if ($response->isSuccess()) {
             $outcome['ok'] = true;
-            // What this registration was made with, to take it back when the website moves on.
-            $outcome['tenant'] = strtolower($tenantId);
-            $outcome['key'] = $this->encryptor->encrypt($apiKey);
+            // What this registration was made with, to take it back when the website moves on. Kept
+            // apart from the outcome, so a later failed check never loses it.
+            $state = $this->state();
+            $state['registrations'][$websiteId] = ['tenant' => strtolower($tenantId), 'site' => $siteUrl, 'key' => $this->encryptor->encrypt($apiKey)];
+            $this->flags->saveFlag(self::FLAG, $state);
         } elseif ($response->getStatus() === 409) {
             $outcome['error'] = 'The API key belongs to another bluebarry company than the Tenant ID.';
         } elseif ($response->getStatus() === 401 || $response->getStatus() === 403) {
@@ -185,6 +190,11 @@ class Heartbeat
      */
     public function deactivateAll(): void
     {
+        try {
+            $this->retirePending();
+        } catch (\Exception $e) {
+            // The websites below still go.
+        }
         foreach ($this->storeManager->getWebsites() as $website) {
             try {
                 $tenantId = $this->config->getWebsiteTenantId($website->getId());
@@ -199,20 +209,47 @@ class Heartbeat
     }
 
     /**
-     * Tells bluebarry a registration this website made is gone. Best effort.
+     * Moves a website's registration to the ones bluebarry is told are gone, and tells it now.
      *
-     * @param array|null $previous the outcome of the last heartbeat bluebarry accepted
+     * @param int $websiteId
      * @return void
      */
-    private function deactivatePrevious(?array $previous): void
+    private function retire(int $websiteId): void
     {
-        if (empty($previous['ok']) || empty($previous['tenant']) || empty($previous['key']) || empty($previous['site'])) {
+        $state = $this->state();
+        if (isset($state['registrations'][$websiteId])) {
+            $state['retire'][] = $state['registrations'][$websiteId];
+            unset($state['registrations'][$websiteId]);
+            $this->flags->saveFlag(self::FLAG, $state);
+        }
+        $this->retirePending();
+    }
+
+    /**
+     * Tells bluebarry the registrations waiting to be taken back are gone. One that bluebarry did not
+     * confirm (unreachable, an error) is tried again with the next heartbeat run, so it is never lost.
+     *
+     * @return void
+     */
+    private function retirePending(): void
+    {
+        $state = $this->state();
+        if (empty($state['retire'])) {
             return;
         }
-        $key = $this->encryptor->decrypt((string) $previous['key']);
-        if ($key !== '') {
-            $this->client->post('/data/magento/deactivate', ['siteUrl' => $previous['site']], (string) $previous['tenant'], $key, 5);
+        $left = [];
+        foreach ($state['retire'] as $registration) {
+            $key = $this->encryptor->decrypt((string) ($registration['key'] ?? ''));
+            $response = $key === '' ? null
+                : $this->client->post('/data/magento/deactivate', ['siteUrl' => $registration['site']], (string) $registration['tenant'], $key, 5);
+            // Gone for good when bluebarry confirms, or when the key itself is gone or refused.
+            if ($response !== null && !$response->isSuccess() && !in_array($response->getStatus(), [401, 403], true)) {
+                $left[] = $registration;
+            }
         }
+        $state = $this->state();
+        $state['retire'] = $left;
+        $this->flags->saveFlag(self::FLAG, $state);
     }
 
     /**
