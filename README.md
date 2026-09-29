@@ -7,6 +7,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 - Records every paid order from a shopper who used bluebarry (quiz, search, recommendations, product chat, popups) and identifies the buyer's email, from the background so checkout never waits
 - Connects each Magento website to bluebarry with its Tenant ID and API key, and shows the connection in the admin and in bluebarry
 - Keeps bluebarry's copy of your catalog current without a product feed: products, variants, attributes, categories, prices, sale prices, images and stock
+- Adds to the cart from a quiz result, the search widget and recommendation blocks, and updates the mini-cart (Luma and Hyvä)
 
 ## Installation
 
