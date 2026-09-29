@@ -2,6 +2,7 @@
 
 namespace Bluebarry\Bluebarry\Observer;
 
+use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Heartbeat;
 use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\Event\Observer;
@@ -39,13 +40,25 @@ class SendHeartbeatOnSave implements ObserverInterface
     private $storefront;
 
     /**
+     * @var Config
+     */
+    private $config;
+
+    /**
      * @param Heartbeat $heartbeat
      * @param StoreManagerInterface $storeManager
      * @param ManagerInterface $messages
      * @param Storefront $storefront
+     * @param Config $config
      */
-    public function __construct(Heartbeat $heartbeat, StoreManagerInterface $storeManager, ManagerInterface $messages, Storefront $storefront)
-    {
+    public function __construct(
+        Heartbeat $heartbeat,
+        StoreManagerInterface $storeManager,
+        ManagerInterface $messages,
+        Storefront $storefront,
+        Config $config
+    ) {
+        $this->config = $config;
         $this->storefront = $storefront;
         $this->heartbeat = $heartbeat;
         $this->storeManager = $storeManager;
@@ -75,8 +88,10 @@ class SendHeartbeatOnSave implements ObserverInterface
             } catch (\Exception $e) {
                 $outcome = ['ok' => false, 'error' => $e->getMessage()];
             }
-            if ($outcome === null) {
-                // Not connected (any more): its search goes off now. No call to bluebarry.
+            // Not connected (any more), also when another check held the heartbeat: its search goes off
+            // now. No call to bluebarry.
+            if ($outcome === null || $this->config->getWebsiteTenantId($website->getId()) === null
+                || !$this->config->hasWebsiteApiKey($website->getId())) {
                 try {
                     $this->storefront->refresh($website);
                 } catch (\Exception $e) {
