@@ -220,7 +220,7 @@ class OrderSyncQueue
     /**
      * @return string
      */
-    private function table(): string
+    public function table(): string
     {
         return $this->resource->getTableName(self::TABLE);
     }

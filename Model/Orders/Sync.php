@@ -378,6 +378,11 @@ class Sync
             ->setCurPage(1);
         // Paid: processing can also mean shipped before it was invoiced. As Conversion\Queue::isPaid().
         $collection->getSelect()->where('IFNULL(main_table.total_paid, 0) > main_table.grand_total - IFNULL(main_table.total_canceled, 0) - 0.005');
+        // An order waiting in the queue goes from there, as it is (a new purchase stays one), not as history.
+        $collection->getSelect()->where(sprintf(
+            'NOT EXISTS (SELECT 1 FROM %s AS queued WHERE queued.order_id = main_table.entity_id AND queued.queued_at IS NOT NULL)',
+            $collection->getConnection()->quoteIdentifier($this->queue->table())
+        ));
         $orders = [];
         // Sent already when the last run's time ran out in the middle of this batch.
         $delivered = array_flip($state['delivered'] ?? []);
