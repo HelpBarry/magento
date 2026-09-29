@@ -414,10 +414,10 @@ class ProductBuilder
         [$stockStatus, $quantity] = self::stockOf(
             $stock,
             // In the store's scope, as Magento's stock configuration reads them.
-            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock', ScopeInterface::SCOPE_STORE, $store),
-            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders', ScopeInterface::SCOPE_STORE, $store),
+            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
+            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
             in_array($type, self::COUNTED_TYPES, true),
-            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, $store)
+            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, (int) $store->getId())
         );
         if ($parentOutOfStock) {
             // Bought through its configurable product, which is not for sale.
