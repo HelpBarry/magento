@@ -3,6 +3,7 @@
 namespace Bluebarry\Bluebarry\Observer;
 
 use Bluebarry\Bluebarry\Model\Heartbeat;
+use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
 use Magento\Framework\Message\ManagerInterface;
@@ -30,12 +31,19 @@ class SendHeartbeatOnSave implements ObserverInterface
     private $messages;
 
     /**
+     * @var Storefront
+     */
+    private $storefront;
+
+    /**
      * @param Heartbeat $heartbeat
      * @param StoreManagerInterface $storeManager
      * @param ManagerInterface $messages
+     * @param Storefront $storefront
      */
-    public function __construct(Heartbeat $heartbeat, StoreManagerInterface $storeManager, ManagerInterface $messages)
+    public function __construct(Heartbeat $heartbeat, StoreManagerInterface $storeManager, ManagerInterface $messages, Storefront $storefront)
     {
+        $this->storefront = $storefront;
         $this->heartbeat = $heartbeat;
         $this->storeManager = $storeManager;
         $this->messages = $messages;
@@ -68,6 +76,12 @@ class SendHeartbeatOnSave implements ObserverInterface
             }
             $name = (string) $website->getName();
             if ($outcome['ok']) {
+                // What bluebarry has for it (search), right away rather than on the next schedule.
+                try {
+                    $this->storefront->refresh($website);
+                } catch (\Exception $e) {
+                    // The schedule catches up.
+                }
                 $this->messages->addSuccessMessage(__('%1 is connected to bluebarry.', $name));
             } else {
                 $this->messages->addErrorMessage(__('%1 is not connected to bluebarry: %2', $name, $outcome['error']));
