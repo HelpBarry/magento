@@ -41,7 +41,10 @@ class QueuePaidOrder implements ObserverInterface
     {
         /** @var \Magento\Sales\Model\Order $order */
         $order = $observer->getEvent()->getOrder();
-        if (!$order || !$order->getId() || !$order->dataHasChangedFor('state') || !$this->queue->isPaid($order)) {
+        // Paid by the state change (an invoice at checkout) or by a later invoice on an order that was
+        // already processing (shipped first).
+        if (!$order || !$order->getId() || (!$order->dataHasChangedFor('state') && !$order->dataHasChangedFor('total_paid'))
+            || !$this->queue->isPaid($order)) {
             return;
         }
         try {

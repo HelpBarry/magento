@@ -44,15 +44,17 @@ class Queue
     }
 
     /**
-     * An order counts as a sale once it is paid: processing (invoiced) or complete. Orders paid on
-     * delivery or by bank transfer wait until the merchant invoices them.
+     * An order counts as a sale once it is paid in full: processing or complete, with nothing left
+     * due. Orders paid on delivery or by bank transfer wait until the merchant invoices them, also
+     * when they were shipped first (which already makes them processing).
      *
      * @param OrderInterface $order
      * @return bool
      */
     public function isPaid(OrderInterface $order): bool
     {
-        return in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE], true);
+        return in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE], true)
+            && (float) $order->getGrandTotal() - (float) $order->getTotalPaid() < 0.005;
     }
 
     /**
