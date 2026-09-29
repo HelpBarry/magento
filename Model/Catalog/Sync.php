@@ -146,12 +146,12 @@ class Sync
      * when a company was (re)connected, or at night once a day.
      *
      * @param int $seconds 0 for no limit
-     * @return array{sent: int, queued: int}
+     * @return array{sent: int, queued: int, busy?: bool} busy: another run holds the sync
      */
     public function run(int $seconds = 0): array
     {
         if (!$this->locks->lock(self::LOCK, 0)) {
-            return ['sent' => 0, 'queued' => $this->queue->count()];
+            return ['sent' => 0, 'queued' => $this->queue->count(), 'busy' => true];
         }
         try {
             $targets = $this->targets();
@@ -246,11 +246,13 @@ class Sync
             }
 
             $failed = [];
+            $deleted = [];
             $delivered = [];
             $refused = [];
             foreach ($active as $key => $target) {
                 $batch = $this->builder->build($ids, $target['store']);
                 $failed = array_merge($failed, $batch['failed']);
+                $deleted = array_merge($deleted, $batch['deleted'] ?? []);
                 $error = $this->deliver($target, $batch);
                 if ($error === null) {
                     $delivered[] = $key;
@@ -287,7 +289,11 @@ class Sync
             if ($dropped) {
                 $this->logger->error('bluebarry: gave up syncing products that could not be read', ['product_ids' => $dropped]);
             }
-            $this->queue->remove(array_values(array_diff($ids, $failed)), $claim);
+            // A deleted product is only switched off by its own row (the whole catalog a company gets
+            // back holds products that exist): kept until every company received it.
+            $keep = count($delivered) < count($targets) ? array_values(array_unique($deleted)) : [];
+            $this->queue->release($keep, $claim);
+            $this->queue->remove(array_values(array_diff($ids, $failed, $keep)), $claim);
             $sent += count(array_diff($ids, $failed));
         }
         if ($sent > 0) {
