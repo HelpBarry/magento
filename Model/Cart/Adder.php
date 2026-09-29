@@ -91,7 +91,7 @@ class Adder
     }
 
     /**
-     * @param array<int, array{reference: string, quantity: int}> $items
+     * @param array<int, array{reference: string, quantity: int|float}> $items
      * @return array{success: bool, skipped: string[], failure?: string}
      */
     public function add(array $items): array
@@ -101,22 +101,27 @@ class Adder
         $soldOut = false;
         foreach (array_values($items) as $index => $item) {
             $reference = (string) ($item['reference'] ?? '');
-            $quantity = (int) ($item['quantity'] ?? 1);
-            // Beyond the limits nothing is guessed: the line is reported as not added.
-            if ($index >= self::MAX_LINES || $quantity < 1 || $quantity > self::MAX_QUANTITY) {
+            $quantity = $item['quantity'] ?? 1;
+            // Beyond the limits nothing is guessed: the line is reported as not added. A fraction goes
+            // as is; Magento refuses it for a product not sold in decimal quantities.
+            if ($index >= self::MAX_LINES || !is_numeric($quantity) || $quantity <= 0 || $quantity > self::MAX_QUANTITY) {
                 $skipped[] = $reference;
                 continue;
             }
             try {
-                [$product, $request, $referenced] = $this->resolve($reference, $quantity);
+                [$product, $request, $referenced] = $this->resolve($reference, 0 + $quantity);
             } catch (NoSuchEntityException $e) {
                 $skipped[] = $reference;
                 continue;
             }
+            $before = $this->snapshot();
             try {
                 $this->cart->addProduct($product, $request);
                 $added[] = [$product, $request];
             } catch (LocalizedException $e) {
+                // What Magento changed for this line must not be saved with the others: on a stock
+                // error it even removes the product's line already in the cart.
+                $this->restore($before);
                 // Sold out when Magento says the product cannot be sold; anything else (a required
                 // option the shopper has to choose, too many for what is left) is an error.
                 $skipped[] = $reference;
@@ -142,15 +147,58 @@ class Adder
     }
 
     /**
+     * The cart's lines as they are: their quantity and whether they are removed.
+     *
+     * @return array<int, array{0: \Magento\Quote\Model\Quote\Item, 1: float, 2: bool}>
+     */
+    private function snapshot(): array
+    {
+        $lines = [];
+        foreach ($this->cart->getQuote()->getItemsCollection() as $item) {
+            $lines[spl_object_id($item)] = [$item, (float) $item->getQty(), (bool) $item->isDeleted()];
+        }
+        return $lines;
+    }
+
+    /**
+     * Puts the cart's lines back as they were: lines added since are taken out, and the quantity and
+     * removal of the others restored.
+     *
+     * @param array $lines from snapshot()
+     * @return void
+     */
+    private function restore(array $lines): void
+    {
+        $items = $this->cart->getQuote()->getItemsCollection();
+        foreach ($items as $key => $item) {
+            if (!isset($lines[spl_object_id($item)])) {
+                $items->removeItemByKey($key);
+            }
+        }
+        $present = [];
+        foreach ($items as $item) {
+            $present[spl_object_id($item)] = true;
+        }
+        foreach ($lines as $id => [$item, $qty, $deleted]) {
+            if (!isset($present[$id])) {
+                $items->addItem($item);
+            }
+            $item->isDeleted($deleted);
+            // As it was, without validating it again.
+            $item->setData('qty', $qty);
+        }
+    }
+
+    /**
      * The product the cart takes, the request that picks the right variant, and the product the
      * reference names.
      *
      * @param string $reference
-     * @param int $quantity
+     * @param int|float $quantity
      * @return array{0: Product, 1: array, 2: Product}
      * @throws NoSuchEntityException the product is not on sale in this store
      */
-    private function resolve(string $reference, int $quantity): array
+    private function resolve(string $reference, $quantity): array
     {
         if (!ctype_digit($reference)) {
             throw new NoSuchEntityException();
