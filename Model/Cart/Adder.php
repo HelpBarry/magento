@@ -99,48 +99,55 @@ class Adder
         $skipped = [];
         $added = [];
         $soldOut = false;
-        foreach (array_slice($items, 0, self::MAX_LINES) as $item) {
+        foreach (array_values($items) as $index => $item) {
             $reference = (string) ($item['reference'] ?? '');
-            $quantity = max(1, min(self::MAX_QUANTITY, (int) ($item['quantity'] ?? 1)));
+            $quantity = (int) ($item['quantity'] ?? 1);
+            // Beyond the limits nothing is guessed: the line is reported as not added.
+            if ($index >= self::MAX_LINES || $quantity < 1 || $quantity > self::MAX_QUANTITY) {
+                $skipped[] = $reference;
+                continue;
+            }
             try {
-                [$product, $request] = $this->resolve($reference, $quantity);
+                [$product, $request, $referenced] = $this->resolve($reference, $quantity);
             } catch (NoSuchEntityException $e) {
                 $skipped[] = $reference;
                 continue;
             }
-            if (!$product->isSalable()) {
-                $skipped[] = $reference;
-                $soldOut = true;
-                continue;
-            }
             try {
                 $this->cart->addProduct($product, $request);
-                $added[] = $product;
+                $added[] = [$product, $request];
             } catch (LocalizedException $e) {
-                // Mostly stock: more than is left, or an option that sold out.
+                // Sold out when Magento says the product cannot be sold; anything else (a required
+                // option the shopper has to choose, too many for what is left) is an error.
                 $skipped[] = $reference;
-                $soldOut = true;
+                $soldOut = $soldOut || !$referenced->isSalable();
             }
         }
         if (!$added) {
             return ['success' => false, 'skipped' => $skipped, 'failure' => $soldOut ? 'soldOut' : 'error'];
         }
         $this->cart->save();
-        foreach ($added as $product) {
-            // What the product page's own button dispatches, for extensions that follow cart adds.
+        foreach ($added as [$product, $buyRequest]) {
+            // What the product page's own button dispatches, for extensions that follow cart adds: with
+            // this line's own request (product, quantity, options), as that button's form would send it.
+            $request = clone $this->request;
+            if ($request instanceof \Magento\Framework\App\Request\Http) {
+                $request->setParams(['product' => (string) $product->getId()] + $buyRequest);
+            }
             $this->events->dispatch('checkout_cart_add_product_complete', [
-                'product' => $product, 'request' => $this->request, 'response' => $this->response,
+                'product' => $product, 'request' => $request, 'response' => $this->response,
             ]);
         }
         return ['success' => true, 'skipped' => $skipped];
     }
 
     /**
-     * The product the cart takes, and the request that picks the right variant.
+     * The product the cart takes, the request that picks the right variant, and the product the
+     * reference names.
      *
      * @param string $reference
      * @param int $quantity
-     * @return array{0: Product, 1: array}
+     * @return array{0: Product, 1: array, 2: Product}
      * @throws NoSuchEntityException the product is not on sale in this store
      */
     private function resolve(string $reference, int $quantity): array
@@ -149,35 +156,40 @@ class Adder
             throw new NoSuchEntityException();
         }
         $store = $this->storeManager->getStore();
+        $websiteId = (int) $store->getWebsiteId();
         /** @var Product $product */
         $product = $this->products->getById((int) $reference, false, (int) $store->getId());
-        if (!$this->onSale($product, (int) $store->getWebsiteId())) {
+        if (!$this->onSale($product, $websiteId)) {
             throw new NoSuchEntityException();
         }
         $request = ['qty' => $quantity];
 
-        if ((int) $product->getVisibility() === Visibility::VISIBILITY_NOT_VISIBLE) {
-            // A configurable product's child: added through the parent, with the child's options.
-            foreach ($this->configurable->getParentIdsByChild($product->getId()) as $parentId) {
-                /** @var Product $parent */
-                $parent = $this->products->getById((int) $parentId, false, (int) $store->getId());
-                if (!$this->onSale($parent, (int) $store->getWebsiteId()) || (int) $parent->getVisibility() === Visibility::VISIBILITY_NOT_VISIBLE) {
-                    continue;
-                }
-                $options = [];
-                foreach ($this->configurable->getConfigurableAttributes($parent) as $attribute) {
-                    $code = (string) $attribute->getProductAttribute()->getAttributeCode();
-                    $options[(int) $attribute->getAttributeId()] = $product->getData($code);
-                }
-                return [$parent, $request + ['super_attribute' => $options]];
+        // A configurable product's child goes in through the parent it is shown under, like the catalog
+        // sync groups it (the lowest parent id on sale here with a page of its own), with the child's
+        // options. Also when the child has a page of its own.
+        $parentIds = array_map('intval', $this->configurable->getParentIdsByChild($product->getId()));
+        sort($parentIds);
+        foreach ($parentIds as $parentId) {
+            /** @var Product $parent */
+            $parent = $this->products->getById($parentId, false, (int) $store->getId());
+            if (!$this->onSale($parent, $websiteId) || (int) $parent->getVisibility() === Visibility::VISIBILITY_NOT_VISIBLE) {
+                continue;
             }
+            $options = [];
+            foreach ($this->configurable->getConfigurableAttributes($parent) as $attribute) {
+                $code = (string) $attribute->getProductAttribute()->getAttributeCode();
+                $options[(int) $attribute->getAttributeId()] = $product->getData($code);
+            }
+            return [$parent, $request + ['super_attribute' => $options], $product];
+        }
+        if ((int) $product->getVisibility() === Visibility::VISIBILITY_NOT_VISIBLE) {
             throw new NoSuchEntityException();
         }
 
         if ($product->getTypeId() === 'bundle') {
             $request += $this->bundleDefaults($product);
         }
-        return [$product, $request];
+        return [$product, $request, $product];
     }
 
     /**
@@ -199,12 +211,15 @@ class Adder
             }
             $optionId = (int) $selection->getOptionId();
             $options[$optionId][] = (int) $selection->getSelectionId();
-            $quantities[$optionId] = (float) $selection->getSelectionQty() ?: 1;
+            // Per selection: an option with several defaults keeps each one's own quantity.
+            $quantities[$optionId][(int) $selection->getSelectionId()] = (float) $selection->getSelectionQty() ?: 1;
         }
         foreach ($type->getOptionsCollection($bundle) as $option) {
             $optionId = (int) $option->getId();
             if (isset($options[$optionId]) && in_array($option->getType(), ['select', 'radio'], true)) {
-                $options[$optionId] = $options[$optionId][0]; // a single choice
+                // A single choice, and its quantity as the option's.
+                $options[$optionId] = $options[$optionId][0];
+                $quantities[$optionId] = $quantities[$optionId][$options[$optionId]];
             }
         }
         return ['bundle_option' => $options, 'bundle_option_qty' => $quantities];
