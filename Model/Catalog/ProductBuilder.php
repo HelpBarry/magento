@@ -227,7 +227,7 @@ class ProductBuilder
     /**
      * @param int[] $ids queued product ids
      * @param Store $store the website's default store view
-     * @return array{products: array[], reconcileGroupIds: string[], failed: int[]}
+     * @return array{products: array[], reconcileGroupIds: string[], failed: int[], deleted: int[]}
      */
     public function build(array $ids, Store $store): array
     {
@@ -257,11 +257,13 @@ class ProductBuilder
 
         $products = [];
         $failed = [];
+        $deleted = [];
         $reconcile = [];
         foreach ($all as $id) {
             $product = $items[$id] ?? null;
             if ($product === null) {
                 $products[] = ['reference' => (string) $id, 'inactive' => true];
+                $deleted[] = $id;
                 // A deleted configurable product takes its children with it.
                 if (in_array($id, $ids, true)) {
                     $reconcile[] = (string) $id;
@@ -308,7 +310,7 @@ class ProductBuilder
         }
         $failed = array_values(array_unique(array_merge($failed, array_map('intval', $withheld))));
 
-        return ['products' => $products, 'reconcileGroupIds' => array_values($reconcile), 'failed' => $failed];
+        return ['products' => $products, 'reconcileGroupIds' => array_values($reconcile), 'failed' => $failed, 'deleted' => $deleted];
     }
 
     /**
@@ -765,12 +767,13 @@ class ProductBuilder
             return [];
         }
         $classes = [];
-        foreach ($connection->fetchAll($connection->select()
+        $select = $connection->select()
             ->from(['selection' => $this->resource->getTableName('catalog_product_bundle_selection')], ['parent_product_id'])
             ->join(['part' => $this->resource->getTableName('catalog_product_entity')], 'part.entity_id = selection.product_id', [])
             ->join(['tax' => $int], "tax.$linkField = part.$linkField AND tax.store_id = 0 AND tax.attribute_id = " . (int) $taxClass->getId(), ['value'])
-            ->where('selection.parent_product_id IN (?)', array_map('intval', $dynamic))
-            ->order(['selection.is_default DESC', 'selection.position', 'selection.selection_id'])) as $row) {
+            ->where('selection.parent_product_id IN (?)', array_map('intval', $dynamic));
+        $this->liveVersion($select, 'part');
+        foreach ($connection->fetchAll($select->order(['selection.is_default DESC', 'selection.position', 'selection.selection_id'])) as $row) {
             $bundleId = $idByLink[(int) $row['parent_product_id']] ?? null;
             if ($bundleId !== null && !isset($classes[$bundleId])) {
                 $classes[$bundleId] = (int) $row['value'];
@@ -826,16 +829,30 @@ class ProductBuilder
             ->from(['link' => $table], ['child' => 'product_id'])
             ->join(['parent' => $entities], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
             ->where($by === 'parent' ? 'parent.entity_id IN (?)' : 'link.product_id IN (?)', $ids);
-        if ($linkField !== 'entity_id' && $connection->tableColumnExists($entities, 'created_in')) {
-            // Content staging keeps a row per scheduled version, each with its own links: the one live now.
-            $now = time();
-            $select->where('parent.created_in <= ?', $now)->where('parent.updated_in > ?', $now);
-        }
+        // Content staging keeps a row per scheduled version, each with its own links: the one live now.
+        $this->liveVersion($select, 'parent');
         $links = [];
         foreach ($connection->fetchAll($select) as $row) {
             $links[(int) $row['child']][] = (int) $row['parent'];
         }
         return $links;
+    }
+
+    /**
+     * With content staging (Adobe Commerce), only the product row of the version live now.
+     *
+     * @param \Magento\Framework\DB\Select $select
+     * @param string $alias of catalog_product_entity in the select
+     * @return void
+     */
+    private function liveVersion($select, string $alias): void
+    {
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        $entities = $this->resource->getTableName('catalog_product_entity');
+        if ($linkField !== 'entity_id' && $this->resource->getConnection()->tableColumnExists($entities, 'created_in')) {
+            $now = time();
+            $select->where("$alias.created_in <= ?", $now)->where("$alias.updated_in > ?", $now);
+        }
     }
 
     /**
