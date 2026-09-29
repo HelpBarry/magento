@@ -156,6 +156,17 @@ class SyncTest extends TestCase
         $this->assertNull($sync->status()['error']);
     }
 
+    public function testACompanyThatMissedChangesGetsTheCatalogWhenItIsRetried_EvenWithNothingNewQueued(): void
+    {
+        $sync = $this->sync([200], tenants: [1 => 'a']);
+        $this->flag = ['tenants' => ['a'], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() - 1, 'error' => 'x', 'stale' => true]]];
+
+        $sync->run();
+
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertFalse($this->flag['targets']['a']['stale'] ?? false);
+    }
+
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
         $this->flag = ['tenants' => ['a'], 'full_at' => time()];

@@ -52,6 +52,12 @@ php bin/magento cache:flush
 ```
 Use `cache:flush`, not `cache:clean`: the previous release's entries aren't reliably removed by a tag-based clean. Start the new release's queue consumers after this flush, or restart them afterwards: a consumer started earlier may not find this module's queue configuration. Quiz orders placed between the release switch and this flush may not be tracked.
 
+### Uninstall
+```bash
+php bin/magento module:uninstall Bluebarry_Bluebarry --remove-data
+```
+With `--remove-data`, Magento runs the module's own uninstall step, which tells bluebarry each website is gone and removes the module's tables. Without it, bluebarry notices after a week without a heartbeat. Clearing the Tenant ID or API key of a website in the settings also disconnects it right away.
+
 ## Configuration
 1. Go to **Stores > Configuration > Bluebarry > General** in the Magento Admin.
 2. Enter your **Tenant ID** (find it in your Bluebarry account integrations page).
