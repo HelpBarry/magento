@@ -103,7 +103,8 @@ class CheckoutNotes
             ->from($this->table())
             ->where('sent_at IS NULL')
             ->where('completed = 1 OR noted_at <= ?', gmdate('Y-m-d H:i:s', time() - $settleSeconds))
-            ->order('noted_at')
+            // Completions first: a buyer is never reminded while older notes wait their turn.
+            ->order(['completed DESC', 'noted_at'])
             ->limit($limit);
         if ($skipStoreIds) {
             $select->where('store_id NOT IN (?)', $skipStoreIds);

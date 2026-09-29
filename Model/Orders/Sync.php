@@ -321,7 +321,17 @@ class Sync
     private function importBatch(int $websiteId, array $target, int &$imported, callable $inTime): bool
     {
         $state = $this->import($websiteId);
-        if (!is_array($state) || !empty($state['done']) || isset($this->waitingWebsites()[$websiteId])) {
+        if (!is_array($state) || isset($this->waitingWebsites()[$websiteId])) {
+            return false;
+        }
+        if (!empty($state['done'])) {
+            // Stopped, with the Failed report still to reach bluebarry (its Orders page shows Running until then).
+            if (!empty($state['report']) && $this->client->post('/data/magento/orders/sync', [
+                'storeKey' => $target['storeKey'], 'orders' => [], 'import' => $state['report'], 'importedCount' => (int) $state['count'],
+            ], $target['tenantId'], $target['apiKey'], 30)->isSuccess()) {
+                unset($state['report']);
+                $this->saveImport($websiteId, $state);
+            }
             return false;
         }
         // Where a failed batch starts again.
@@ -338,8 +348,10 @@ class Sync
         // Paid: processing can also mean shipped before it was invoiced. As Conversion\Queue::isPaid().
         $collection->getSelect()->where('IFNULL(main_table.total_paid, 0) > main_table.grand_total - IFNULL(main_table.total_canceled, 0) - 0.005');
         $orders = [];
+        // Sent already when the last run's time ran out in the middle of this batch.
+        $delivered = array_flip($state['delivered'] ?? []);
         foreach ($collection as $order) {
-            if ($this->reportsTo($order, $target)) {
+            if ($this->reportsTo($order, $target) && !isset($delivered[(int) $order->getId()])) {
                 $orders[] = $order;
             }
             $state['after'] = max((int) $state['after'], (int) $order->getId());
@@ -354,9 +366,8 @@ class Sync
         }
         foreach ($byStore as $storeKey => $group) {
             if (!call_user_func($inTime)) {
-                // Out of time between two requests: the batch goes again next run, as if nothing was sent.
-                $before['touched'] = time();
-                $this->saveImport($websiteId, $before);
+                // Out of time between two requests: the batch goes on next run, from the groups not sent.
+                $this->saveImport($websiteId, ['delivered' => array_keys($delivered), 'count' => $state['count'], 'touched' => time()] + $before);
                 return false;
             }
             $payloads = array_map(function ($order) {
@@ -369,17 +380,18 @@ class Sync
                 $failure = $response;
                 break;
             }
-            $this->queue->markImported(array_map(function ($order) {
+            $ids = array_map(function ($order) {
                 return (int) $order->getId();
-            }, $group));
+            }, $group);
+            $this->queue->markImported($ids);
+            $delivered += array_flip($ids);
             $state['count'] = (int) $state['count'] + count($group);
             $imported += count($group);
         }
         $state['touched'] = time();
         if ($ok && !call_user_func($inTime)) {
-            // Out of time before the progress report: the batch goes again next run.
-            $before['touched'] = time();
-            $this->saveImport($websiteId, $before);
+            // Out of time before the progress report: next run reports it, sending nothing again.
+            $this->saveImport($websiteId, ['delivered' => array_keys($delivered), 'count' => $state['count'], 'touched' => time()] + $before);
             return false;
         }
         if ($ok) {
@@ -405,9 +417,11 @@ class Sync
             $state['attempts'] = (int) $state['attempts'] + 1;
             if ($state['attempts'] >= 10) {
                 $state['done'] = true;
-                $this->client->post('/data/magento/orders/sync', [
+                if (!$this->client->post('/data/magento/orders/sync', [
                     'storeKey' => $target['storeKey'], 'orders' => [], 'import' => 'Failed', 'importedCount' => (int) $state['count'],
-                ], $target['tenantId'], $target['apiKey'], 30);
+                ], $target['tenantId'], $target['apiKey'], 30)->isSuccess()) {
+                    $state['report'] = 'Failed'; // told on a later run
+                }
                 $this->logger->error('bluebarry: order history import stopped: bluebarry did not take it', ['website_id' => $websiteId]);
             }
             $this->saveImport($websiteId, $state);
@@ -415,6 +429,7 @@ class Sync
         }
         $state['attempts'] = 0;
         $state['done'] = $finished;
+        unset($state['delivered']);
         $this->saveImport($websiteId, $state);
         $this->forgetFailures($websiteId);
         return !$finished;
