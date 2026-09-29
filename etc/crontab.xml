@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Cron:etc/crontab.xsd">
+    <group id="default">
+        <!-- Retries, and paid orders no queue consumer picked up. One indexed query when idle. -->
+        <job name="bluebarry_send_due_conversions" instance="Bluebarry\Bluebarry\Cron\SendDueConversions" method="execute">
+            <schedule>* * * * *</schedule>
+        </job>
+    </group>
+</config>

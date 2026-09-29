@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<schema xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Setup/Declaration/Schema/etc/schema.xsd">
+    <!-- The bluebarry visitor behind an order, and the delivery of its conversion. A table of its own so
+         installing or upgrading the module never alters sales_order, which is large on busy stores. -->
+    <table name="bluebarry_order_visitor" resource="default" engine="innodb" comment="bluebarry visitor and conversion delivery per order">
+        <column xsi:type="int" name="order_id" unsigned="true" nullable="false" comment="Order ID"/>
+        <column xsi:type="varchar" name="user_id" length="36" nullable="false" comment="bluebarry visitor id (bb_uid)"/>
+        <column xsi:type="varchar" name="session_id" length="36" nullable="true" comment="Quiz session id"/>
+        <column xsi:type="varchar" name="advisor_id" length="36" nullable="true" comment="Quiz id"/>
+        <column xsi:type="text" name="experiments" nullable="true" comment="Experiments the shopper saw, JSON"/>
+        <column xsi:type="smallint" name="status" unsigned="true" nullable="false" default="0" comment="0 waiting for payment, 1 queued, 2 sent, 3 failed"/>
+        <column xsi:type="smallint" name="attempts" unsigned="true" nullable="false" default="0" comment="Delivery attempts"/>
+        <column xsi:type="datetime" name="next_attempt_at" nullable="true" comment="When a queued conversion is due for (another) attempt"/>
+        <column xsi:type="timestamp" name="created_at" on_update="false" nullable="false" default="CURRENT_TIMESTAMP" comment="Captured at"/>
+        <column xsi:type="datetime" name="sent_at" nullable="true" comment="Delivered at"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="order_id"/>
+        </constraint>
+        <constraint xsi:type="foreign" referenceId="BLUEBARRY_ORDER_VISITOR_ORDER_ID_SALES_ORDER_ENTITY_ID"
+                    table="bluebarry_order_visitor" column="order_id"
+                    referenceTable="sales_order" referenceColumn="entity_id" onDelete="CASCADE"/>
+        <index referenceId="BLUEBARRY_ORDER_VISITOR_STATUS_NEXT_ATTEMPT_AT" indexType="btree">
+            <column name="status"/>
+            <column name="next_attempt_at"/>
+        </index>
+    </table>
+</schema>

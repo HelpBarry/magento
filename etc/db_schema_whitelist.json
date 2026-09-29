@@ -1,0 +1,23 @@
+{
+    "bluebarry_order_visitor": {
+        "column": {
+            "order_id": true,
+            "user_id": true,
+            "session_id": true,
+            "advisor_id": true,
+            "experiments": true,
+            "status": true,
+            "attempts": true,
+            "next_attempt_at": true,
+            "created_at": true,
+            "sent_at": true
+        },
+        "index": {
+            "BLUEBARRY_ORDER_VISITOR_STATUS_NEXT_ATTEMPT_AT": true
+        },
+        "constraint": {
+            "PRIMARY": true,
+            "BLUEBARRY_ORDER_VISITOR_ORDER_ID_SALES_ORDER_ENTITY_ID": true
+        }
+    }
+}

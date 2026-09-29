@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import {
   addToCart,
   checkoutAsGuest,
+  orderGrandTotal,
+  payForOrder,
   magento,
   mockApi,
   newAdvisorIds,
@@ -47,18 +49,19 @@ test.describe('non-EUR order currency', () => {
     await page.goto('/');
     await startAdvisor(page);
     await addToCart(page, 'bb-simple');
-    await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+    const incrementId = await checkoutAsGuest(page, `shopper+${Date.now()}@example.com`);
+    await payForOrder(page, incrementId);
 
     runConversionConsumer();
     const conversion = (await mockApi.requests()).find((r) => r.path.toLowerCase() === '/data/conversionevents');
     expect(conversion).toBeDefined();
     expect(conversion!.contractErrors).toEqual([]);
     const body = conversion!.body;
-    // EUR 100.00 at 1.1 is USD 110.00, plus 21% VAT.
+    // EUR 100.00 at 1.1 is USD 110.00, plus 21% VAT; the grand total is the order's, in USD.
     expect(body.currencyIso).toBe('USD');
     expect(Number(body.orderProductTotal)).toBeCloseTo(110, 2);
     expect(Number(body.orderTaxTotal)).toBeCloseTo(23.1, 2);
-    expect(Number(body.orderGrandTotal)).toBeCloseTo(133.1, 2);
+    expect(Number(body.orderGrandTotal)).toBeCloseTo(orderGrandTotal(incrementId), 2);
     expect(Number(body.items[0].priceExclTax)).toBeCloseTo(110, 2);
   });
 });

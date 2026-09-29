@@ -2,7 +2,7 @@
 
 namespace Bluebarry\Bluebarry\Plugin\MysqlMq;
 
-use Bluebarry\Bluebarry\Observer\ProcessConversion;
+use Bluebarry\Bluebarry\Model\Conversion\Queue;
 use Magento\MysqlMq\Model\QueueManagement;
 
 /**
@@ -25,7 +25,7 @@ class RouteConversionToQueue
      */
     public function beforeAddMessageToQueues(QueueManagement $subject, $topic, $message, $queueNames)
     {
-        if ($topic === ProcessConversion::TOPIC_NAME && !in_array(self::QUEUE_NAME, $queueNames, true)) {
+        if ($topic === Queue::TOPIC && !in_array(self::QUEUE_NAME, $queueNames, true)) {
             $queueNames[] = self::QUEUE_NAME;
         }
         return [$topic, $message, $queueNames];
