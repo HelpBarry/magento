@@ -6,10 +6,6 @@
             <schedule>* * * * *</schedule>
         </job>
         <!-- Daily heartbeat per website (and right after an upgrade). Reads one flag when nothing is due. -->
-        <!-- The settings chosen in Studio, for when bluebarry could not reach the store. One small request per website. -->
-        <job name="bluebarry_refresh_storefront" instance="Bluebarry\Bluebarry\Cron\RefreshStorefront" method="execute">
-            <schedule>*/10 * * * *</schedule>
-        </job>
         <job name="bluebarry_send_heartbeat" instance="Bluebarry\Bluebarry\Cron\SendHeartbeat" method="execute">
             <schedule>*/10 * * * *</schedule>
         </job>
@@ -18,6 +14,12 @@
         <!-- Orders, the history import and checkouts, at most 50 seconds a run. A few indexed queries when idle. -->
         <job name="bluebarry_sync_orders" instance="Bluebarry\Bluebarry\Cron\SyncOrders" method="execute">
             <schedule>* * * * *</schedule>
+        </job>
+        <!-- The settings chosen in Studio (and bluebarry's tasks), for when bluebarry could not reach the
+             store. One request per website: in this group, so a slow bluebarry never holds up Magento's
+             default jobs. -->
+        <job name="bluebarry_refresh_storefront" instance="Bluebarry\Bluebarry\Cron\RefreshStorefront" method="execute">
+            <schedule>*/10 * * * *</schedule>
         </job>
         <!-- Catalog sync: changed products in batches, at most 50 seconds a run. One query when idle. -->
         <job name="bluebarry_sync_catalog" instance="Bluebarry\Bluebarry\Cron\SyncCatalog" method="execute">
