@@ -76,6 +76,10 @@
             <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
         </arguments>
     </type>
+    <!-- Mass attribute updates have no event after the write; queue them once it is done. -->
+    <type name="Magento\Catalog\Model\Product\Action">
+        <plugin name="bluebarry_queue_mass_updated_products" type="Bluebarry\Bluebarry\Plugin\Catalog\QueueMassUpdatedProducts"/>
+    </type>
     <type name="Magento\MysqlMq\Model\QueueManagement">
         <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>
     </type>
