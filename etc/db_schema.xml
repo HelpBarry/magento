@@ -34,5 +34,10 @@
         <constraint xsi:type="primary" referenceId="PRIMARY">
             <column name="product_id"/>
         </constraint>
+        <!-- Each batch is read back by its claim. -->
+        <index referenceId="BLUEBARRY_PRODUCT_SYNC_CLAIM_PRODUCT_ID" indexType="btree">
+            <column name="claim"/>
+            <column name="product_id"/>
+        </index>
     </table>
 </schema>

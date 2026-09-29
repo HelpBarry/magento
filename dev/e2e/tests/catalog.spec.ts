@@ -194,6 +194,24 @@ test.describe('catalog sync', () => {
     }
   });
 
+  test('a bundle whose part sold out is sold out', async ({ request }) => {
+    const stock = async (inStock: boolean) => {
+      await rest(request, 'put', '/rest/all/V1/products/bb-part-a', {
+        product: { sku: 'bb-part-a', extension_attributes: { stock_item: { qty: inStock ? 1000 : 0, is_in_stock: inStock } } },
+      });
+      // As the indexer cron would: stock, then prices (a stock change waits for the price index).
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+    };
+    await stock(false);
+    try {
+      syncCatalog();
+      const [bundle] = await sent(productId('bb-bundle-fixed'));
+      expect(property(bundle, 'stock_status')).toBe('outofstock');
+    } finally {
+      await stock(true);
+    }
+  });
+
   test('a deleted product is switched off', async ({ request }) => {
     const id = productId(SKU);
     await rest(request, 'delete', `/rest/V1/products/${SKU}`);
