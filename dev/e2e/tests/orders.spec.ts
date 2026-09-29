@@ -213,4 +213,29 @@ test.describe('orders', () => {
     expect(await note()).toBe(true);
     expect(sql("SELECT sent_at IS NULL FROM bluebarry_checkout WHERE email = 'cart-changed@example.com'")).toBe('1');
   });
+
+  test("a guest's first name typed after the email still goes with the checkout", async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    const noted = await page.evaluate(async () => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch('/bluebarry/checkout/email/', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, email: 'named-later@example.com' }).toString(),
+      });
+      return (await response.json()).noted;
+    });
+    expect(noted).toBe(true);
+    const quoteId = sql("SELECT quote_id FROM bluebarry_checkout WHERE email = 'named-later@example.com'");
+    // The shopper goes on to the shipping address.
+    sql(`UPDATE quote_address SET firstname = 'Robin' WHERE quote_id = ${quoteId} AND address_type = 'shipping'`);
+    sql(`UPDATE bluebarry_checkout SET noted_at = UTC_TIMESTAMP() - INTERVAL 2 MINUTE WHERE quote_id = ${quoteId}`);
+    await mockApi.reset();
+
+    syncOrders();
+
+    const started = (await sent('/data/magento/checkout-started')).find((r) => r.body.email === 'named-later@example.com');
+    expect(started?.body.firstName).toBe('Robin');
+  });
 });

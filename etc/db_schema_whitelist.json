@@ -61,7 +61,8 @@
             "cart": true,
             "completed": true,
             "noted_at": true,
-            "sent_at": true
+            "sent_at": true,
+            "revision": true
         },
         "index": {
             "BLUEBARRY_CHECKOUT_SENT_AT_NOTED_AT": true

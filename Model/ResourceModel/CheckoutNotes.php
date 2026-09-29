@@ -42,7 +42,8 @@ class CheckoutNotes
         $changed = 'email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)) OR NOT (cart <=> VALUES(cart))';
         $connection->query(sprintf(
             'INSERT INTO %s (quote_id, store_id, email, first_name, cart, noted_at) VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP())'
-            . " ON DUPLICATE KEY UPDATE sent_at = IF($changed, NULL, sent_at),"
+            // In this order: MySQL evaluates each assignment with the ones before it applied.
+            . " ON DUPLICATE KEY UPDATE revision = IF($changed, revision + 1, revision), sent_at = IF($changed, NULL, sent_at),"
             . " noted_at = IF($changed, VALUES(noted_at), noted_at),"
             . ' email = VALUES(email), first_name = VALUES(first_name), cart = VALUES(cart), store_id = VALUES(store_id)',
             $connection->quoteIdentifier($this->table())
@@ -82,7 +83,7 @@ class CheckoutNotes
     {
         $this->connection()->update(
             $this->table(),
-            ['completed' => 1, 'sent_at' => null, 'noted_at' => gmdate('Y-m-d H:i:s')],
+            ['completed' => 1, 'sent_at' => null, 'noted_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
             ['quote_id = ?' => $quoteId, 'completed = ?' => 0]
         );
     }
@@ -112,12 +113,12 @@ class CheckoutNotes
 
     /**
      * @param int $quoteId
-     * @param string $notedAt the note that was sent: a newer one waits to go again
+     * @param int $revision the one that was sent: a change since waits to go again
      * @return void
      */
-    public function markSent(int $quoteId, string $notedAt): void
+    public function markSent(int $quoteId, int $revision): void
     {
-        $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'noted_at = ?' => $notedAt]);
+        $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]);
     }
 
     /**
