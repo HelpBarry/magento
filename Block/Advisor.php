@@ -302,6 +302,6 @@ class Advisor extends Template implements IdentityInterface
      */
     public function getIdentities()
     {
-        return [Storefront::CACHE_TAG];
+        return [Storefront::cacheTag((int) $this->storeManager->getStore()->getWebsiteId())];
     }
 }
