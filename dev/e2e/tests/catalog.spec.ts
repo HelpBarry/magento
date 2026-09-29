@@ -203,21 +203,54 @@ test.describe('catalog sync', () => {
     }
   });
 
-  test('a bundle whose part sold out is sold out', async ({ request }) => {
+  test('a bundle whose part sold out is sold out, once Magento indexed the stock', async ({ request }) => {
+    const reindex = () => magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
     const stock = async (inStock: boolean) => {
       await rest(request, 'put', '/rest/all/V1/products/bb-part-a', {
         product: { sku: 'bb-part-a', extension_attributes: { stock_item: { qty: inStock ? 1000 : 0, is_in_stock: inStock } } },
       });
-      // As the indexer cron would: stock, then prices (a stock change waits for the price index).
-      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
     };
     await stock(false);
     try {
+      // The stock index ("Update by Schedule") has not run: the bundle would still read in stock, so it waits.
+      syncCatalog();
+      expect(await sent(productId('bb-bundle-fixed'))).toEqual([]);
+      expect(queued(productId('bb-part-a'))).toBe(1);
+
+      reindex(); // as the indexer cron would
       syncCatalog();
       const [bundle] = await sent(productId('bb-bundle-fixed'));
       expect(property(bundle, 'stock_status')).toBe('outofstock');
     } finally {
       await stock(true);
+      reindex();
+    }
+  });
+
+  test("a configurable product's order queues the variant sold, not every variant", async ({ page }) => {
+    syncCatalog();
+    sql('DELETE FROM bluebarry_product_sync');
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    await checkoutAsGuest(page, 'catalog-variant@example.com');
+
+    expect(queued(productId('bb-configurable-red'))).toBe(1);
+    expect(queued(productId('bb-configurable'))).toBe(0);
+  });
+
+  test('stock saved through multi-source inventory is queued', async ({ request }) => {
+    sql('DELETE FROM bluebarry_product_sync');
+    const quantity = Number(sql("SELECT quantity FROM inventory_source_item WHERE sku = 'bb-simple' AND source_code = 'default'"));
+    await rest(request, 'post', '/rest/V1/inventory/source-items', {
+      sourceItems: [{ sku: 'bb-simple', source_code: 'default', quantity: quantity - 1, status: 1 }],
+    });
+    try {
+      expect(queued(productId('bb-simple'))).toBe(1);
+    } finally {
+      await rest(request, 'post', '/rest/V1/inventory/source-items', {
+        sourceItems: [{ sku: 'bb-simple', source_code: 'default', quantity, status: 1 }],
+      });
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price'); // as the indexer cron would
     }
   });
 
