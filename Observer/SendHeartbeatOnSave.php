@@ -2,7 +2,9 @@
 
 namespace Bluebarry\Bluebarry\Observer;
 
+use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Heartbeat;
+use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
 use Magento\Framework\Message\ManagerInterface;
@@ -14,6 +16,9 @@ use Magento\Store\Model\StoreManagerInterface;
  */
 class SendHeartbeatOnSave implements ObserverInterface
 {
+    /** Seconds a save spends reading the websites' settings; the 10-minute cron reads the rest. */
+    private const REFRESH_BUDGET = 15;
+
     /**
      * @var Heartbeat
      */
@@ -30,12 +35,31 @@ class SendHeartbeatOnSave implements ObserverInterface
     private $messages;
 
     /**
+     * @var Storefront
+     */
+    private $storefront;
+
+    /**
+     * @var Config
+     */
+    private $config;
+
+    /**
      * @param Heartbeat $heartbeat
      * @param StoreManagerInterface $storeManager
      * @param ManagerInterface $messages
+     * @param Storefront $storefront
+     * @param Config $config
      */
-    public function __construct(Heartbeat $heartbeat, StoreManagerInterface $storeManager, ManagerInterface $messages)
-    {
+    public function __construct(
+        Heartbeat $heartbeat,
+        StoreManagerInterface $storeManager,
+        ManagerInterface $messages,
+        Storefront $storefront,
+        Config $config
+    ) {
+        $this->config = $config;
+        $this->storefront = $storefront;
         $this->heartbeat = $heartbeat;
         $this->storeManager = $storeManager;
         $this->messages = $messages;
@@ -47,6 +71,7 @@ class SendHeartbeatOnSave implements ObserverInterface
      */
     public function execute(Observer $observer)
     {
+        $started = time();
         $websiteId = (string) $observer->getEvent()->getData('website');
         $storeId = (string) $observer->getEvent()->getData('store');
         if ($storeId !== '') {
@@ -63,11 +88,30 @@ class SendHeartbeatOnSave implements ObserverInterface
             } catch (\Exception $e) {
                 $outcome = ['ok' => false, 'error' => $e->getMessage()];
             }
-            if ($outcome === null) {
+            // Not connected (any more), also when another check held the heartbeat: its search goes off
+            // now. No call to bluebarry.
+            if ($outcome === null || $this->config->getWebsiteTenantId($website->getId()) === null
+                || !$this->config->hasWebsiteApiKey($website->getId())) {
+                try {
+                    $this->storefront->refresh($website);
+                } catch (\Exception $e) {
+                    // The schedule catches up.
+                }
                 continue;
             }
             $name = (string) $website->getName();
             if ($outcome['ok']) {
+                // What bluebarry has for it (search), right away rather than on the next schedule; for
+                // at most about 15 seconds of the save, however many websites it covers.
+                try {
+                    // Each read only as long as the budget has left.
+                    $left = self::REFRESH_BUDGET - (time() - $started);
+                    if ($left >= 1) {
+                        $this->storefront->refresh($website, $left);
+                    }
+                } catch (\Exception $e) {
+                    // The schedule catches up.
+                }
                 $this->messages->addSuccessMessage(__('%1 is connected to bluebarry.', $name));
             } else {
                 $this->messages->addErrorMessage(__('%1 is not connected to bluebarry: %2', $name, $outcome['error']));

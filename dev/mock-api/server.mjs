@@ -7,6 +7,7 @@
 //   GET    /__requests          recorded requests (oldest first)
 //   DELETE /__requests          clear recorded requests and reset behaviour
 //   PUT    /__behavior          {"status": 500, "delayMs": 0, "body": {...}} applied to every following request
+//   PUT    /__storefront        {"search": {"profileId": "...", "resultsPage": true} | null} what GET /data/magento/storefront answers
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -15,6 +16,8 @@ const DEFAULT_BEHAVIOR = { status: 200, delayMs: 0, body: null };
 
 let requests = [];
 let behavior = { ...DEFAULT_BEHAVIOR };
+// What Studio chose for the store (DataApi's MagentoStorefrontSettings); the version follows it.
+let storefront = { search: null };
 
 // --- Contract of the Bluebarry data API -------------------------------------------------------------
 // Property names are case-insensitive, ids are GUIDs ("xxxxxxxx-xxxx-..."), decimals may be numbers or
@@ -176,6 +179,10 @@ const routes = {
       ? [409, { tenantId: API_KEY_TENANT }]
       : [200, { synced: 0, errors: 0 }],
   },
+  '/data/magento/storefront': {
+    method: 'GET', auth: 'apiKey',
+    ok: () => [200, { tenantId: API_KEY_TENANT, search: storefront.search, version: JSON.stringify(storefront.search) }],
+  },
   '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 
@@ -183,12 +190,13 @@ function validateRequest(req, json, raw) {
   const route = routes[req.url.toLowerCase()];
   if (!route) return { status: 404, errors: [`unknown endpoint ${req.url}`] };
   const errors = [];
-  if (req.method !== 'POST') errors.push(`method ${req.method} not allowed`);
+  if (req.method !== (route.method ?? 'POST')) errors.push(`method ${req.method} not allowed`);
   if (route.auth === 'apiKey') {
     // DataApi authenticates a request that names a tenant as that tenant's storefront and ignores the
     // key, so a key-authenticated call must not send BB-Tenant-Id.
     if (req.headers['bb-tenant-id'] || req.headers.authorization !== API_KEY) return { status: 401, errors: ['API key missing or refused'] };
   } else if (!req.headers['bb-tenant-id']) errors.push('missing BB-Tenant-Id header');
+  if (route.method === 'GET') return { route, errors };
   if (!(req.headers['content-type'] ?? '').startsWith('application/json')) errors.push('content-type must be application/json');
   if (raw && json === null) errors.push('body is not valid JSON');
   else validateObject(json, route.schema, '$', errors);
@@ -253,11 +261,16 @@ const control = createHttpServer(async (req, res) => {
   if (req.url === '/__requests' && req.method === 'DELETE') {
     requests = [];
     behavior = { ...DEFAULT_BEHAVIOR };
+    storefront = { search: null };
     return sendJson(res, 200, { ok: true });
   }
   if (req.url === '/__behavior' && req.method === 'PUT') {
     behavior = { ...DEFAULT_BEHAVIOR, ...JSON.parse((await readBody(req)) || '{}') };
     return sendJson(res, 200, behavior);
+  }
+  if (req.url === '/__storefront' && req.method === 'PUT') {
+    storefront = { search: null, ...JSON.parse((await readBody(req)) || '{}') };
+    return sendJson(res, 200, storefront);
   }
   if (req.url === '/health') return sendJson(res, 200, { ok: true });
   sendJson(res, 404, { error: 'not found' });

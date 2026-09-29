@@ -15,6 +15,24 @@ if ($tenantId != null && $tenantId != "") {
         addToCartUrl: "<?= $block->escapeJs($block->getUrl('bluebarry/cart/add')); ?>",
         cartUrl: "<?= $block->escapeJs($block->getUrl('checkout/cart')); ?>"
     };
+<?php $search = $block->getSearchConfig(); ?>
+<?php if ($search !== null): ?>
+    // Search, as chosen in Studio.
+    window.barry.search = Object.assign({}, window.barry.search, <?= /* @noEscape */ json_encode($search, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES); ?>);
+<?php if (!empty($search['serpPage']['here'])): ?>
+    // The results page is bluebarry's: hide Magento's results before they paint, and show them again
+    // if the SDK has not taken the page over in time (crawlers and shoppers without the SDK keep them).
+    (function () {
+        var style = document.createElement('style');
+        style.id = 'bb-serp-guard';
+        style.textContent = <?= /* @noEscape */ json_encode($block->getResultsHost() . ' > *:not([data-bluebarry-serp]) { visibility: hidden !important; }', JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        document.head.appendChild(style);
+        var started = Date.now(), watch = setInterval(function () {
+            if ((window.barry && window.barry._serpMounted) || Date.now() - started > 2500) { style.remove(); clearInterval(watch); }
+        }, 50);
+    })();
+<?php endif; ?>
+<?php endif; ?>
     var advisorScript = document.createElement('script');
     advisorScript.async = true;
     advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";

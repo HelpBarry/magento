@@ -8,6 +8,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 - Connects each Magento website to bluebarry with its Tenant ID and API key, and shows the connection in the admin and in bluebarry
 - Keeps bluebarry's copy of your catalog current without a product feed: products, variants, attributes, categories, prices, sale prices, images and stock
 - Adds to the cart from a quiz result, the search widget and recommendation blocks, and updates the mini-cart (Luma and Hyvä)
+- Turns on bluebarry search and its results page from bluebarry (Search > Launch), without settings in Magento
 
 ## Installation
 
@@ -64,7 +65,8 @@ With `--remove-data`, Magento runs the module's own uninstall step, which tells 
 3. Enter an **API Key**: create one in bluebarry under Integrations, Developer area, API keys. It is stored encrypted and connects the website to bluebarry. With several websites, switch the scope to set the Tenant ID and API key per website.
 4. Save. Magento shows whether each website is connected, and **Connection** shows the last check. The module reports in daily from Magento's cron, so bluebarry shows the store as connected under Integrations.
 5. Once a website is connected, the module sends your catalog to bluebarry: all of it right away, then every product that changes (saves, mass actions, imports, stock taken by orders), and all of it again every night for what changes without a save, such as sale prices that start or end. **Catalog** shows how many products are still waiting. It runs from Magento's cron in its own group (`bluebarry`), so cron must be installed; `php bin/magento bluebarry:catalog:sync --all` sends the whole catalog on demand.
-6. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
+6. Search is switched on in bluebarry, under Search > Launch: the search box of every connected website then uses that configuration, and with **Full results page** on, bluebarry's results replace Magento's catalog search results page. The module reads these settings from bluebarry whenever bluebarry tells it they changed, through `bluebarry/command` (requests signed with the website's API key), and every hour, and refreshes the pages in the full page cache (and Varnish) that print them.
+7. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
 
 ### What is synced
 - Every simple, virtual, downloadable and bundle product, identified by its Magento product id. A configurable product's children are synced as variants grouped under it (its name, address and categories); configurable and grouped products themselves are not products in bluebarry.
