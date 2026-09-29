@@ -9,6 +9,7 @@ use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\App\CacheInterface;
 use Magento\Framework\Event\ManagerInterface;
 use Magento\Framework\FlagManager;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Magento\Store\Model\Website;
 use PHPUnit\Framework\TestCase;
@@ -22,6 +23,7 @@ class StorefrontTest extends TestCase
     private array $cache = [];
     private int $purges = 0;
     private array $answers = [];
+    private bool $locked = false;
 
     public function testReadsSearchForTheWebsite_AndPurgesThePagesOnceWhenItChanges(): void
     {
@@ -69,6 +71,45 @@ class StorefrontTest extends TestCase
         $this->assertSame([], $this->flag);
     }
 
+    public function testOnlyAnExplicitNullSwitchesSearchOff(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [
+            $this->answer(['profileId' => self::PROFILE, 'resultsPage' => false]),
+            new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'version' => 'v2'])), // no search at all
+            new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'search' => ['profileId' => 'nope'], 'version' => 'v2'])),
+            new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'search' => 'on', 'version' => 'v2'])),
+        ];
+        $storefront->refresh($this->website(1));
+
+        $this->assertNull($storefront->refresh($this->website(1)));
+        $this->assertNull($storefront->refresh($this->website(1)));
+        $this->assertNull($storefront->refresh($this->website(1)));
+        $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
+    }
+
+    public function testWhileAnotherWebsiteSavesNothingIsSavedOverIt(): void
+    {
+        $this->locked = true;
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        $this->storefront()->refresh($this->website(1));
+
+        $this->assertSame([], $this->flag);
+    }
+
+    public function testOldSettingsCachedByAPageDuringAChangeAreCleared(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false]), $this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        $storefront->refresh($this->website(1));
+        $this->cache[Storefront::FLAG] = '[]'; // a page read the flag before it was saved, and cached it after
+        $purges = $this->purges;
+
+        $storefront->refresh($this->website(1)); // unchanged in bluebarry
+        $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
+        $this->assertSame($purges + 1, $this->purges);
+    }
+
     private function answer(?array $search, string $tenant = self::TENANT): Response
     {
         return new Response(200, (string) json_encode(['tenantId' => $tenant, 'search' => $search, 'version' => $search ? 'v1' : 'v0']));
@@ -110,6 +151,8 @@ class StorefrontTest extends TestCase
             unset($this->cache[$id]);
             return true;
         });
-        return new Storefront($config, $client, $this->createStub(StoreManagerInterface::class), $flags, $events, $cache);
+        $locks = $this->createStub(LockManagerInterface::class);
+        $locks->method('lock')->willReturnCallback(fn () => !$this->locked);
+        return new Storefront($config, $client, $this->createStub(StoreManagerInterface::class), $flags, $events, $cache, $locks);
     }
 }
