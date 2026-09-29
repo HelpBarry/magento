@@ -116,7 +116,7 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
             return $result->setData(['noted' => false]);
         }
         $firstName = $quote->getCustomerFirstname() ?: ($quote->getBillingAddress() ? $quote->getBillingAddress()->getFirstname() : null);
-        $this->notes->note((int) $quote->getId(), (int) $store->getId(), $email, $firstName ? (string) $firstName : null);
+        $this->notes->note((int) $quote->getId(), (int) $store->getId(), $email, $firstName ? (string) $firstName : null, CheckoutNotes::lines($quote));
         return $result->setData(['noted' => true]);
     }
 

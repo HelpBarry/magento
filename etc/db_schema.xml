@@ -69,6 +69,7 @@
         <column xsi:type="smallint" name="store_id" unsigned="true" nullable="false" comment="Store view"/>
         <column xsi:type="varchar" name="email" length="255" nullable="false" comment="The shopper's email"/>
         <column xsi:type="varchar" name="first_name" length="255" nullable="true" comment="First name, when known"/>
+        <column xsi:type="varchar" name="cart" length="40" nullable="true" comment="Hash of the cart's lines when noted"/>
         <column xsi:type="smallint" name="completed" unsigned="true" nullable="false" default="0" comment="Became an order"/>
         <column xsi:type="datetime" name="noted_at" nullable="false" comment="Last change, UTC"/>
         <column xsi:type="datetime" name="sent_at" nullable="true" comment="Sent to bluebarry, UTC; empty when a change waits"/>

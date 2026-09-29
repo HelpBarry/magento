@@ -27,24 +27,49 @@ class CheckoutNotes
     }
 
     /**
-     * Notes the email of a checkout; a changed email waits to go again.
+     * Notes the email of a checkout; a changed email, name or cart waits to go again.
      *
      * @param int $quoteId
      * @param int $storeId
      * @param string $email
      * @param string|null $firstName
+     * @param array $lines from lines()
      * @return void
      */
-    public function note(int $quoteId, int $storeId, string $email, ?string $firstName): void
+    public function note(int $quoteId, int $storeId, string $email, ?string $firstName, array $lines = []): void
     {
         $connection = $this->connection();
+        $changed = 'email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)) OR NOT (cart <=> VALUES(cart))';
         $connection->query(sprintf(
-            'INSERT INTO %s (quote_id, store_id, email, first_name, noted_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP())'
-            . ' ON DUPLICATE KEY UPDATE sent_at = IF(email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)), NULL, sent_at),'
-            . ' noted_at = IF(email <> VALUES(email) OR NOT (first_name <=> VALUES(first_name)), VALUES(noted_at), noted_at),'
-            . ' email = VALUES(email), first_name = VALUES(first_name), store_id = VALUES(store_id)',
+            'INSERT INTO %s (quote_id, store_id, email, first_name, cart, noted_at) VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP())'
+            . " ON DUPLICATE KEY UPDATE sent_at = IF($changed, NULL, sent_at),"
+            . " noted_at = IF($changed, VALUES(noted_at), noted_at),"
+            . ' email = VALUES(email), first_name = VALUES(first_name), cart = VALUES(cart), store_id = VALUES(store_id)',
             $connection->quoteIdentifier($this->table())
-        ), [$quoteId, $storeId, mb_substr($email, 0, 255), $firstName === null ? null : mb_substr($firstName, 0, 255)]);
+        ), [
+            $quoteId, $storeId, mb_substr($email, 0, 255), $firstName === null ? null : mb_substr($firstName, 0, 255),
+            sha1((string) json_encode($lines)),
+        ]);
+    }
+
+    /**
+     * A cart's lines as bluebarry gets them: the catalog's reference (the variant for a configurable
+     * product) and the quantity in whole units.
+     *
+     * @param \Magento\Quote\Model\Quote $quote
+     * @return array<int, array{reference: string, quantity: int}>
+     */
+    public static function lines($quote): array
+    {
+        $lines = [];
+        foreach ($quote->getAllVisibleItems() as $item) {
+            $variant = $item->getOptionByCode('simple_product');
+            $lines[] = [
+                'reference' => (string) ($variant ? $variant->getValue() : $item->getProductId()),
+                'quantity' => max(1, (int) round((float) $item->getQty())),
+            ];
+        }
+        return $lines;
     }
 
     /**

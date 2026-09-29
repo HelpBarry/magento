@@ -68,7 +68,7 @@ class OrderSyncQueue
      * @param int[] $skipStoreIds store views whose website is waiting to try again
      * @return array<int, bool> order id => live
      */
-    public function claimNext(int $limit, string $claim, array $skipStoreIds = []): array
+    public function claimNext(int $limit, string $claim, array $skipStoreIds = [], array $skipOrderIds = []): array
     {
         $connection = $this->connection();
         $select = $connection->select()
@@ -76,6 +76,9 @@ class OrderSyncQueue
             ->where('queue.queued_at IS NOT NULL')
             ->order(['queue.queued_at', 'queue.order_id'])
             ->limit($limit);
+        if ($skipOrderIds) {
+            $select->where('queue.order_id NOT IN (?)', $skipOrderIds);
+        }
         if ($skipStoreIds) {
             $select->join(['sales_order' => $this->resource->getTableName('sales_order')], 'sales_order.entity_id = queue.order_id', [])
                 ->where('sales_order.store_id NOT IN (?)', $skipStoreIds);
@@ -121,7 +124,34 @@ class OrderSyncQueue
                 ['queued_at' => null, 'claim' => null, 'live' => 0, 'attempts' => 0, 'synced_at' => gmdate('Y-m-d H:i:s')],
                 ['order_id IN (?)' => $orderIds, 'claim = ?' => $claim]
             );
+            // Changed while on its way: the change goes too, but bluebarry has the order now, so it is no
+            // new purchase any more.
+            $this->connection()->update(
+                $this->table(),
+                ['live' => 0, 'synced_at' => new \Zend_Db_Expr('COALESCE(synced_at, UTC_TIMESTAMP())')],
+                ['order_id IN (?)' => $orderIds, 'claim IS NULL']
+            );
         }
+    }
+
+    /**
+     * Which of these orders this run still holds, and whether each is a new purchase now: a change
+     * saved since it was claimed takes it back (and may have made it no sale).
+     *
+     * @param int[] $orderIds
+     * @param string $claim
+     * @return array<int, bool> order id => live
+     */
+    public function claimed(array $orderIds, string $claim): array
+    {
+        if (!$orderIds) {
+            return [];
+        }
+        $connection = $this->connection();
+        return array_map(function ($live) {
+            return (bool) (int) $live;
+        }, $connection->fetchPairs($connection->select()->from($this->table(), ['order_id', 'live'])
+            ->where('order_id IN (?)', $orderIds)->where('claim = ?', $claim)));
     }
 
     /**

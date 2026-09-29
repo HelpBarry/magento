@@ -118,6 +118,18 @@ test.describe('orders', () => {
     expect(['REFUNDED', 'PARTIALLY_REFUNDED']).toContain(refunded.financialStatus);
   });
 
+  test('an order bluebarry refuses is tried again on a later run, not ten times in this one', async () => {
+    sql(`UPDATE bluebarry_order_sync SET queued_at = UTC_TIMESTAMP(), attempts = 0 WHERE order_id = ${orderId}`); // changed
+    await mockApi.respondWith({ status: 400, body: { error: 'refused' } });
+
+    syncOrders();
+
+    expect(await sent('/data/magento/orders/sync')).toHaveLength(1);
+    expect(sql(`SELECT attempts FROM bluebarry_order_sync WHERE order_id = ${orderId}`)).toBe('1');
+    await mockApi.reset();
+    syncOrders(); // delivered now
+  });
+
   let imported = 0;
 
   test("bluebarry's Orders page gets the last year, as history, with its progress", async ({ request }) => {
@@ -173,7 +185,32 @@ test.describe('orders', () => {
       });
       return (await response.json()).noted;
     });
+    sql("DELETE FROM core_config_data WHERE path = 'web/cookie/cookie_restriction'");
+    magento('cache:flush');
     expect(noted).toBe(false);
     expect(sql("SELECT COUNT(*) FROM bluebarry_checkout WHERE email = 'no-consent@example.com'")).toBe('0');
+  });
+
+  test('a checkout whose cart changed after it was sent goes again', async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    const note = () => page.evaluate(async () => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch('/bluebarry/checkout/email/', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, email: 'cart-changed@example.com' }).toString(),
+      });
+      return (await response.json()).noted;
+    });
+    expect(await note()).toBe(true);
+    sql("UPDATE bluebarry_checkout SET sent_at = UTC_TIMESTAMP() WHERE email = 'cart-changed@example.com'");
+
+    expect(await note()).toBe(true); // the same cart: nothing new to send
+    expect(sql("SELECT sent_at IS NULL FROM bluebarry_checkout WHERE email = 'cart-changed@example.com'")).toBe('0');
+
+    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    expect(await note()).toBe(true);
+    expect(sql("SELECT sent_at IS NULL FROM bluebarry_checkout WHERE email = 'cart-changed@example.com'")).toBe('1');
   });
 });
