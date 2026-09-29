@@ -6,6 +6,7 @@ use Bluebarry\Bluebarry\Model\Api\Client;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Module\ModuleListInterface;
 use Magento\Framework\Url;
 use Magento\Framework\UrlInterface;
@@ -60,6 +61,11 @@ class Heartbeat
     private $encryptor;
 
     /**
+     * @var LockManagerInterface
+     */
+    private $locks;
+
+    /**
      * @var Url
      */
     private $frontendUrl;
@@ -72,6 +78,7 @@ class Heartbeat
      * @param ModuleListInterface $moduleList
      * @param FlagManager $flags
      * @param EncryptorInterface $encryptor
+     * @param LockManagerInterface $locks
      * @param Url $frontendUrl
      */
     public function __construct(
@@ -82,6 +89,7 @@ class Heartbeat
         ModuleListInterface $moduleList,
         FlagManager $flags,
         EncryptorInterface $encryptor,
+        LockManagerInterface $locks,
         Url $frontendUrl
     ) {
         $this->config = $config;
@@ -91,6 +99,7 @@ class Heartbeat
         $this->moduleList = $moduleList;
         $this->flags = $flags;
         $this->encryptor = $encryptor;
+        $this->locks = $locks;
         $this->frontendUrl = $frontendUrl;
     }
 
@@ -112,9 +121,10 @@ class Heartbeat
             }
         }
         if ($force) {
-            $state = $this->state();
-            unset($state['force']);
-            $this->flags->saveFlag(self::FLAG, $state);
+            $this->update(function (array $state) {
+                unset($state['force']);
+                return $state;
+            });
         }
     }
 
@@ -181,9 +191,11 @@ class Heartbeat
             $outcome['ok'] = true;
             // What this registration was made with, to take it back when the website moves on. Kept
             // apart from the outcome, so a later failed check never loses it.
-            $state = $this->state();
-            $state['registrations'][$websiteId] = ['tenant' => strtolower($tenantId), 'site' => $siteUrl, 'key' => $this->encryptor->encrypt($apiKey)];
-            $this->flags->saveFlag(self::FLAG, $state);
+            $registration = ['tenant' => strtolower($tenantId), 'site' => $siteUrl, 'key' => $this->encryptor->encrypt($apiKey)];
+            $this->update(function (array $state) use ($websiteId, $registration) {
+                $state['registrations'][$websiteId] = $registration;
+                return $state;
+            });
         } elseif ($response->getStatus() === 409) {
             $outcome['error'] = 'The API key belongs to another bluebarry company than the Tenant ID.';
         } elseif ($response->getStatus() === 401 || $response->getStatus() === 403) {
@@ -204,13 +216,15 @@ class Heartbeat
     {
         // What each website registered with, which is what bluebarry knows it by; the settings may
         // hold a newer key it refused since.
-        $state = $this->state();
-        $registered = array_keys($state['registrations'] ?? []);
-        foreach ($registered as $websiteId) {
-            $state['retire'][] = $state['registrations'][$websiteId];
-            unset($state['registrations'][$websiteId]);
-        }
-        $this->flags->saveFlag(self::FLAG, $state);
+        $registered = [];
+        $this->update(function (array $state) use (&$registered) {
+            $registered = array_keys($state['registrations'] ?? []);
+            foreach ($registered as $websiteId) {
+                $state['retire'][] = $state['registrations'][$websiteId];
+                unset($state['registrations'][$websiteId]);
+            }
+            return $state;
+        });
         $this->retirePending();
         foreach ($this->storeManager->getWebsites() as $website) {
             if (in_array((int) $website->getId(), $registered, true)) {
@@ -237,12 +251,13 @@ class Heartbeat
      */
     private function retire(int $websiteId): void
     {
-        $state = $this->state();
-        if (isset($state['registrations'][$websiteId])) {
-            $state['retire'][] = $state['registrations'][$websiteId];
-            unset($state['registrations'][$websiteId]);
-            $this->flags->saveFlag(self::FLAG, $state);
-        }
+        $this->update(function (array $state) use ($websiteId) {
+            if (isset($state['registrations'][$websiteId])) {
+                $state['retire'][] = $state['registrations'][$websiteId];
+                unset($state['registrations'][$websiteId]);
+            }
+            return $state;
+        });
         $this->retirePending();
     }
 
@@ -276,11 +291,12 @@ class Heartbeat
             }
         }
         // Only what was taken back leaves the list: another run may have added to it meanwhile.
-        $state = $this->state();
-        $state['retire'] = array_values(array_filter($state['retire'] ?? [], function ($registration) use ($finished) {
-            return !in_array(json_encode($registration), $finished, true);
-        }));
-        $this->flags->saveFlag(self::FLAG, $state);
+        $this->update(function (array $state) use ($finished) {
+            $state['retire'] = array_values(array_filter($state['retire'] ?? [], function ($registration) use ($finished) {
+                return !in_array(json_encode($registration), $finished, true);
+            }));
+            return $state;
+        });
     }
 
     /**
@@ -290,9 +306,10 @@ class Heartbeat
      */
     public function forceNext(): void
     {
-        $state = $this->state();
-        $state['force'] = true;
-        $this->flags->saveFlag(self::FLAG, $state);
+        $this->update(function (array $state) {
+            $state['force'] = true;
+            return $state;
+        });
     }
 
     /**
@@ -334,16 +351,40 @@ class Heartbeat
      */
     private function record(int $websiteId, ?array $outcome): void
     {
-        $state = $this->state();
-        if ($outcome === null) {
-            if (!isset($state['websites'][$websiteId])) {
-                return; // an unconnected website stays one flag read
-            }
-            unset($state['websites'][$websiteId]);
-        } else {
-            $state['websites'][$websiteId] = $outcome;
+        if ($outcome === null && !isset($this->state()['websites'][$websiteId])) {
+            return; // an unconnected website stays one flag read
         }
-        $this->flags->saveFlag(self::FLAG, $state);
+        $this->update(function (array $state) use ($websiteId, $outcome) {
+            if ($outcome === null) {
+                unset($state['websites'][$websiteId]);
+            } else {
+                $state['websites'][$websiteId] = $outcome;
+            }
+            return $state;
+        });
+    }
+
+    /**
+     * Changes the flag. Heartbeats for several websites (the cron, a settings save) write it at once:
+     * one at a time, so none saves over what another just wrote. Never kept waiting long.
+     *
+     * @param callable $change the state in, the state to save out
+     * @return void
+     */
+    private function update(callable $change): void
+    {
+        $locked = $this->locks->lock(self::FLAG, 10);
+        try {
+            $state = $this->state();
+            $next = $change($state);
+            if ($next !== $state) {
+                $this->flags->saveFlag(self::FLAG, $next);
+            }
+        } finally {
+            if ($locked) {
+                $this->locks->unlock(self::FLAG);
+            }
+        }
     }
 
     /**
