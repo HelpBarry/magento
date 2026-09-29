@@ -123,6 +123,25 @@ class QueueChangedProducts implements ObserverInterface
     }
 
     /**
+     * The products of order lines whose stock changed: a configurable product's or a bundle's own line
+     * holds none (its variant's or parts' lines do). Queuing a configurable product would resend every
+     * variant; the variant and the parts bring the bundles they are in themselves.
+     *
+     * @param \Magento\Sales\Model\Order\Item[] $items
+     * @return int[]
+     */
+    private static function stockBearing(array $items): array
+    {
+        $ids = [];
+        foreach ($items as $item) {
+            if (!in_array($item->getProductType(), ['configurable', 'bundle'], true)) {
+                $ids[] = (int) $item->getProductId();
+            }
+        }
+        return $ids;
+    }
+
+    /**
      * @param \Magento\Framework\Event $event
      * @return int[]
      */
@@ -153,26 +172,18 @@ class QueueChangedProducts implements ObserverInterface
                 return [(int) $event->getData('item')->getProductId()];
             case 'sales_model_service_quote_submit_success':
             case 'order_cancel_after':
-                $ids = [];
-                foreach ($event->getData('order')->getAllItems() as $item) {
-                    $ids[] = (int) $item->getProductId();
-                }
-                return $ids;
+                return self::stockBearing($event->getData('order')->getAllItems());
             case 'checkout_submit_all_after':
                 // Multi-address checkout; a single order is queued on quote submit.
                 $ids = [];
                 foreach ((array) $event->getData('orders') as $order) {
-                    foreach ($order->getAllItems() as $item) {
-                        $ids[] = (int) $item->getProductId();
-                    }
+                    $ids = array_merge($ids, self::stockBearing($order->getAllItems()));
                 }
                 return $ids;
             case 'sales_order_creditmemo_save_after':
-                $ids = [];
-                foreach ($event->getData('creditmemo')->getAllItems() as $item) {
-                    $ids[] = (int) $item->getProductId();
-                }
-                return $ids;
+                return self::stockBearing(array_filter(array_map(function ($item) {
+                    return $item->getOrderItem();
+                }, $event->getData('creditmemo')->getAllItems())));
             default:
                 return [];
         }
