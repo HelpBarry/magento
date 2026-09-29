@@ -92,6 +92,17 @@ test.describe('page tracking', () => {
     expect(await page.evaluate(() => (window as any).barry.chat.context.productCollectionIds)).toContain(String(categoryId));
   });
 
+  test("the theme's cart changes reach the SDK with the cart itself", async ({ page }) => {
+    await page.addInitScript(() => {
+      document.addEventListener('cart:updated', (e) => ((window as any).__cartEvents ||= []).push((e as CustomEvent).detail));
+    });
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+
+    // Luma relays customer data's cart update, Hyvä its private-content-loaded (after its reload).
+    await expect.poll(() => page.evaluate(() => ((window as any).__cartEvents ?? []).some((d: any) => Number(d?.cart?.summary_count) > 0))).toBe(true);
+  });
+
   test('a shopper bluebarry never saw is not noted', async ({ page }) => {
     await stubAdvisor(page, null, { visitor: false });
     await addToCart(page, 'bb-simple');
