@@ -228,19 +228,23 @@ class Sync
                 $cooling[] = strtolower($target['tenantId']);
             }
         }
+        // Companies that missed changes the others received get the whole catalog again once they work.
+        // Queuing it sends the others' sync back to the first product, so only once a company took a
+        // real batch again (or with nothing queued, when there is no progress to lose). Asked with an
+        // empty request first, so one that still fails waits without costing a batch.
+        $recovering = [];
         foreach (array_keys($active) as $key) {
             if (!empty($this->state()['targets'][$key]['stale'])) {
-                // It missed changes the others received: the whole catalog again once it works. Asked
-                // with an empty request first, so a company that still fails never sends the others'
-                // sync back to the first product every five minutes.
                 $error = $this->post($active[$key], ['products' => [], 'reconcileGroupIds' => []]);
                 if ($error !== null) {
                     $this->updateTarget($key, ['retry_at' => time() + self::RETRY_AFTER, 'error' => $error]);
                     unset($active[$key]);
-                    continue;
+                } elseif ($this->queue->count() === 0) {
+                    $this->queue->enqueueAll();
+                    $this->updateTarget($key, ['stale' => false]);
+                } else {
+                    $recovering[$key] = true;
                 }
-                $this->queue->enqueueAll();
-                $this->updateTarget($key, ['stale' => false]);
             }
         }
         $start = time();
@@ -299,6 +303,10 @@ class Sync
                 unset($active[$key]);
             }
             foreach ($delivered as $key) {
+                if (isset($recovering[$key])) {
+                    unset($recovering[$key]);
+                    $this->queue->enqueueAll();
+                }
                 $this->updateTarget($key, null);
             }
 
