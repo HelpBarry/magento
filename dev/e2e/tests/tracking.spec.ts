@@ -67,6 +67,27 @@ test.describe('page tracking', () => {
     expect(add.i).toMatch(/^[a-z0-9]+$/);
   });
 
+  test("editing a line in the cart is not an add", async ({ page }) => {
+    await stubAdvisor(page, newAdvisorIds());
+    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    expect(await noted(page)).toHaveLength(1);
+    const parent = productId('bb-configurable'), red = productId('bb-configurable-red');
+    const attribute = sql(`SELECT attribute_id FROM catalog_product_super_attribute WHERE product_id = ${parent} LIMIT 1`);
+    const option = sql(`SELECT value FROM catalog_product_entity_int WHERE entity_id = ${red} AND attribute_id = ${attribute} AND store_id = 0`);
+    const sections = await (await page.request.get('/customer/section/load/?sections=cart&force_new_section_timestamp=true')).json();
+    const itemId = sections.cart.items.find((i: any) => String(i.product_id) === parent).item_id;
+    const formKey = (await page.context().cookies()).find((c) => c.name === 'form_key')!.value;
+
+    // The cart's Edit, then Update Cart with another quantity: Magento re-adds the line (Quote::updateItem).
+    await page.request.post(`/checkout/cart/updateItemOptions/id/${itemId}/`, {
+      form: { form_key: formKey, id: String(itemId), product: parent, qty: '3', [`super_attribute[${attribute}]`]: option },
+    });
+
+    const cart = await (await page.request.get('/customer/section/load/?sections=cart&force_new_section_timestamp=true')).json();
+    expect(Number(cart.cart.summary_count)).toBe(3);
+    expect(await noted(page)).toHaveLength(1);
+  });
+
   test('every line of a kit bluebarry adds is noted, with the quantity it added', async ({ page }) => {
     await stubAdvisor(page, newAdvisorIds());
     await page.goto('/bb-simple.html');
