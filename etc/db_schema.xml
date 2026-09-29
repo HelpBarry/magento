@@ -40,4 +40,47 @@
             <column name="product_id"/>
         </index>
     </table>
+    <!-- The store's orders in bluebarry: queued when paid or changed, sent in batches by the cron. The row
+         stays after sending (synced_at), so a later change is known to be a change, not a new purchase. -->
+    <table name="bluebarry_order_sync" resource="default" engine="innodb" comment="bluebarry order sync">
+        <column xsi:type="int" name="order_id" unsigned="true" nullable="false" comment="Order ID"/>
+        <column xsi:type="datetime" name="queued_at" nullable="true" comment="Waiting to be sent since, UTC; empty when sent"/>
+        <column xsi:type="smallint" name="live" unsigned="true" nullable="false" default="0" comment="A new purchase, for the order placed flow"/>
+        <column xsi:type="varchar" name="claim" length="32" nullable="true" comment="The run sending it; cleared when it changes again"/>
+        <column xsi:type="smallint" name="attempts" unsigned="true" nullable="false" default="0" comment="Times bluebarry refused it"/>
+        <column xsi:type="datetime" name="synced_at" nullable="true" comment="Last sent, UTC"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="order_id"/>
+        </constraint>
+        <constraint xsi:type="foreign" referenceId="BLUEBARRY_ORDER_SYNC_ORDER_ID_SALES_ORDER_ENTITY_ID"
+                    table="bluebarry_order_sync" column="order_id"
+                    referenceTable="sales_order" referenceColumn="entity_id" onDelete="CASCADE"/>
+        <index referenceId="BLUEBARRY_ORDER_SYNC_QUEUED_AT" indexType="btree">
+            <column name="queued_at"/>
+        </index>
+        <index referenceId="BLUEBARRY_ORDER_SYNC_CLAIM" indexType="btree">
+            <column name="claim"/>
+        </index>
+    </table>
+    <!-- A checkout with the shopper's email, for the abandoned checkout flow; sent a minute after the
+         email was given, and again once it became an order. -->
+    <table name="bluebarry_checkout" resource="default" engine="innodb" comment="bluebarry checkouts started">
+        <column xsi:type="int" name="quote_id" unsigned="true" nullable="false" comment="Quote ID"/>
+        <column xsi:type="smallint" name="store_id" unsigned="true" nullable="false" comment="Store view"/>
+        <column xsi:type="varchar" name="email" length="255" nullable="false" comment="The shopper's email"/>
+        <column xsi:type="varchar" name="first_name" length="255" nullable="true" comment="First name, when known"/>
+        <column xsi:type="smallint" name="completed" unsigned="true" nullable="false" default="0" comment="Became an order"/>
+        <column xsi:type="datetime" name="noted_at" nullable="false" comment="Last change, UTC"/>
+        <column xsi:type="datetime" name="sent_at" nullable="true" comment="Sent to bluebarry, UTC; empty when a change waits"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="quote_id"/>
+        </constraint>
+        <constraint xsi:type="foreign" referenceId="BLUEBARRY_CHECKOUT_QUOTE_ID_QUOTE_ENTITY_ID"
+                    table="bluebarry_checkout" column="quote_id"
+                    referenceTable="quote" referenceColumn="entity_id" onDelete="CASCADE"/>
+        <index referenceId="BLUEBARRY_CHECKOUT_SENT_AT_NOTED_AT" indexType="btree">
+            <column name="sent_at"/>
+            <column name="noted_at"/>
+        </index>
+    </table>
 </schema>

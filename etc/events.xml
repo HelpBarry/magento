@@ -3,13 +3,16 @@
         <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
         <!-- Their stock went down. -->
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+        <observer name="bluebarry_complete_checkout" instance="Bluebarry\Bluebarry\Observer\CompleteCheckout" />
     </event>
     <!-- Multi-address checkout: its orders only come with this event. -->
     <event name="checkout_submit_all_after">
         <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
+        <observer name="bluebarry_complete_checkout" instance="Bluebarry\Bluebarry\Observer\CompleteCheckout" />
     </event>
     <event name="sales_order_save_after">
         <observer name="bluebarry_queue_paid_order" instance="Bluebarry\Bluebarry\Observer\QueuePaidOrder" />
+        <observer name="bluebarry_queue_order_sync" instance="Bluebarry\Bluebarry\Observer\QueueOrderSync" />
     </event>
     <!-- Catalog sync: queue the products a change touched (one insert; sent from the cron). -->
     <event name="catalog_product_save_after">
