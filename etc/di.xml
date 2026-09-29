@@ -37,6 +37,16 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <type name="Bluebarry\Bluebarry\Observer\QueueChangedProducts">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Catalog\Sync">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
     <!-- Settings page and save: build the heartbeat (and its HTTP client) only when used. -->
     <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection">
         <arguments>
@@ -47,6 +57,7 @@
         <arguments>
             <argument name="commands" xsi:type="array">
                 <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
+                <item name="bluebarry_catalog_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncCatalog</item>
             </argument>
         </arguments>
     </type>
@@ -54,6 +65,27 @@
         <arguments>
             <argument name="job" xsi:type="object">Bluebarry\Bluebarry\Cron\SendDueConversions\Proxy</argument>
         </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\SyncCatalog">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Catalog">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
+        </arguments>
+    </type>
+    <!-- Multi-source inventory saves stock without a product or stock item event. -->
+    <type name="Magento\InventoryApi\Api\SourceItemsSaveInterface">
+        <plugin name="bluebarry_queue_source_item_products" type="Bluebarry\Bluebarry\Plugin\Inventory\QueueSourceItemProducts"/>
+    </type>
+    <type name="Magento\InventoryApi\Api\SourceItemsDeleteInterface">
+        <plugin name="bluebarry_queue_source_item_products" type="Bluebarry\Bluebarry\Plugin\Inventory\QueueSourceItemProducts"/>
+    </type>
+    <!-- Mass attribute updates have no event after the write; queue them once it is done. -->
+    <type name="Magento\Catalog\Model\Product\Action">
+        <plugin name="bluebarry_queue_mass_updated_products" type="Bluebarry\Bluebarry\Plugin\Catalog\QueueMassUpdatedProducts"/>
     </type>
     <type name="Magento\MysqlMq\Model\QueueManagement">
         <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>

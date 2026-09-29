@@ -6,6 +6,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 - Injects Bluebarry advisor script into your storefront
 - Records every paid order from a shopper who used bluebarry (quiz, search, recommendations, product chat, popups) and identifies the buyer's email, from the background so checkout never waits
 - Connects each Magento website to bluebarry with its Tenant ID and API key, and shows the connection in the admin and in bluebarry
+- Keeps bluebarry's copy of your catalog current without a product feed: products, variants, attributes, categories, prices, sale prices, images and stock
 
 ## Installation
 
@@ -61,7 +62,15 @@ With `--remove-data`, Magento runs the module's own uninstall step, which tells 
 2. Enter your **Tenant ID** (find it in your Bluebarry account integrations page).
 3. Enter an **API Key**: create one in bluebarry under Integrations, Developer area, API keys. It is stored encrypted and connects the website to bluebarry. With several websites, switch the scope to set the Tenant ID and API key per website.
 4. Save. Magento shows whether each website is connected, and **Connection** shows the last check. The module reports in daily from Magento's cron, so bluebarry shows the store as connected under Integrations.
-5. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
+5. Once a website is connected, the module sends your catalog to bluebarry: all of it right away, then every product that changes (saves, mass actions, imports, stock taken by orders), and all of it again every night for what changes without a save, such as sale prices that start or end. **Catalog** shows how many products are still waiting. It runs from Magento's cron in its own group (`bluebarry`), so cron must be installed; `php bin/magento bluebarry:catalog:sync --all` sends the whole catalog on demand.
+6. (Optional) Enable debug logging for conversion requests. The requests and API responses are written to `var/log/bluebarry.log`; errors also appear in `var/log/system.log`.
+
+### What is synced
+- Every simple, virtual, downloadable and bundle product, identified by its Magento product id. A configurable product's children are synced as variants grouped under it (its name, address and categories); configurable and grouped products themselves are not products in bluebarry.
+- Names, addresses, images and prices as the website's default store view shows them to guests, in its display currency: the price shoppers pay (special prices and catalog price rules included) and the regular price while it is higher.
+- Stock status and, while Magento manages the stock without backorders, the quantity that can still be sold.
+- Attributes that are shown on the product page or filterable in the layered navigation, as `attr_<code>`, and the product's categories.
+- Websites that share a Tenant ID send one catalog: the default website's, or else the first one's.
 
 ## Usage
 - The Bluebarry advisor widget will appear on your storefront if Tenant ID is set.

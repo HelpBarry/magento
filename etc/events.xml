@@ -1,12 +1,46 @@
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
     <event name="sales_model_service_quote_submit_success">
         <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
+        <!-- Their stock went down. -->
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
     <!-- Multi-address checkout: its orders only come with this event. -->
     <event name="checkout_submit_all_after">
         <observer name="bluebarry_checkout_conversion_tracking" instance="Bluebarry\Bluebarry\Observer\ProcessConversion" />
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
     <event name="sales_order_save_after">
         <observer name="bluebarry_queue_paid_order" instance="Bluebarry\Bluebarry\Observer\QueuePaidOrder" />
+    </event>
+    <!-- Catalog sync: queue the products a change touched (one insert; sent from the cron). -->
+    <event name="catalog_product_save_before">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_product_save_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_product_delete_before">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_product_to_website_change">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_category_change_products">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_product_import_bunch_save_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="catalog_product_import_bunch_delete_commit_before">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="cataloginventory_stock_item_save_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="order_cancel_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="sales_order_creditmemo_save_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
 </config>

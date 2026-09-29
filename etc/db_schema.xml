@@ -24,4 +24,20 @@
             <column name="next_attempt_at"/>
         </index>
     </table>
+    <!-- Products whose change still has to reach bluebarry. No foreign key: a deleted product stays
+         queued, so bluebarry hears it is gone. -->
+    <table name="bluebarry_product_sync" resource="default" engine="innodb" comment="bluebarry catalog sync queue">
+        <column xsi:type="int" name="product_id" unsigned="true" nullable="false" comment="Product ID"/>
+        <column xsi:type="varchar" name="claim" length="32" nullable="true" comment="The sync run sending it; cleared when it changes again"/>
+        <column xsi:type="smallint" name="attempts" unsigned="true" nullable="false" default="0" comment="Times it could not be read"/>
+        <column xsi:type="datetime" name="queued_at" nullable="false" comment="Last change, UTC"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="product_id"/>
+        </constraint>
+        <!-- Each batch is read back by its claim. -->
+        <index referenceId="BLUEBARRY_PRODUCT_SYNC_CLAIM_PRODUCT_ID" indexType="btree">
+            <column name="claim"/>
+            <column name="product_id"/>
+        </index>
+    </table>
 </schema>
