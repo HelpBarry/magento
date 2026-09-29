@@ -197,6 +197,10 @@ class Heartbeat
             $registration = ['tenant' => strtolower($tenantId), 'site' => $siteUrl, 'key' => $this->encryptor->encrypt($apiKey)];
             $this->update(function (array $state) use ($websiteId, $registration) {
                 $state['registrations'][$websiteId] = $registration;
+                // Back at a registration still waiting to be taken back: it is the current one again.
+                $state['retire'] = array_values(array_filter($state['retire'] ?? [], function ($retired) use ($registration) {
+                    return $retired['tenant'] !== $registration['tenant'] || $retired['site'] !== $registration['site'];
+                }));
                 return $state;
             });
         } elseif ($response->getStatus() === 409) {
