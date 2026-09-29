@@ -104,6 +104,9 @@ test.describe('add to cart from bluebarry', () => {
     try {
       const result = await add(page, [{ reference: id, quantity: 1 }]);
       expect(result.body).toEqual({ success: false, skipped: [id], failure: 'soldOut' });
+      // With a line that failed for another reason too, it is not only a matter of stock.
+      const mixed = await add(page, [{ reference: id, quantity: 1 }, { reference: '999999', quantity: 1 }]);
+      expect(mixed.body).toEqual({ success: false, skipped: [id, '999999'], failure: 'error' });
     } finally {
       sql(`UPDATE cataloginventory_stock_item SET is_in_stock = 1 WHERE product_id = ${id}`);
       sql(`UPDATE cataloginventory_stock_status SET stock_status = 1 WHERE product_id = ${id}`);

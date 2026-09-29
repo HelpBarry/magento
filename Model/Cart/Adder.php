@@ -99,6 +99,7 @@ class Adder
         $skipped = [];
         $added = [];
         $soldOut = false;
+        $otherFailure = false;
         foreach (array_values($items) as $index => $item) {
             $reference = (string) ($item['reference'] ?? '');
             $quantity = $item['quantity'] ?? 1;
@@ -106,12 +107,14 @@ class Adder
             // as is; Magento refuses it for a product not sold in decimal quantities.
             if ($index >= self::MAX_LINES || !is_numeric($quantity) || $quantity <= 0 || $quantity > self::MAX_QUANTITY) {
                 $skipped[] = $reference;
+                $otherFailure = true;
                 continue;
             }
             try {
                 [$product, $request, $referenced] = $this->resolve($reference, 0 + $quantity);
             } catch (NoSuchEntityException $e) {
                 $skipped[] = $reference;
+                $otherFailure = true;
                 continue;
             }
             $before = $this->snapshot();
@@ -125,11 +128,16 @@ class Adder
                 // Sold out when Magento says the product cannot be sold; anything else (a required
                 // option the shopper has to choose, too many for what is left) is an error.
                 $skipped[] = $reference;
-                $soldOut = $soldOut || !$referenced->isSalable();
+                if ($referenced->isSalable()) {
+                    $otherFailure = true;
+                } else {
+                    $soldOut = true;
+                }
             }
         }
         if (!$added) {
-            return ['success' => false, 'skipped' => $skipped, 'failure' => $soldOut ? 'soldOut' : 'error'];
+            // Sold out only when that is all that went wrong.
+            return ['success' => false, 'skipped' => $skipped, 'failure' => $soldOut && !$otherFailure ? 'soldOut' : 'error'];
         }
         $this->cart->save();
         foreach ($added as [$product, $buyRequest]) {
@@ -259,15 +267,21 @@ class Adder
             }
             $optionId = (int) $selection->getOptionId();
             $options[$optionId][] = (int) $selection->getSelectionId();
-            // Per selection: an option with several defaults keeps each one's own quantity.
             $quantities[$optionId][(int) $selection->getSelectionId()] = (float) $selection->getSelectionQty() ?: 1;
         }
         foreach ($type->getOptionsCollection($bundle) as $option) {
             $optionId = (int) $option->getId();
-            if (isset($options[$optionId]) && in_array($option->getType(), ['select', 'radio'], true)) {
+            if (!isset($options[$optionId])) {
+                continue;
+            }
+            if (in_array($option->getType(), ['select', 'radio'], true)) {
                 // A single choice, and its quantity as the option's.
                 $options[$optionId] = $options[$optionId][0];
                 $quantities[$optionId] = $quantities[$optionId][$options[$optionId]];
+            } else {
+                // Several choices: no quantity for the option, so each keeps its own (Magento's option
+                // quantity is one number).
+                unset($quantities[$optionId]);
             }
         }
         return ['bundle_option' => $options, 'bundle_option_qty' => $quantities];
