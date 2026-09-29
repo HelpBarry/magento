@@ -29,6 +29,8 @@ class SyncTest extends TestCase
     private array $unreadable = [];
     /** @var int[] products deleted from the catalog */
     private array $gone = [];
+    /** @var array<int, int> product => read attempts counted */
+    private array $attempts = [];
     /** @var array<int, int[]> queued configurable product => the children build() adds */
     private array $expanded = [];
     private bool $locked = false;
@@ -228,6 +230,20 @@ class SyncTest extends TestCase
         $this->assertSame('', $this->queued[9]);
     }
 
+    public function testAnUnreadableVariantIsTriedOncePerRun(): void
+    {
+        // Configurable product 5's variant 9 cannot be read: it gets a row of its own, after 5.
+        $sync = $this->sync([200, 200, 200], tenants: [1 => 'a']);
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
+        $this->queued = [5 => ''];
+        $this->expanded = [5 => [9]];
+        $this->unreadable = [9];
+
+        $sync->run();
+
+        $this->assertSame(1, $this->attempts[9] ?? 0);
+    }
+
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
         $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
@@ -383,7 +399,12 @@ class SyncTest extends TestCase
                 }
             }
         });
-        $queue->method('fail')->willReturn([]);
+        $queue->method('fail')->willReturnCallback(function ($ids) {
+            foreach ($ids as $id) {
+                $this->attempts[$id] = ($this->attempts[$id] ?? 0) + 1;
+            }
+            return [];
+        });
         $queue->method('count')->willReturnCallback(fn () => count($this->queued));
 
         $flags = $this->createStub(FlagManager::class);
