@@ -7,7 +7,7 @@ use Bluebarry\Bluebarry\Observer\NoteAddToCart;
 use Magento\Cookie\Helper\Cookie as CookieHelper;
 use Magento\Framework\Event;
 use Magento\Framework\Event\Observer;
-use Magento\Framework\Stdlib\Cookie\CookieMetadataFactory;
+use Magento\Framework\Stdlib\Cookie\PublicCookieMetadataFactory;
 use Magento\Framework\Stdlib\Cookie\PublicCookieMetadata;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Quote\Model\Quote\Item;
@@ -63,8 +63,8 @@ class NoteAddToCartTest extends TestCase
         $cookies->method('setPublicCookie')->willReturnCallback(function ($name, $value) {
             $this->cookie = $value;
         });
-        $metadata = $this->createStub(CookieMetadataFactory::class);
-        $metadata->method('createPublicCookieMetadata')->willReturn(new PublicCookieMetadata());
+        $metadata = $this->createStub(PublicCookieMetadataFactory::class);
+        $metadata->method('create')->willReturn(new PublicCookieMetadata());
         return new NoteAddToCart($config, $storeManager, $cookies, $metadata, $this->createStub(CookieHelper::class), new NullLogger());
     }
 
