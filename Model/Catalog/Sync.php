@@ -392,12 +392,13 @@ class Sync
         $hour = (int) $now->format('G');
         $lastDay = isset($state['full_at']) ? $this->timezone->date(new \DateTime('@' . (int) $state['full_at']))->format('Y-m-d') : '';
         $nightly = $targets && $hour >= 1 && $hour < 5 && ($lastDay !== $now->format('Y-m-d') || $this->fullAtBefore($state, 1));
+        // A company that left gets the whole catalog when it comes back, and its failure is no more.
+        $failures = array_intersect_key($state['targets'] ?? [], $sources) ?: null;
         if ($changed || $nightly) {
             $this->queue->enqueueAll();
-            $this->saveState(['tenants' => $sources, 'full_at' => time()]);
+            $this->saveState(['tenants' => $sources, 'full_at' => time(), 'targets' => $failures]);
         } elseif ($sources != $saved) {
-            // A company left: it gets the whole catalog when it comes back, and its failure is no more.
-            $this->saveState(['tenants' => $sources, 'targets' => array_intersect_key($state['targets'] ?? [], $sources) ?: null]);
+            $this->saveState(['tenants' => $sources, 'targets' => $failures]);
         }
     }
 
