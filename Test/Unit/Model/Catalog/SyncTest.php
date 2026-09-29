@@ -34,6 +34,7 @@ class SyncTest extends TestCase
     /** @var array<int, int[]> queued configurable product => the children build() adds */
     private array $expanded = [];
     private bool $locked = false;
+    private ?int $brokenKey = null;
     private string $now = '2026-09-29 14:00:00 UTC';
     /** @var callable|null */
     private $onPost;
@@ -143,7 +144,7 @@ class SyncTest extends TestCase
 
     public function testOneCompanysFailureDoesNotHoldUpAnother_ItGetsTheWholeCatalogOnceItWorks(): void
     {
-        $sync = $this->sync([503, 200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
+        $sync = $this->sync([503, 200, 200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
         $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
         $this->queued = [5 => ''];
 
@@ -170,6 +171,34 @@ class SyncTest extends TestCase
 
         $this->assertSame(1, $this->catalogQueued);
         $this->assertFalse($this->flag['targets']['a']['stale'] ?? false);
+    }
+
+    public function testAWebsiteWhoseKeyCannotBeReadDoesNotStopTheOthers(): void
+    {
+        $sync = $this->sync([200], tenants: [1 => 'a', 3 => 'b']);
+        $this->brokenKey = 1;
+        $this->flag = ['tenants' => ['b' => 3], 'full_at' => time()];
+        $this->queued = [5 => ''];
+
+        $this->assertSame(1, $sync->run()['sent']);
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+    }
+
+    public function testACompanyThatStillFailsDoesNotSendTheOthersBackToTheFirstProduct(): void
+    {
+        $sync = $this->sync([401, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() - 1, 'error' => 'x', 'stale' => true]]];
+        $this->queued = [5 => ''];
+
+        $sync->run();
+
+        $this->assertSame(0, $this->catalogQueued);
+        $this->assertSame(['key-1'], array_column($this->calls, 'probe')); // asked first, with nothing
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([], array_keys($this->queued)); // b received it
+        $this->assertTrue($this->flag['targets']['a']['stale']);
+        $this->assertGreaterThan(time(), $this->flag['targets']['a']['retry_at']);
+        $this->assertSame('bluebarry refused the API key.', $sync->status()['error']);
     }
 
     public function testACompanyWaitingOutAFailureMissesWhatAnotherReceives_SoItGetsTheCatalogLater(): void
@@ -321,7 +350,12 @@ class SyncTest extends TestCase
         }
         $config = $this->createStub(Config::class);
         $config->method('getWebsiteTenantId')->willReturnCallback(fn ($id) => $tenants[(int) $id] ?? null);
-        $config->method('getWebsiteApiKey')->willReturnCallback(fn ($id) => isset($tenants[(int) $id]) ? "key-$id" : null);
+        $config->method('getWebsiteApiKey')->willReturnCallback(function ($id) use ($tenants) {
+            if ((int) $id === $this->brokenKey) {
+                throw new \Exception('Unable to decrypt the key.');
+            }
+            return isset($tenants[(int) $id]) ? "key-$id" : null;
+        });
 
         $storeManager = $this->createStub(StoreManagerInterface::class);
         $storeManager->method('getWebsites')->willReturn(array_reverse($websites, true));
@@ -342,7 +376,11 @@ class SyncTest extends TestCase
 
         $client = $this->createStub(Client::class);
         $client->method('post')->willReturnCallback(function ($path, $body, $tenant, $key) use (&$statuses) {
-            $this->calls[count($this->calls) - 1] += ['path' => $path, 'key' => $key, 'body' => $body];
+            if (!$body['products'] && !$body['reconcileGroupIds']) {
+                $this->calls[] = ['probe' => $key];
+            } else {
+                $this->calls[count($this->calls) - 1] += ['path' => $path, 'key' => $key, 'body' => $body];
+            }
             if ($this->onPost) {
                 ($this->onPost)();
             }
