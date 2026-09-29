@@ -197,8 +197,19 @@ class ProductBuilder
                 ->from(['changelog' => $this->resource->getTableName($changelog->getName())], [])
                 ->where('changelog.version_id > ?', (int) $view->getState()->getVersionId());
             if ($indexerId === 'inventory') {
-                // Its changelog names source items; they name the product by SKU.
-                $select->join(['source_item' => $this->resource->getTableName('inventory_source_item')], "source_item.source_item_id = $column", [])
+                // Its changelog names source items, which name the product by SKU. A deleted one names
+                // nothing any more: then every recent change waits for the index, which is never long.
+                $sourceItems = $this->resource->getTableName('inventory_source_item');
+                $deleted = $connection->fetchOne($connection->select()
+                    ->from(['changelog' => $this->resource->getTableName($changelog->getName())], [new \Zend_Db_Expr('1')])
+                    ->joinLeft(['source_item' => $sourceItems], "source_item.source_item_id = $column", [])
+                    ->where('changelog.version_id > ?', (int) $view->getState()->getVersionId())
+                    ->where('source_item.source_item_id IS NULL')
+                    ->limit(1));
+                if ($deleted) {
+                    return $recent;
+                }
+                $select->join(['source_item' => $sourceItems], "source_item.source_item_id = $column", [])
                     ->join(['product' => $products], 'product.sku = source_item.sku', ['entity_id']);
             } else {
                 // Only products that still exist: a deleted one has nothing to wait for.
