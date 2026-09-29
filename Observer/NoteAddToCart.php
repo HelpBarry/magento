@@ -7,7 +7,7 @@ use Bluebarry\Bluebarry\Model\Visitor;
 use Magento\Cookie\Helper\Cookie as CookieHelper;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
-use Magento\Framework\Stdlib\Cookie\CookieMetadataFactory;
+use Magento\Framework\Stdlib\Cookie\PublicCookieMetadataFactory;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -42,7 +42,7 @@ class NoteAddToCart implements ObserverInterface
     private $cookies;
 
     /**
-     * @var CookieMetadataFactory
+     * @var PublicCookieMetadataFactory
      */
     private $cookieMetadata;
 
@@ -70,7 +70,7 @@ class NoteAddToCart implements ObserverInterface
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param CookieManagerInterface $cookies
-     * @param CookieMetadataFactory $cookieMetadata
+     * @param PublicCookieMetadataFactory $cookieMetadata
      * @param CookieHelper $cookieHelper
      * @param LoggerInterface $logger
      */
@@ -78,7 +78,7 @@ class NoteAddToCart implements ObserverInterface
         Config $config,
         StoreManagerInterface $storeManager,
         CookieManagerInterface $cookies,
-        CookieMetadataFactory $cookieMetadata,
+        PublicCookieMetadataFactory $cookieMetadata,
         CookieHelper $cookieHelper,
         LoggerInterface $logger
     ) {
@@ -148,7 +148,7 @@ class NoteAddToCart implements ObserverInterface
                 $this->pending = self::pending((string) $this->cookies->getCookie(self::COOKIE));
             }
             $this->pending = array_slice(array_merge($this->pending, $added), -self::KEEP);
-            $metadata = $this->cookieMetadata->createPublicCookieMetadata()
+            $metadata = $this->cookieMetadata->create()
                 // Host-only on the whole host, where the SDK clears it.
                 ->setPath('/')
                 ->setDuration(86400)

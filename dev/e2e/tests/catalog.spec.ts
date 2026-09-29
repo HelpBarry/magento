@@ -143,12 +143,14 @@ test.describe('catalog sync', () => {
     });
     expect(queued(id)).toBe(1);
 
-    syncCatalog(); // the price index ("Update by Schedule") has not run: it waits
-    expect(await sent(id)).toEqual([]);
-    expect(queued(id)).toBe(1);
-
-    magento('indexer:reindex', 'catalog_product_price');
+    // While the price index ("Update by Schedule") has not run, it waits. Where the index already
+    // caught up (older Magento reindexes this save itself) it goes now; never with the old price.
     syncCatalog();
+    if ((await sent(id)).length === 0) {
+      expect(queued(id)).toBe(1);
+      magento('indexer:reindex', 'catalog_product_price');
+      syncCatalog();
+    }
     const [product] = await sent(id);
     expect(property(product, 'price')).toBe(25);
     expect(property(product, 'compare_at_price')).toBe(30);
@@ -219,13 +221,14 @@ test.describe('catalog sync', () => {
     };
     await stock(false);
     try {
-      // The stock index ("Update by Schedule") has not run: the bundle would still read in stock, so it waits.
+      // While the stock index ("Update by Schedule") has not run, the bundle would still read in stock, so
+      // it waits. Where the index already caught up (older Magento) it goes now; never as in stock.
       syncCatalog();
-      expect(await sent(productId('bb-bundle-fixed'))).toEqual([]);
-      expect(queued(productId('bb-part-a'))).toBe(1);
-
-      reindex(); // as the indexer cron would
-      syncCatalog();
+      if ((await sent(productId('bb-bundle-fixed'))).length === 0) {
+        expect(queued(productId('bb-part-a'))).toBe(1);
+        reindex(); // as the indexer cron would
+        syncCatalog();
+      }
       const [bundle] = await sent(productId('bb-bundle-fixed'));
       expect(property(bundle, 'stock_status')).toBe('outofstock');
     } finally {
@@ -282,13 +285,16 @@ test.describe('catalog sync', () => {
     try {
       expect(queued(productId('bb-simple'))).toBe(1);
 
-      // Taken off its source: queued too, and it waits for the inventory index like a save does.
+      // Taken off its source: queued too, and it waits for the inventory index like a save does. Where the
+      // index already caught up (older Magento) it goes now; never as in stock.
       magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
       sql('DELETE FROM bluebarry_product_sync');
       await rest(request, 'post', '/rest/V1/inventory/source-items-delete', { sourceItems: [{ sku: 'bb-simple', source_code: 'default' }] });
       expect(queued(productId('bb-simple'))).toBe(1);
       syncCatalog();
-      expect(await sent(productId('bb-simple'))).toEqual([]);
+      const [early] = await sent(productId('bb-simple'));
+      if (early) expect(property(early, 'stock_status')).toBe('outofstock');
+      else expect(queued(productId('bb-simple'))).toBe(1);
     } finally {
       await rest(request, 'post', '/rest/V1/inventory/source-items', {
         sourceItems: [{ sku: 'bb-simple', source_code: 'default', quantity, status: 1 }],
