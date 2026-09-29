@@ -25,8 +25,11 @@ class Storefront
 {
     public const FLAG = 'bluebarry_storefront';
 
-    /** The cache tag of every page that prints the settings (Block\Advisor). */
+    /** The cache tag of every page that prints the settings (Block\Advisor), per website: cacheTag(). */
     public const CACHE_TAG = 'bluebarry_storefront';
+
+    /** How long after a change a page may still have kept the old settings. */
+    private const SETTLE = 1800;
 
     /**
      * @var Config
@@ -135,9 +138,11 @@ class Storefront
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
         $apiKey = $this->config->getWebsiteApiKey($websiteId);
         if ($tenantId === null || $apiKey === null) {
-            $this->save($websiteId, null);
+            $this->save($websiteId, null, self::now());
             return null;
         }
+        // When this read started: a read started later that saved already wins over this one.
+        $started = self::now();
         $response = $this->client->get('/data/magento/storefront', $apiKey, 10);
         $answer = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($answer) || strtolower((string) ($answer['tenantId'] ?? '')) !== strtolower($tenantId)) {
@@ -158,16 +163,28 @@ class Storefront
             return null;
         }
         $version = (string) ($answer['version'] ?? '');
-        $this->save($websiteId, ['tenantId' => strtolower($tenantId), 'version' => $version, 'search' => $search]);
+        $this->save($websiteId, ['tenantId' => strtolower($tenantId), 'version' => $version, 'search' => $search], $started);
         return $version;
+    }
+
+    /**
+     * The cache tag of the pages that print a website's settings.
+     *
+     * @param int $websiteId
+     * @return string
+     */
+    public static function cacheTag(int $websiteId): string
+    {
+        return self::CACHE_TAG . '_' . $websiteId;
     }
 
     /**
      * @param int $websiteId
      * @param array|null $settings
+     * @param int $started when the read began, in milliseconds
      * @return void
      */
-    private function save(int $websiteId, ?array $settings): void
+    private function save(int $websiteId, ?array $settings, int $started): void
     {
         // Websites refresh on their own (the cron, bluebarry's commands): one writes at a time, so
         // none saves over another's newer settings. Not now: the next refresh saves them.
@@ -175,7 +192,7 @@ class Storefront
             return;
         }
         try {
-            $this->write($websiteId, $settings);
+            $this->write($websiteId, $settings, $started);
         } finally {
             $this->locks->unlock(self::FLAG);
         }
@@ -184,38 +201,92 @@ class Storefront
     /**
      * @param int $websiteId
      * @param array|null $settings
+     * @param int $started when the read began, in milliseconds
      * @return void
      */
-    private function write(int $websiteId, ?array $settings): void
+    private function write(int $websiteId, ?array $settings, int $started): void
     {
         $state = $this->state();
         $before = $state[$websiteId] ?? null;
-        if ($settings === null) {
-            unset($state[$websiteId]);
-        } else {
-            $state[$websiteId] = $settings;
+        if ($settings !== null && (int) ($before['fetched'] ?? 0) > $started) {
+            return; // a read that began later saved newer settings already
         }
-        if ($before === ($state[$websiteId] ?? null)) {
-            // A page that read the settings while they changed may have cached the old ones.
+        if (self::content($before) === self::content($settings)) {
             $cached = $this->cache->load(self::FLAG);
-            if (!is_string($cached) || json_decode($cached, true) == $state) {
+            if (is_string($cached) && json_decode($cached, true) == $state) {
+                return; // pages read what is saved
+            }
+            // A page that read the settings while they changed may have kept the old ones: in the
+            // settings cache (it differs) or only in the page cache (the settings cache is gone then).
+            // Long after a change, a missing entry is just a cold cache.
+            if (!is_string($cached) && time() - (int) ($before['written'] ?? 0) >= self::SETTLE) {
                 return;
             }
         } else {
+            if ($settings === null) {
+                unset($state[$websiteId]);
+            } else {
+                $state[$websiteId] = $settings + ['fetched' => $started, 'written' => time()];
+            }
             $this->flags->saveFlag(self::FLAG, $state);
         }
         $this->cache->remove(self::FLAG);
-        // Every page prints these, so every page carries the tag. The same event Magento's own saves
-        // use: it cleans the built-in page cache and purges Varnish.
-        $this->events->dispatch('clean_cache_by_tags', ['object' => new class extends DataObject implements IdentityInterface {
+        $this->purge($websiteId);
+    }
+
+    /**
+     * The website's pages leave the built-in page cache and Varnish: the same event Magento's own
+     * saves use, with the tag only that website's pages carry.
+     *
+     * @param int $websiteId
+     * @return void
+     */
+    private function purge(int $websiteId): void
+    {
+        $this->events->dispatch('clean_cache_by_tags', ['object' => new class ($websiteId) extends DataObject implements IdentityInterface {
+            /**
+             * @var int
+             */
+            private $websiteId;
+
+            /**
+             * @param int $websiteId
+             */
+            public function __construct(int $websiteId)
+            {
+                parent::__construct();
+                $this->websiteId = $websiteId;
+            }
+
             /**
              * @return string[]
              */
             public function getIdentities()
             {
-                return [Storefront::CACHE_TAG];
+                return [Storefront::cacheTag($this->websiteId)];
             }
         }]);
+    }
+
+    /**
+     * Milliseconds: exact in the flag's and the cache's JSON, which Magento writes with 14 digits.
+     *
+     * @return int
+     */
+    private static function now(): int
+    {
+        return (int) round(microtime(true) * 1000);
+    }
+
+    /**
+     * What a website shows, without when it was read and saved.
+     *
+     * @param array|null $settings
+     * @return array|null
+     */
+    private static function content(?array $settings): ?array
+    {
+        return $settings === null ? null : array_diff_key($settings, ['fetched' => true, 'written' => true]);
     }
 
     /**
