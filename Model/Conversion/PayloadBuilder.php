@@ -70,8 +70,9 @@ class PayloadBuilder
             'userId' => $visitor['user_id'],
             'commerceSource' => 'Magento',
             'commerceStoreKey' => $storeKey,
-            // Keyed like the order, so bluebarry's order history recognises this purchase as that order.
-            'conversionId' => (string) $order->getEntityId(),
+            // Keyed like the order, so bluebarry's order history recognises this purchase as that order: its
+            // order number, as the merchant knows it from the admin and the shopper from their email.
+            'conversionId' => (string) $order->getIncrementId(),
             'occurredAtUtc' => $this->utc((string) $order->getCreatedAt()),
             'currencyIso' => $order->getOrderCurrencyCode(),
             // The products after discounts, without tax or shipping.
