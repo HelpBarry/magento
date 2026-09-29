@@ -10,6 +10,11 @@ if ($tenantId != null && $tenantId != "") {
     window.barry = window.barry || {};
     window.barry.tenantId = "<?= $block->escapeJs($tenantId); ?>";
     window.barry.platform = "magento";
+    // The SDK's Magento cart bridge adds through the module (bluebarry/cart/add).
+    window.barry.magento = {
+        addToCartUrl: "<?= $block->escapeJs($block->getUrl('bluebarry/cart/add')); ?>",
+        cartUrl: "<?= $block->escapeJs($block->getUrl('checkout/cart')); ?>"
+    };
     var advisorScript = document.createElement('script');
     advisorScript.async = true;
     advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";
