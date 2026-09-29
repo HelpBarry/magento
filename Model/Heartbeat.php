@@ -202,13 +202,22 @@ class Heartbeat
      */
     public function deactivateAll(): void
     {
-        try {
-            $this->retirePending();
-        } catch (\Exception $e) {
-            // The websites below still go.
+        // What each website registered with, which is what bluebarry knows it by; the settings may
+        // hold a newer key it refused since.
+        $state = $this->state();
+        $registered = array_keys($state['registrations'] ?? []);
+        foreach ($registered as $websiteId) {
+            $state['retire'][] = $state['registrations'][$websiteId];
+            unset($state['registrations'][$websiteId]);
         }
+        $this->flags->saveFlag(self::FLAG, $state);
+        $this->retirePending();
         foreach ($this->storeManager->getWebsites() as $website) {
+            if (in_array((int) $website->getId(), $registered, true)) {
+                continue;
+            }
             try {
+                // Registered before this module kept its registrations: its settings are all there is.
                 $tenantId = $this->config->getWebsiteTenantId($website->getId());
                 $apiKey = $this->config->getWebsiteApiKey($website->getId());
                 if ($tenantId !== null && $apiKey !== null) {
@@ -245,22 +254,32 @@ class Heartbeat
      */
     private function retirePending(): void
     {
-        $state = $this->state();
-        if (empty($state['retire'])) {
+        $pending = $this->state()['retire'] ?? [];
+        if (!$pending) {
             return;
         }
-        $left = [];
-        foreach ($state['retire'] as $registration) {
-            $key = $this->encryptor->decrypt((string) ($registration['key'] ?? ''));
-            $response = $key === '' ? null
-                : $this->client->post('/data/magento/deactivate', ['siteUrl' => $registration['site']], (string) $registration['tenant'], $key, 5);
-            // Gone for good when bluebarry confirms, or when the key itself is gone or refused.
-            if ($response !== null && !$response->isSuccess() && !in_array($response->getStatus(), [401, 403], true)) {
-                $left[] = $registration;
+        $finished = [];
+        foreach ($pending as $registration) {
+            try {
+                $key = $this->encryptor->decrypt((string) ($registration['key'] ?? ''));
+                $response = $key === '' ? null
+                    : $this->client->post('/data/magento/deactivate', ['siteUrl' => $registration['site']], (string) $registration['tenant'], $key, 5);
+                // Done when bluebarry confirms, or when the key itself is gone or refused.
+                $done = $response === null || $response->isSuccess() || in_array($response->getStatus(), [401, 403], true);
+            } catch (\Exception $e) {
+                // A key that cannot be read (another crypt key) never will be: bluebarry drops the
+                // registration once it stops hearing from it.
+                $done = true;
+            }
+            if ($done) {
+                $finished[] = json_encode($registration);
             }
         }
+        // Only what was taken back leaves the list: another run may have added to it meanwhile.
         $state = $this->state();
-        $state['retire'] = $left;
+        $state['retire'] = array_values(array_filter($state['retire'] ?? [], function ($registration) use ($finished) {
+            return !in_array(json_encode($registration), $finished, true);
+        }));
         $this->flags->saveFlag(self::FLAG, $state);
     }
 

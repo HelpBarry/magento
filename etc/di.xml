@@ -109,4 +109,12 @@
     <type name="Magento\MysqlMq\Model\QueueManagement">
         <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>
     </type>
+    <!-- The API key stays out of app/etc/config.php (app:config:dump): it is encrypted with this installation's crypt key. -->
+    <type name="Magento\Config\Model\Config\TypePool">
+        <arguments>
+            <argument name="sensitive" xsi:type="array">
+                <item name="bluebarry_module/general/api_key" xsi:type="string">1</item>
+            </argument>
+        </arguments>
+    </type>
 </config>

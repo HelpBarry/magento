@@ -56,7 +56,8 @@ class OrderVisitor
                 'advisor_id' => $visitor['advisor_id'],
                 'experiments' => $visitor['experiments'] ? json_encode($visitor['experiments']) : null,
             ],
-            [] // keep the first capture
+            // Keep the first capture: an empty list would make Magento update every column.
+            ['order_id' => new \Zend_Db_Expr('order_id')]
         );
     }
 
