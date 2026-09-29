@@ -58,6 +58,7 @@
             "store_id": true,
             "email": true,
             "first_name": true,
+            "cart": true,
             "completed": true,
             "noted_at": true,
             "sent_at": true

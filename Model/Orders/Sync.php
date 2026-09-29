@@ -234,18 +234,24 @@ class Sync
     {
         $sent = 0;
         $waiting = $this->waitingWebsites();
+        $refused = []; // tried again on a later run, not over and over in this one
         while ($inTime()) {
             $skip = [];
             foreach (array_keys($waiting) as $websiteId) {
                 $skip = array_merge($skip, $this->storeIds((int) $websiteId));
             }
             $claim = bin2hex(random_bytes(8));
-            $claimed = $this->queue->claimNext(self::BATCH, $claim, $skip);
+            $claimed = $this->queue->claimNext(self::BATCH, $claim, $skip, $refused);
             if (!$claimed) {
                 break;
             }
             $progress = false;
             foreach ($this->groups(array_keys($claimed), $targets) as $group) {
+                // Each group can take a request's timeout: the time is checked again before each one.
+                if (!call_user_func($inTime)) {
+                    $this->queue->release($group['ids'], $claim); // the next run sends it
+                    continue;
+                }
                 if ($group['target'] === null) {
                     // Not for bluebarry (a website without a connection, or a store view reporting to
                     // another company than its website's key): nothing to send, ever.
@@ -257,9 +263,18 @@ class Sync
                     $this->queue->release($group['ids'], $claim); // its website failed earlier in this batch
                     continue;
                 }
+                // Read again: a refund saved since the claim makes it no new purchase (and queues it anew).
+                $live = $this->queue->claimed($group['ids'], $claim);
+                $group['orders'] = array_values(array_filter($group['orders'], function ($order) use ($live) {
+                    return isset($live[(int) $order->getId()]);
+                }));
+                $group['ids'] = array_keys($live);
+                if (!$group['orders']) {
+                    continue;
+                }
                 $payloads = [];
                 foreach ($group['orders'] as $order) {
-                    $payloads[] = $this->payload->build($order, $claimed[(int) $order->getId()]);
+                    $payloads[] = $this->payload->build($order, $live[(int) $order->getId()]);
                 }
                 $response = $this->client->post('/data/magento/orders/sync', ['storeKey' => $group['storeKey'], 'orders' => $payloads],
                     $group['target']['tenantId'], $group['target']['apiKey'], 30);
@@ -274,6 +289,7 @@ class Sync
                     $this->noteOutage((int) $group['websiteId'], $response);
                     $progress = true; // its orders are skipped from now on
                 } else {
+                    $refused = array_merge($refused, $group['ids']);
                     $dropped = $this->queue->fail($group['ids'], $claim);
                     if ($dropped) {
                         $this->logger->error('bluebarry: gave up sending orders it refused', ['order_ids' => $dropped, 'status' => $response->getStatus()]);
@@ -409,13 +425,7 @@ class Sync
             $lines = [];
             try {
                 $quote = $this->quotes->get((int) $note['quote_id']);
-                foreach ($quote instanceof \Magento\Quote\Model\Quote ? $quote->getAllVisibleItems() : [] as $item) {
-                    $variant = $item->getOptionByCode('simple_product');
-                    $lines[] = [
-                        'reference' => (string) ($variant ? $variant->getValue() : $item->getProductId()),
-                        'quantity' => max(1, (int) round((float) $item->getQty())),
-                    ];
-                }
+                $lines = $quote instanceof \Magento\Quote\Model\Quote ? CheckoutNotes::lines($quote) : [];
             } catch (\Exception $e) {
                 // The cart is gone: the email still goes, without products.
             }
@@ -429,7 +439,10 @@ class Sync
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {
                 $this->checkouts->markSent((int) $note['quote_id'], (string) $note['noted_at']);
-                $sent += $response->isSuccess() ? 1 : 0;
+                if ($response->isSuccess()) {
+                    $this->forgetFailures($websiteId);
+                    $sent++;
+                }
             } else {
                 $waiting[$websiteId] = true;
                 $this->noteOutage($websiteId, $response);
