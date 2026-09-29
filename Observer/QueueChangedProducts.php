@@ -164,7 +164,12 @@ class QueueChangedProducts implements ObserverInterface
                 }
                 return $ids;
             case 'catalog_product_delete_before':
-                return [(int) $event->getData('product')->getId()];
+                // A configurable product's variants stay, as products of their own: queued while the
+                // links still say which they are.
+                $product = $event->getData('product');
+                return $product->getTypeId() === 'configurable'
+                    ? array_merge([(int) $product->getId()], $this->queue->configurableChildren((int) $product->getId()))
+                    : [(int) $product->getId()];
             case 'catalog_category_change_products':
                 return (array) $event->getData('product_ids');
             case 'catalog_product_to_website_change':
