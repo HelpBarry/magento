@@ -7,7 +7,9 @@ use Magento\Catalog\Model\Product\Attribute\Source\Status;
 use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
+use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\ConfigurableProduct\Model\ResourceModel\Product\Type\Configurable as ConfigurableLinks;
+use Magento\Framework\EntityManager\MetadataPool;
 use Magento\Csp\Helper\CspNonceProvider;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\DataObject\IdentityInterface;
@@ -73,6 +75,11 @@ class Advisor extends Template implements IdentityInterface
      */
     private $configurableLinks;
 
+    /**
+     * @var MetadataPool
+     */
+    private $metadataPool;
+
     /** @var array<int, int|null> child => the configurable product the catalog sync groups it under */
     private $syncedParents = [];
 
@@ -86,6 +93,7 @@ class Advisor extends Template implements IdentityInterface
      * @param CategoryCollectionFactory $categories
      * @param ProductCollectionFactory $products
      * @param ConfigurableLinks $configurableLinks
+     * @param MetadataPool $metadataPool
      * @param array $data
      */
     public function __construct(
@@ -98,6 +106,7 @@ class Advisor extends Template implements IdentityInterface
         CategoryCollectionFactory $categories,
         ProductCollectionFactory $products,
         ConfigurableLinks $configurableLinks,
+        MetadataPool $metadataPool,
         array $data = []
     ) {
         $this->scopeConfig = $scopeConfig;
@@ -108,6 +117,7 @@ class Advisor extends Template implements IdentityInterface
         $this->categories = $categories;
         $this->products = $products;
         $this->configurableLinks = $configurableLinks;
+        $this->metadataPool = $metadataPool;
 
         parent::__construct($context, $data);
     }
@@ -268,8 +278,11 @@ class Advisor extends Template implements IdentityInterface
         usort($children, function ($a, $b) {
             return (int) $a->getId() <=> (int) $b->getId();
         });
-        $own = array_values(array_filter($children, function ($child) use ($product) {
-            return $this->syncedParentId((int) $child->getId()) === (int) $product->getId();
+        $groups = $this->syncedParents(array_map(function ($child) {
+            return (int) $child->getId();
+        }, $children));
+        $own = array_values(array_filter($children, function ($child) use ($product, $groups) {
+            return ($groups[(int) $child->getId()] ?? null) === (int) $product->getId();
         }));
         foreach ($own as $child) {
             if ($child instanceof \Magento\Catalog\Model\Product && $child->isSalable()) {
@@ -289,23 +302,48 @@ class Advisor extends Template implements IdentityInterface
      */
     private function syncedParentId(int $childId): ?int
     {
-        if (!array_key_exists($childId, $this->syncedParents)) {
-            $parentIds = array_map('intval', $this->configurableLinks->getParentIdsByChild($childId));
-            $this->syncedParents[$childId] = null;
+        return $this->syncedParents([$childId])[$childId] ?? null;
+    }
+
+    /**
+     * syncedParentId() for many products at once: two queries however many there are.
+     *
+     * @param int[] $childIds
+     * @return array<int, int|null>
+     */
+    private function syncedParents(array $childIds): array
+    {
+        $missing = array_values(array_diff($childIds, array_keys($this->syncedParents)));
+        if ($missing) {
+            foreach ($missing as $id) {
+                $this->syncedParents[$id] = null;
+            }
+            $connection = $this->configurableLinks->getConnection();
+            $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+            $links = $connection->fetchAll($connection->select()
+                ->from(['link' => $this->configurableLinks->getTable('catalog_product_super_link')], ['child' => 'product_id'])
+                ->join(['parent' => $this->configurableLinks->getTable('catalog_product_entity')], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
+                ->where('link.product_id IN (?)', $missing));
+            $parentIds = array_values(array_unique(array_map('intval', array_column($links, 'parent'))));
             if ($parentIds) {
                 $store = $this->storeManager->getStore();
-                $shown = array_map('intval', $this->products->create()
+                $shown = array_flip(array_map('intval', $this->products->create()
                     ->setStoreId((int) $store->getId())
                     ->addIdFilter($parentIds)
                     ->addWebsiteFilter([(int) $store->getWebsiteId()])
                     ->addAttributeToFilter('status', ['eq' => Status::STATUS_ENABLED])
                     ->addAttributeToFilter('visibility', ['neq' => Visibility::VISIBILITY_NOT_VISIBLE])
-                    ->getAllIds());
-                sort($shown);
-                $this->syncedParents[$childId] = $shown[0] ?? null;
+                    ->getAllIds()));
+                foreach ($links as $link) {
+                    $child = (int) $link['child'];
+                    $parent = (int) $link['parent'];
+                    if (isset($shown[$parent]) && ($this->syncedParents[$child] === null || $parent < $this->syncedParents[$child])) {
+                        $this->syncedParents[$child] = $parent;
+                    }
+                }
             }
         }
-        return $this->syncedParents[$childId];
+        return array_intersect_key($this->syncedParents, array_flip($childIds));
     }
 
     /**
