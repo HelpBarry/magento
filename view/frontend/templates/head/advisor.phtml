@@ -64,7 +64,7 @@ if ($tenantId != null && $tenantId != "") {
             var match = document.cookie.match(/(?:^|; )form_key=([^;]+)/);
             return match ? decodeURIComponent(match[1]) : '';
         }
-        var sending = false, next = null, wanted = '';
+        var sending = false, next = null, wanted = '', EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         function send(email) {
             // One at a time, the latest last: an older answer never overwrites a newer email.
             if (sending) { next = email; return; }
@@ -91,7 +91,7 @@ if ($tenantId != null && $tenantId != "") {
             clearTimeout(timer);
             timer = setTimeout(function () {
                 var email = String(field.value || '').trim();
-                if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { wanted = email; send(email); }
+                if (EMAIL.test(email)) { wanted = email; send(email); }
             }, 800);
         }
         document.addEventListener('input', typed, true);
@@ -102,10 +102,13 @@ if ($tenantId != null && $tenantId != "") {
             var tries = 0;
             send('');
             // Again a few times while the email wanted is not noted yet (the shopper allowing cookies, a
-            // request that failed): the account's, or the one a guest typed. A guest who typed nothing
-            // yet is left to the field.
+            // request that failed): the account's, or the one a guest typed. The checkout may have filled
+            // the field in itself (a returning guest's, without a keystroke): that one counts as typed. A
+            // guest with nothing in the field yet is left to it.
             var retry = setInterval(function () {
-                if (last === wanted || ++tries > 8 || (wanted === '' && document.getElementById('customer-email'))) { clearInterval(retry); return; }
+                var field = document.getElementById('customer-email'), filled = field ? String(field.value || '').trim() : '';
+                if (wanted === '' && EMAIL.test(filled)) wanted = filled;
+                if (last === wanted || ++tries > 8 || (wanted === '' && field)) { clearInterval(retry); return; }
                 send(wanted);
             }, 15000);
         });
