@@ -50,7 +50,7 @@ class SyncCatalog extends Command
     /**
      * @inheritdoc
      */
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         try {
             $this->state->setAreaCode(Area::AREA_CRONTAB);
