@@ -89,15 +89,7 @@ class Heartbeat
         foreach ($this->storeManager->getWebsites() as $website) {
             $last = $state['websites'][(int) $website->getId()]['at'] ?? 0;
             if ($force || time() - $last >= self::INTERVAL) {
-                try {
-                    $this->send($website);
-                } catch (\Exception $e) {
-                    // One broken website (an undecryptable key, a missing store) must not keep the others
-                    // from reporting in. Tried again in a day, or when its settings are saved.
-                    $this->record((int) $website->getId(), [
-                        'at' => time(), 'site' => '', 'ok' => false, 'status' => 0, 'error' => $e->getMessage(),
-                    ]);
-                }
+                $this->send($website);
             }
         }
         if ($force) {
@@ -114,6 +106,25 @@ class Heartbeat
      * @return array|null the outcome, or null when the website isn't connected
      */
     public function send(WebsiteInterface $website): ?array
+    {
+        $websiteId = (int) $website->getId();
+        try {
+            return $this->ping($website);
+        } catch (\Exception $e) {
+            // An undecryptable key or a website without a store: recorded like a refused heartbeat, so
+            // the Connection status shows it and the other websites still report in. Tried again in a
+            // day, or when its settings are saved.
+            $outcome = ['at' => time(), 'site' => '', 'ok' => false, 'status' => 0, 'error' => $e->getMessage()];
+            $this->record($websiteId, $outcome);
+            return $outcome;
+        }
+    }
+
+    /**
+     * @param WebsiteInterface $website
+     * @return array|null
+     */
+    private function ping(WebsiteInterface $website): ?array
     {
         $websiteId = (int) $website->getId();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
@@ -156,10 +167,14 @@ class Heartbeat
     public function deactivateAll(): void
     {
         foreach ($this->storeManager->getWebsites() as $website) {
-            $tenantId = $this->config->getWebsiteTenantId($website->getId());
-            $apiKey = $this->config->getWebsiteApiKey($website->getId());
-            if ($tenantId !== null && $apiKey !== null) {
-                $this->client->post('/data/magento/deactivate', ['siteUrl' => $this->siteUrl($website)], $tenantId, $apiKey, 5);
+            try {
+                $tenantId = $this->config->getWebsiteTenantId($website->getId());
+                $apiKey = $this->config->getWebsiteApiKey($website->getId());
+                if ($tenantId !== null && $apiKey !== null) {
+                    $this->client->post('/data/magento/deactivate', ['siteUrl' => $this->siteUrl($website)], $tenantId, $apiKey, 5);
+                }
+            } catch (\Exception $e) {
+                // One broken website does not keep the others registered.
             }
         }
     }

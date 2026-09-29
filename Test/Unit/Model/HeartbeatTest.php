@@ -113,6 +113,13 @@ class HeartbeatTest extends TestCase
         $this->assertTrue($heartbeat->outcomes()[2]['ok']);
     }
 
+    public function testUninstallStillDeactivatesTheOthersWhenOneWebsiteIsBroken(): void
+    {
+        $this->heartbeat([200], connected: [1 => true, 2 => true], brokenWebsite: 1)->deactivateAll();
+
+        $this->assertSame(['key-2'], array_column($this->calls, 3));
+    }
+
     public function testUninstallDeactivatesEveryConnectedWebsite(): void
     {
         $this->heartbeat([200, 200], connected: [1 => true, 2 => true])->deactivateAll();

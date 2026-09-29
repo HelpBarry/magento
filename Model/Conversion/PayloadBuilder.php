@@ -38,7 +38,8 @@ class PayloadBuilder
             if ($item->getParentItemId()) {
                 continue;
             }
-            $quantity = max(1.0, (float) $item->getQtyOrdered());
+            // Decimal quantities (0.5 kg) are real; only a missing one would divide by zero.
+            $quantity = (float) $item->getQtyOrdered() > 0 ? (float) $item->getQtyOrdered() : 1.0;
             $net = $this->netRowTotal($item);
             $gross = $net + (float) $item->getTaxAmount();
             $productTotal += $net;
