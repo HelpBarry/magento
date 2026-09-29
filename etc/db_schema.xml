@@ -73,6 +73,7 @@
         <column xsi:type="smallint" name="completed" unsigned="true" nullable="false" default="0" comment="Became an order"/>
         <column xsi:type="datetime" name="noted_at" nullable="false" comment="Last change, UTC"/>
         <column xsi:type="datetime" name="sent_at" nullable="true" comment="Sent to bluebarry, UTC; empty when a change waits"/>
+        <column xsi:type="int" name="revision" unsigned="true" nullable="false" default="0" comment="Counts the changes, so a delivery only marks what it sent"/>
         <constraint xsi:type="primary" referenceId="PRIMARY">
             <column name="quote_id"/>
         </constraint>

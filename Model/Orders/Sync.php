@@ -176,9 +176,13 @@ class Sync
             $done['orders'] = $this->drain($targets, $inTime);
             // Before the history: a checkout reminder is timely, an import can take many runs.
             $done['checkouts'] = $this->sendCheckouts($targets, $inTime);
-            foreach ($targets as $websiteId => $target) {
-                while ($inTime() && $this->importBatch($websiteId, $target, $done['imported'])) {
-                    // one batch at a time
+            // One batch per website in turn, so a big history does not hold up the others'.
+            $importing = $targets;
+            while ($importing && $inTime()) {
+                foreach ($importing as $websiteId => $target) {
+                    if (!call_user_func($inTime) || !$this->importBatch($websiteId, $target, $done['imported'], $inTime)) {
+                        unset($importing[$websiteId]);
+                    }
                 }
             }
             return $done;
@@ -311,9 +315,10 @@ class Sync
      * @param int $websiteId
      * @param array $target
      * @param int $imported running total, for the caller
+     * @param callable $inTime
      * @return bool whether another batch should follow now
      */
-    private function importBatch(int $websiteId, array $target, int &$imported): bool
+    private function importBatch(int $websiteId, array $target, int &$imported, callable $inTime): bool
     {
         $state = $this->import($websiteId);
         if (!is_array($state) || !empty($state['done']) || isset($this->waitingWebsites()[$websiteId])) {
@@ -342,11 +347,18 @@ class Sync
         $finished = count($collection) < self::BATCH;
 
         $ok = true;
+        $failure = null;
         $byStore = [];
         foreach ($orders as $order) {
             $byStore[$this->storeKey((int) $order->getStoreId())][] = $order;
         }
         foreach ($byStore as $storeKey => $group) {
+            if (!call_user_func($inTime)) {
+                // Out of time between two requests: the batch goes again next run, as if nothing was sent.
+                $before['touched'] = time();
+                $this->saveImport($websiteId, $before);
+                return false;
+            }
             $payloads = array_map(function ($order) {
                 return $this->payload->build($order, false);
             }, $group);
@@ -354,6 +366,7 @@ class Sync
                 $target['tenantId'], $target['apiKey'], 30);
             if (!$response->isSuccess()) {
                 $ok = false;
+                $failure = $response;
                 break;
             }
             $this->queue->markImported(array_map(function ($order) {
@@ -370,11 +383,19 @@ class Sync
                 'storeKey' => $target['storeKey'], 'orders' => [], 'import' => $status, 'importedCount' => (int) $state['count'],
             ], $target['tenantId'], $target['apiKey'], 30);
             $ok = $response->isSuccess();
+            $failure = $ok ? null : $response;
         }
         if (!$ok) {
             // The whole batch again next time; bluebarry takes an order it has already as an update.
             $state['after'] = $before['after'];
             $state['count'] = $before['count'];
+            if ($failure !== null && $this->isOutage($failure)) {
+                // bluebarry is down or busy: the import waits with the website's other deliveries,
+                // and this is no refusal counting towards giving up.
+                $this->noteOutage($websiteId, $failure);
+                $this->saveImport($websiteId, $state);
+                return false;
+            }
             $state['attempts'] = (int) $state['attempts'] + 1;
             if ($state['attempts'] >= 10) {
                 $state['done'] = true;
@@ -389,6 +410,7 @@ class Sync
         $state['attempts'] = 0;
         $state['done'] = $finished;
         $this->saveImport($websiteId, $state);
+        $this->forgetFailures($websiteId);
         return !$finished;
     }
 
@@ -418,14 +440,23 @@ class Sync
                 || $this->config->getTenantId($storeId) === null
                 || strtolower((string) $this->config->getTenantId($storeId)) !== strtolower($target['tenantId'])) {
                 if ($target === null || !isset($waiting[$websiteId])) {
-                    $this->checkouts->markSent((int) $note['quote_id'], (string) $note['noted_at']); // not for bluebarry
+                    $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']); // not for bluebarry
                 }
                 continue;
             }
             $lines = [];
+            $firstName = (string) $note['first_name'];
             try {
                 $quote = $this->quotes->get((int) $note['quote_id']);
-                $lines = $quote instanceof \Magento\Quote\Model\Quote ? CheckoutNotes::lines($quote) : [];
+                if ($quote instanceof \Magento\Quote\Model\Quote) {
+                    $lines = CheckoutNotes::lines($quote);
+                    // The name as the checkout has it now: a guest types it after the email, usually in
+                    // the shipping address.
+                    $firstName = (string) ($quote->getCustomerFirstname()
+                        ?: ($quote->getBillingAddress() ? $quote->getBillingAddress()->getFirstname() : null)
+                        ?: ($quote->getShippingAddress() ? $quote->getShippingAddress()->getFirstname() : null)
+                        ?: $firstName);
+                }
             } catch (\Exception $e) {
                 // The cart is gone: the email still goes, without products.
             }
@@ -433,12 +464,12 @@ class Sync
                 'storeKey' => $this->storeKey($storeId),
                 'token' => (string) $note['quote_id'],
                 'email' => (string) $note['email'],
-                'firstName' => $note['first_name'] ? mb_substr((string) $note['first_name'], 0, 128) : null,
+                'firstName' => trim($firstName) !== '' ? mb_substr(trim($firstName), 0, 128) : null,
                 'completed' => (bool) (int) $note['completed'],
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {
-                $this->checkouts->markSent((int) $note['quote_id'], (string) $note['noted_at']);
+                $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
                 if ($response->isSuccess()) {
                     $this->forgetFailures($websiteId);
                     $sent++;
