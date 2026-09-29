@@ -116,16 +116,19 @@ class Heartbeat
     {
         $this->retirePending();
         $state = $this->state();
-        $force = !empty($state['force']);
+        $force = $state['force'] ?? null;
         foreach ($this->storeManager->getWebsites() as $website) {
             $last = $state['websites'][(int) $website->getId()]['at'] ?? 0;
-            if ($force || time() - $last >= self::INTERVAL) {
+            if (!empty($force) || time() - $last >= self::INTERVAL) {
                 $this->send($website);
             }
         }
-        if ($force) {
-            $this->update(function (array $state) {
-                unset($state['force']);
+        if (!empty($force)) {
+            // Only the request this run answered: one made meanwhile (an upgrade during this run) stays.
+            $this->update(function (array $state) use ($force) {
+                if (($state['force'] ?? null) === $force) {
+                    unset($state['force']);
+                }
                 return $state;
             });
         }
@@ -352,7 +355,7 @@ class Heartbeat
     public function forceNext(): void
     {
         $this->update(function (array $state) {
-            $state['force'] = true;
+            $state['force'] = uniqid('', true);
             return $state;
         });
     }
