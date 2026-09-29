@@ -67,6 +67,31 @@ test.describe('page tracking', () => {
     expect(add.i).toMatch(/^[a-z0-9]+$/);
   });
 
+  test('every line of a kit bluebarry adds is noted, with the quantity it added', async ({ page }) => {
+    await stubAdvisor(page, newAdvisorIds());
+    await page.goto('/bb-simple.html');
+    await expect.poll(() => page.evaluate(() => (window as any).barry?.magento?.addToCartUrl)).toBeTruthy();
+    const items = [{ reference: productId('bb-simple'), quantity: 2 }, { reference: productId('bb-configurable-red'), quantity: 1 }];
+    const status = await page.evaluate(async (items) => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch((window as any).barry.magento.addToCartUrl, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, items: JSON.stringify(items) }).toString(),
+      });
+      return response.status;
+    }, items);
+    expect(status).toBe(200);
+
+    expect((await noted(page)).map((a: any) => [a.r, a.q])).toEqual([[productId('bb-simple'), 2], [productId('bb-configurable-red'), 1]]);
+  });
+
+  test("product chat gets the product's categories in this store's tree", async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await page.goto('/bb-simple.html');
+    expect(await page.evaluate(() => (window as any).barry.chat.context.productCollectionIds)).toContain(String(categoryId));
+  });
+
   test('a shopper bluebarry never saw is not noted', async ({ page }) => {
     await stubAdvisor(page, null, { visitor: false });
     await addToCart(page, 'bb-simple');
