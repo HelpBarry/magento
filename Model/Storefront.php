@@ -148,10 +148,11 @@ class Storefront
         }
         // Only an explicit null switches search off; anything else unexpected keeps what the store has.
         $search = null;
-        if (is_array($answer['search']) && Visitor::isUuid($answer['search']['profileId'] ?? null)) {
+        if (is_array($answer['search']) && Visitor::isUuid($answer['search']['profileId'] ?? null)
+            && is_bool($answer['search']['resultsPage'] ?? null)) {
             $search = [
                 'profileId' => strtolower($answer['search']['profileId']),
-                'resultsPage' => !empty($answer['search']['resultsPage']),
+                'resultsPage' => $answer['search']['resultsPage'],
             ];
         } elseif ($answer['search'] !== null) {
             return null;
