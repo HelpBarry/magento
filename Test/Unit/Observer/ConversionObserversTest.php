@@ -143,7 +143,7 @@ class ConversionObserversTest extends TestCase
         $order->method('getState')->willReturn($state);
         $order->method('getGrandTotal')->willReturn(100.0);
         $order->method('getTotalPaid')->willReturn($paid);
-        $order->method('dataHasChangedFor')->willReturnCallback(fn ($field) => $field === 'state' ? $stateChanged : ($field === 'total_paid' && $paidChanged));
+        $order->method('dataHasChangedFor')->willReturnCallback(fn ($field) => $field === 'state' ? $stateChanged : (in_array($field, ['total_paid', 'total_canceled'], true) && $paidChanged));
         return $order;
     }
 
