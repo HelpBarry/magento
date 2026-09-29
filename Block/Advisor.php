@@ -195,6 +195,9 @@ class Advisor extends Template implements IdentityInterface
             case 'checkout_cart_index':
                 return ['type' => 'cart'];
             case 'checkout_index_index':
+            // PayPal Express and Payflow Express: the order review the shopper places the order from.
+            case 'paypal_express_review':
+            case 'paypal_payflowexpress_review':
                 return ['type' => 'checkout'];
             default:
                 // Multi-address checkout's steps, up to its order confirmation.
@@ -219,7 +222,10 @@ class Advisor extends Template implements IdentityInterface
             $product = $this->registry->registry('current_product');
             // The product as the catalog sync sends it: a variant with a page of its own is still
             // grouped under its configurable product, with that product's categories.
-            $group = $product->getTypeId() === 'configurable' ? (int) $product->getId() : $this->syncedParentId((int) $product->getId());
+            // A configurable product is a group only with a variant the sync sends under it.
+            $group = $product->getTypeId() === 'configurable'
+                ? (isset($page['productReference']) ? (int) $product->getId() : null)
+                : $this->syncedParentId((int) $product->getId());
             if ($group !== null) {
                 $config['groupReference'] = (string) $group;
             }
