@@ -237,6 +237,13 @@ class Storefront
             }
         } else {
             $state[$websiteId] = $next + ['fetched' => $started, 'written' => time()];
+            if ($before === null && $next === []) {
+                // A website that never had settings shows none either way: its pages stay cached.
+                $state[$websiteId]['settled'] = true;
+                $this->flags->saveFlag(self::FLAG, $state);
+                $this->cache->save((string) json_encode($state), self::FLAG, [ConfigCache::CACHE_TAG]);
+                return;
+            }
             $this->flags->saveFlag(self::FLAG, $state);
         }
         $this->cache->remove(self::FLAG);
