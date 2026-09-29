@@ -37,6 +37,9 @@ class Catalog extends Field
         $status = $this->sync->status();
         if ($status['error'] !== null && $status['queued'] > 0) {
             $text = __('%1 products waiting: %2 Trying again every 5 minutes.', $status['queued'], $status['error']);
+        } elseif ($status['error'] !== null) {
+            // The others received the changes; this company gets the whole catalog once it works.
+            $text = __('Not sent: %1 Trying again every 5 minutes.', $status['error']);
         } elseif ($status['queued'] > 0) {
             $text = __('%1 products waiting to be sent.', $status['queued']);
         } elseif ($status['sent_at'] !== null) {

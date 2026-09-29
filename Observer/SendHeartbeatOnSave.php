@@ -72,6 +72,12 @@ class SendHeartbeatOnSave implements ObserverInterface
                 $outcome = ['ok' => false, 'error' => $e->getMessage()];
             }
             if ($outcome === null) {
+                // Not connected (any more): its search goes off now. No call to bluebarry.
+                try {
+                    $this->storefront->refresh($website);
+                } catch (\Exception $e) {
+                    // The schedule catches up.
+                }
                 continue;
             }
             $name = (string) $website->getName();
