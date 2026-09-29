@@ -159,6 +159,49 @@ const catalogSync = {
   },
 };
 
+// DataApi's orders/sync and checkout-started contracts (the WooCommerce plugin's, under data/magento).
+const orderLine = {
+  disallowUnknown: true,
+  fields: { id: types.nullableString(64), reference: types.nullableString(64), name: types.nullableString(512), quantity: (v) => Number.isInteger(v), unitPrice: types.nullableDecimal },
+};
+const order = {
+  disallowUnknown: true,
+  required: ['id', 'createdAt'],
+  fields: {
+    id: types.nullableString(64), customerId: types.nullableString(64), email: types.nullableString(256), firstName: types.nullableString(128), lastName: types.nullableString(128),
+    createdAt: types.any, updatedAt: types.any, currency: types.currency, totalPrice: types.nullableDecimal, currentTotalPrice: types.nullableDecimal,
+    cancelledAt: types.any, financialStatus: types.nullableString(32), discountCodes: types.any, totalDiscounts: types.nullableDecimal,
+    live: (v) => typeof v === 'boolean', checkoutToken: types.nullableString(128),
+    lines: (v, path, errors) => { if (!Array.isArray(v)) return false; v.forEach((l, i) => validateObject(l, orderLine, `${path}[${i}]`, errors)); return true; },
+  },
+};
+const ordersSync = {
+  disallowUnknown: true,
+  required: ['storeKey'],
+  fields: {
+    storeKey: (v) => typeof v === 'string' && v.length > 0 && v.length <= 128,
+    orders: (v, path, errors) => { if (!Array.isArray(v)) return false; v.forEach((o, i) => validateObject(o, order, `${path}[${i}]`, errors)); return true; },
+    import: (v) => v === null || ['Running', 'Completed', 'Failed'].includes(v),
+    importedCount: (v) => v === null || Number.isInteger(v),
+  },
+};
+const checkoutStarted = {
+  disallowUnknown: true,
+  required: ['storeKey', 'token'],
+  fields: {
+    storeKey: (v) => typeof v === 'string' && v.length > 0 && v.length <= 128, token: types.nullableString(128),
+    email: types.nullableString(256), firstName: types.nullableString(128), completed: (v) => typeof v === 'boolean',
+    lines: (v) => Array.isArray(v) && v.every((l) => typeof l.reference === 'string' && Number.isInteger(l.quantity)),
+  },
+};
+// What GET /data/magento/tasks answers (PUT /__tasks to change it).
+let tasks = { importOrders: false };
+
+const tasksRoute = {
+  method: 'GET', auth: 'apiKey',
+  ok: () => [200, { importOrders: tasks.importOrders, importSinceUtc: new Date(Date.now() - 365 * 86400000).toISOString() }],
+};
+
 // The one API key the mock accepts, and the company it belongs to.
 export const API_KEY = 'test-api-key';
 const API_KEY_TENANT = 'test-tenant';
@@ -183,11 +226,13 @@ const routes = {
     method: 'GET', auth: 'apiKey',
     ok: () => [200, { tenantId: API_KEY_TENANT, search: storefront.search, version: JSON.stringify(storefront.search) }],
   },
+  '/data/magento/orders/sync': { schema: ordersSync, auth: 'apiKey', ok: () => [200, { synced: 0 }] },
+  '/data/magento/checkout-started': { schema: checkoutStarted, auth: 'apiKey', ok: () => [204, null] },
   '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 
 function validateRequest(req, json, raw) {
-  const route = routes[req.url.toLowerCase()];
+  const route = routes[req.url.toLowerCase().split('?')[0]] ?? (req.url.startsWith('/data/magento/tasks') ? tasksRoute : undefined);
   if (!route) return { status: 404, errors: [`unknown endpoint ${req.url}`] };
   const errors = [];
   if (req.method !== (route.method ?? 'POST')) errors.push(`method ${req.method} not allowed`);
@@ -262,11 +307,16 @@ const control = createHttpServer(async (req, res) => {
     requests = [];
     behavior = { ...DEFAULT_BEHAVIOR };
     storefront = { search: null };
+    tasks = { importOrders: false };
     return sendJson(res, 200, { ok: true });
   }
   if (req.url === '/__behavior' && req.method === 'PUT') {
     behavior = { ...DEFAULT_BEHAVIOR, ...JSON.parse((await readBody(req)) || '{}') };
     return sendJson(res, 200, behavior);
+  }
+  if (req.url === '/__tasks' && req.method === 'PUT') {
+    tasks = { importOrders: false, ...JSON.parse((await readBody(req)) || '{}') };
+    return sendJson(res, 200, tasks);
   }
   if (req.url === '/__storefront' && req.method === 'PUT') {
     storefront = { search: null, ...JSON.parse((await readBody(req)) || '{}') };

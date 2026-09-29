@@ -21,4 +21,10 @@
             <schedule>* * * * *</schedule>
         </job>
     </group>
+    <group id="bluebarry_orders">
+        <!-- Orders, the history import and checkouts, at most 50 seconds a run. A few indexed queries when idle. -->
+        <job name="bluebarry_sync_orders" instance="Bluebarry\Bluebarry\Cron\SyncOrders" method="execute">
+            <schedule>* * * * *</schedule>
+        </job>
+    </group>
 </config>
