@@ -15,6 +15,45 @@ if ($tenantId != null && $tenantId != "") {
         addToCartUrl: "<?= $block->escapeJs($block->getUrl('bluebarry/cart/add')); ?>",
         cartUrl: "<?= $block->escapeJs($block->getUrl('checkout/cart')); ?>"
     };
+    // The SDK sends page views, product views and adds to the cart itself on Magento, which has no web
+    // pixel (SDK/src/storefront). The page describes itself: only what its address decides, so a page
+    // from the full page cache is right for everyone.
+    window.barry.trackPageViews = true;
+    window.barry.pageContext = Object.assign(<?= /* @noEscape */ json_encode($block->getPageContext(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>, window.barry.pageContext);
+    window.barry.chat = Object.assign({}, window.barry.chat, <?= /* @noEscape */ json_encode($block->getChatConfig(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>);
+<?php $consentWebsite = $block->getCookieConsentWebsite(); ?>
+<?php if ($consentWebsite !== null): ?>
+    // Magento's cookie restriction mode: nothing is tracked until the shopper allowed cookies.
+    // Along with any consent check the theme or a consent tool set: both must allow it.
+    (function (existing) {
+        window.barry.analyticsAllowed = function () {
+            var match = document.cookie.match(/(?:^|; )user_allowed_save_cookie=([^;]*)/);
+            try {
+                if (!match || JSON.parse(decodeURIComponent(match[1]))[<?= (int) $consentWebsite ?>] != 1) return false;
+            } catch (e) {
+                return false;
+            }
+            return typeof existing !== 'function' || existing() !== false;
+        };
+    })(window.barry.analyticsAllowed);
+<?php endif; ?>
+    // The cart changed (Luma's customer data, Hyvä's private content): the SDK reports the adds noted
+    // since and updates popup cart rules.
+    (function () {
+        // With the cart section: Hyvä announces new sections before it stores them.
+        function cartChanged(cart) { document.dispatchEvent(new CustomEvent('cart:updated', {detail: {cart: cart || null}})); }
+        window.addEventListener('private-content-loaded', function (event) {
+            cartChanged(event.detail && event.detail.data && event.detail.data.cart);
+        });
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof window.require !== 'function') return;
+            window.require(['Magento_Customer/js/customer-data'], function (customerData) {
+                var cart = customerData.get('cart');
+                cart.subscribe(cartChanged);
+                cartChanged(cart()); // the cart the shopper arrived with
+            });
+        });
+    })();
 <?php $search = $block->getSearchConfig(); ?>
 <?php if ($search !== null): ?>
     // Search, as chosen in Studio.

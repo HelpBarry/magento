@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <!-- A line edited in the cart is re-added by Magento: not an add for bluebarry. -->
+    <type name="Magento\Quote\Model\Quote">
+        <plugin name="bluebarry_ignore_line_edits" type="Bluebarry\Bluebarry\Plugin\Quote\IgnoreLineEdits" />
+    </type>
+</config>

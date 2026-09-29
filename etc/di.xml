@@ -37,6 +37,11 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <type name="Bluebarry\Bluebarry\Observer\NoteAddToCart">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
     <type name="Bluebarry\Bluebarry\Observer\QueueChangedProducts">
         <arguments>
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
