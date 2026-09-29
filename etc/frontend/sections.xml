@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Customer:etc/sections.xsd">
+    <!-- A bluebarry add to cart changes the mini-cart, like the product page's own. -->
+    <action name="bluebarry/cart/add">
+        <section name="cart"/>
+    </action>
+</config>
