@@ -17,7 +17,7 @@ use Magento\Store\Model\StoreManagerInterface;
  * What each website shows from bluebarry, chosen in Studio: for now, search (the search box's
  * configuration and whether bluebarry's results replace the catalog search results page).
  *
- * Kept here, read from bluebarry with the website's API key every 10 minutes and whenever bluebarry
+ * Kept here, read from bluebarry with the website's API key every hour and whenever bluebarry
  * asks (Controller\Command\Index, "settings.refresh"), so a shopper's page never waits for bluebarry.
  * When it changes, the pages that print it leave the full page cache (and Varnish) by their tag.
  */
