@@ -5,5 +5,9 @@
         <job name="bluebarry_send_due_conversions" instance="Bluebarry\Bluebarry\Cron\SendDueConversions" method="execute">
             <schedule>* * * * *</schedule>
         </job>
+        <!-- Daily heartbeat per website (and right after an upgrade). Reads one flag when nothing is due. -->
+        <job name="bluebarry_send_heartbeat" instance="Bluebarry\Bluebarry\Cron\SendHeartbeat" method="execute">
+            <schedule>*/10 * * * *</schedule>
+        </job>
     </group>
 </config>

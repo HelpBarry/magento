@@ -37,6 +37,12 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <!-- Settings page and save: build the heartbeat (and its HTTP client) only when used. -->
+    <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection">
+        <arguments>
+            <argument name="heartbeat" xsi:type="object">Bluebarry\Bluebarry\Model\Heartbeat\Proxy</argument>
+        </arguments>
+    </type>
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">
@@ -51,5 +57,13 @@
     </type>
     <type name="Magento\MysqlMq\Model\QueueManagement">
         <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>
+    </type>
+    <!-- The API key stays out of app/etc/config.php (app:config:dump): it is encrypted with this installation's crypt key. -->
+    <type name="Magento\Config\Model\Config\TypePool">
+        <arguments>
+            <argument name="sensitive" xsi:type="array">
+                <item name="bluebarry_module/general/api_key" xsi:type="string">1</item>
+            </argument>
+        </arguments>
     </type>
 </config>

@@ -4,7 +4,7 @@
         <tab id="bluebarry" translate="label" sortOrder="10">
             <label>Bluebarry</label>
         </tab>
-        <section id="bluebarry_module" translate="label" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="1">
+        <section id="bluebarry_module" translate="label" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
             <class>separator-top</class>
             <label>General</label>
             <tab>bluebarry</tab>
@@ -15,7 +15,16 @@
                     <label>Tenant ID</label>
                     <comment>You can find your Tenant ID on the integrations page in your bluebarry account.</comment>
                 </field>
-                <field id="write_to_debug_file" translate="label comment" type="select" sortOrder="20" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="api_key" translate="label comment" type="obscure" sortOrder="30" showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>API Key</label>
+                    <comment>Connects this website to bluebarry. Create one in bluebarry under Integrations: open the Developer area and click Manage next to API keys.</comment>
+                    <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
+                </field>
+                <field id="connection" translate="label" type="label" sortOrder="40" showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Connection</label>
+                    <frontend_model>Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection</frontend_model>
+                </field>
+                <field id="write_to_debug_file" translate="label comment" type="select" sortOrder="50" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Write conversion requests to debug log</label>
                     <comment>Written to var/log/bluebarry.log. Only turn this on while troubleshooting.</comment>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
