@@ -130,9 +130,10 @@ class Storefront
      * Reads a website's settings from bluebarry, and clears the pages that print them when they changed.
      *
      * @param WebsiteInterface $website
+     * @param int $timeout seconds the read may take, at most 10
      * @return string|null the settings' version, or null when they could not be read
      */
-    public function refresh(WebsiteInterface $website): ?string
+    public function refresh(WebsiteInterface $website, int $timeout = 10): ?string
     {
         $websiteId = (int) $website->getId();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
@@ -143,7 +144,7 @@ class Storefront
         }
         // When this read started: a read started later that saved already wins over this one.
         $started = self::now();
-        $response = $this->client->get('/data/magento/storefront', $apiKey, 10);
+        $response = $this->client->get('/data/magento/storefront', $apiKey, max(1, min(10, $timeout)));
         $answer = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($answer) || strtolower((string) ($answer['tenantId'] ?? '')) !== strtolower($tenantId)) {
             return null; // kept as it was: a bad answer never switches a store's search off
