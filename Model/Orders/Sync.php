@@ -376,6 +376,12 @@ class Sync
             $imported += count($group);
         }
         $state['touched'] = time();
+        if ($ok && !call_user_func($inTime)) {
+            // Out of time before the progress report: the batch goes again next run.
+            $before['touched'] = time();
+            $this->saveImport($websiteId, $before);
+            return false;
+        }
         if ($ok) {
             // Progress, under the website's own host (where bluebarry's Orders page looks).
             $status = $finished ? 'Completed' : 'Running';
@@ -446,10 +452,13 @@ class Sync
             }
             $lines = [];
             $firstName = (string) $note['first_name'];
+            $completed = (bool) (int) $note['completed'];
             try {
                 $quote = $this->quotes->get((int) $note['quote_id']);
                 if ($quote instanceof \Magento\Quote\Model\Quote) {
                     $lines = CheckoutNotes::lines($quote);
+                    // Placed before its note was written: the order completed it.
+                    $completed = $completed || !$quote->getIsActive();
                     // The name as the checkout has it now: a guest types it after the email, usually in
                     // the shipping address.
                     $firstName = (string) ($quote->getCustomerFirstname()
@@ -465,7 +474,7 @@ class Sync
                 'token' => (string) $note['quote_id'],
                 'email' => (string) $note['email'],
                 'firstName' => trim($firstName) !== '' ? mb_substr(trim($firstName), 0, 128) : null,
-                'completed' => (bool) (int) $note['completed'],
+                'completed' => $completed,
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {

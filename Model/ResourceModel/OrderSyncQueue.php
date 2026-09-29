@@ -164,10 +164,11 @@ class OrderSyncQueue
     {
         $rows = [];
         foreach ($orderIds as $id) {
-            $rows[] = ['order_id' => (int) $id, 'synced_at' => gmdate('Y-m-d H:i:s')];
+            $rows[] = ['order_id' => (int) $id, 'synced_at' => gmdate('Y-m-d H:i:s'), 'live' => 0];
         }
         if ($rows) {
-            $this->connection()->insertOnDuplicate($this->table(), $rows, ['synced_at']);
+            // Imported is known to bluebarry: a change queued meanwhile still goes, but as no new purchase.
+            $this->connection()->insertOnDuplicate($this->table(), $rows, ['synced_at', 'live']);
         }
     }
 
