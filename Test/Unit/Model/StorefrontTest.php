@@ -71,7 +71,8 @@ class StorefrontTest extends TestCase
         $this->assertNull($storefront->search(1, self::TENANT));
 
         $this->storefront(connected: false)->refresh($this->website(1));
-        $this->assertSame([], $this->flag);
+        $this->assertNull($this->storefront(connected: false)->search(1, self::TENANT));
+        $this->assertArrayNotHasKey('search', $this->flag[1]);
     }
 
     public function testOnlyAnExplicitNullSwitchesSearchOff(): void
@@ -149,6 +150,18 @@ class StorefrontTest extends TestCase
         $storefront->refresh($this->website(1));
 
         $this->assertSame($purges + 1, $this->purges);
+    }
+
+    public function testAReadBegunBeforeADisconnectDoesNotBringSearchBack(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        // The cron's read is on its way when the settings save disconnects the website.
+        $this->onGet = fn () => $this->storefront(connected: false)->refresh($this->website(1));
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertNull($storefront->search(1, self::TENANT));
     }
 
     private function answer(?array $search, string $tenant = self::TENANT): Response
