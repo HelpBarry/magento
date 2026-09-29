@@ -5,7 +5,7 @@ namespace Bluebarry\Bluebarry\Cron;
 use Bluebarry\Bluebarry\Model\Storefront;
 
 /**
- * Every 10 minutes: reads each connected website's settings from bluebarry (one small request per
+ * Every hour: reads each connected website's settings from bluebarry (one small request per
  * website), for when bluebarry could not reach this store to say they changed.
  */
 class RefreshStorefront
