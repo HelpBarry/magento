@@ -171,6 +171,26 @@ test.describe('orders', () => {
     expect([last.import, last.importedCount]).toEqual(['Completed', imported]);
   });
 
+  test("a website whose key belongs to another company than its Tenant ID sends no orders, and keeps them", async () => {
+    const order = sql('SELECT MAX(entity_id) FROM sales_order');
+    sql(`INSERT INTO bluebarry_order_sync (order_id, queued_at, live) VALUES (${order}, UTC_TIMESTAMP(), 0) ON DUPLICATE KEY UPDATE queued_at = UTC_TIMESTAMP(), claim = NULL`);
+    // The heartbeat found the key to be another company's (bluebarry answered 409).
+    const heartbeat = sql("SELECT flag_data FROM flag WHERE flag_code = 'bluebarry_heartbeat'");
+    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_heartbeat'");
+    sql(`INSERT INTO flag (flag_code, state, flag_data) VALUES ('bluebarry_heartbeat', 0, '{"websites":{"1":{"at":1,"site":"","ok":false,"status":409,"error":"x"}}}')`);
+    try {
+      syncOrders();
+      expect(await sentOrders()).toEqual([]);
+      expect(sql(`SELECT queued_at IS NOT NULL FROM bluebarry_order_sync WHERE order_id = ${order}`)).toBe('1');
+    } finally {
+      sql("DELETE FROM flag WHERE flag_code = 'bluebarry_heartbeat'");
+      if (heartbeat) sql(`INSERT INTO flag (flag_code, state, flag_data) VALUES ('bluebarry_heartbeat', 0, '${heartbeat.replace(/'/g, "''")}')`);
+    }
+
+    syncOrders(); // fixed: it goes
+    expect((await sentOrders()).length).toBeGreaterThan(0);
+  });
+
   test("without the shopper's cookie consent the checkout's email is not kept", async ({ page }) => {
     magento('config:set', 'web/cookie/cookie_restriction', '1');
     magento('cache:flush');

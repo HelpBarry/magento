@@ -5,6 +5,7 @@ namespace Bluebarry\Bluebarry\Model\Orders;
 use Bluebarry\Bluebarry\Model\Api\Client;
 use Bluebarry\Bluebarry\Model\Api\Response;
 use Bluebarry\Bluebarry\Model\Config;
+use Bluebarry\Bluebarry\Model\Heartbeat;
 use Bluebarry\Bluebarry\Model\ResourceModel\CheckoutNotes;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderSyncQueue;
 use Magento\Framework\FlagManager;
@@ -102,7 +103,12 @@ class Sync
     private $logger;
 
     /**
-     * @var array<int, true> websites whose API key could not be read in this run: waiting, not disconnected
+     * @var Heartbeat
+     */
+    private $heartbeat;
+
+    /**
+     * @var array<int, true> websites whose key cannot be used now (unreadable, or another company's): waiting, not disconnected
      */
     private $unreadable = [];
 
@@ -118,6 +124,7 @@ class Sync
      * @param FlagManager $flags
      * @param LockManagerInterface $locks
      * @param LoggerInterface $logger
+     * @param Heartbeat $heartbeat
      */
     public function __construct(
         Config $config,
@@ -130,8 +137,10 @@ class Sync
         CartRepositoryInterface $quotes,
         FlagManager $flags,
         LockManagerInterface $locks,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        Heartbeat $heartbeat
     ) {
+        $this->heartbeat = $heartbeat;
         $this->config = $config;
         $this->client = $client;
         $this->storeManager = $storeManager;
@@ -610,7 +619,18 @@ class Sync
                 $this->unreadable[(int) $website->getId()] = true; // its orders wait, they are not dropped
                 continue;
             }
+            if ($tenantId !== null && $apiKey === null && $this->config->hasWebsiteApiKey($website->getId())) {
+                // A stored key that decrypts to nothing (another crypt key): waiting, like an unreadable one.
+                $this->unreadable[(int) $website->getId()] = true;
+                continue;
+            }
             if ($tenantId === null || $apiKey === null) {
+                continue;
+            }
+            // The key belongs to another company than the Tenant ID (its heartbeat was refused with 409):
+            // nothing goes, since orders would land in the key's company. They wait until it is fixed.
+            if ((int) ($this->heartbeat->outcomes()[(int) $website->getId()]['status'] ?? 0) === 409) {
+                $this->unreadable[(int) $website->getId()] = true;
                 continue;
             }
             $group = $this->storeManager->getGroup((string) $website->getDefaultGroupId());
