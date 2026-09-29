@@ -64,6 +64,14 @@ test.describe('add to cart from bluebarry', () => {
     expect(items.map((i: any) => i.product_sku).sort()).toEqual(['bb-bundle-fixed-bb-part-a-bb-part-b', 'bb-simple']);
   });
 
+  test('lines beyond the limits are reported as not added, not dropped', async ({ page }) => {
+    const simple = productId('bb-simple');
+    const lines = [{ reference: productId('bb-configurable-red'), quantity: 1000 }, ...Array.from({ length: 20 }, () => ({ reference: simple, quantity: 1 }))];
+    const result = await add(page, lines);
+    // Over 999 of one line, and the 21st line.
+    expect(result.body).toEqual({ success: true, skipped: [productId('bb-configurable-red'), simple] });
+  });
+
   test('a sold-out product is reported as sold out', async ({ page }) => {
     const id = productId('bb-simple');
     sql(`UPDATE cataloginventory_stock_item SET is_in_stock = 0 WHERE product_id = ${id}`);

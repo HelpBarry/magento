@@ -29,6 +29,9 @@
         },
         "constraint": {
             "PRIMARY": true
+        },
+        "index": {
+            "BLUEBARRY_PRODUCT_SYNC_CLAIM_PRODUCT_ID": true
         }
     }
 }

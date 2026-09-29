@@ -66,6 +66,28 @@ class ConversionObserversTest extends TestCase
         $this->placement($visitors, self::VISITOR, area: 'adminhtml')->execute($this->event($this->order(Order::STATE_PROCESSING)));
     }
 
+    public function testEveryOrderOfAMultiAddressCheckoutIsCaptured(): void
+    {
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->expects($this->exactly(2))->method('capture');
+        $event = new Event(['orders' => [$this->order(Order::STATE_NEW), $this->order(Order::STATE_NEW)]]);
+        $event->setName('checkout_submit_all_after');
+
+        $this->placement($visitors, self::VISITOR)->execute(new Observer(['event' => $event]));
+    }
+
+    public function testAnOrderWithACancelledPartIsPaidOnceTheRestIs(): void
+    {
+        $queue = new Queue($this->createStub(OrderVisitor::class), $this->createStub(PublisherInterface::class), $this->createStub(LoggerInterface::class));
+        $order = $this->createStub(Order::class);
+        $order->method('getState')->willReturn(Order::STATE_PROCESSING);
+        $order->method('getGrandTotal')->willReturn(100.0);
+        $order->method('getTotalCanceled')->willReturn(30.0);
+        $order->method('getTotalPaid')->willReturn(70.0);
+
+        $this->assertTrue($queue->isPaid($order));
+    }
+
     public function testPaymentQueuesOnlyOnTheChangeToPaid(): void
     {
         $visitors = $this->createMock(OrderVisitor::class);

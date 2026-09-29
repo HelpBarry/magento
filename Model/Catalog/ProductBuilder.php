@@ -262,7 +262,13 @@ class ProductBuilder
             }
         }
 
-        return ['products' => $products, 'reconcileGroupIds' => $reconcile, 'failed' => $failed];
+        // A child that could not be read is missing from the batch, so its parent's children must not
+        // be switched off by what is missing: that waits until the child is read.
+        foreach ($failed as $id) {
+            $reconcile = array_diff($reconcile, array_map('strval', $parentsOf[$id] ?? []));
+        }
+
+        return ['products' => $products, 'reconcileGroupIds' => array_values($reconcile), 'failed' => $failed];
     }
 
     /**
@@ -290,7 +296,8 @@ class ProductBuilder
         }
         $backorders = (int) $row['use_config_backorders'] ? $backordersByDefault : (bool) (int) $row['backorders'];
         $minQty = (int) ($row['use_config_min_qty'] ?? 1) ? $minQtyByDefault : (float) ($row['min_qty'] ?? 0);
-        $quantity = (int) floor((float) $row['qty'] - max(0.0, $minQty));
+        // A negative threshold (with backorders) lets Magento sell below zero; it is kept as is.
+        $quantity = (int) floor((float) $row['qty'] - $minQty);
         if ($backorders) {
             return [$counted && $quantity <= 0 ? 'onbackorder' : 'instock', null];
         }
@@ -556,6 +563,18 @@ class ProductBuilder
         $stock = [];
         foreach ($rows as $row) {
             $stock[(int) $row['product_id']] = $row;
+        }
+        // A bundle is for sale while its parts are: the stock index knows, its own stock item does not.
+        $composite = array_values(array_filter($ids, function ($id) use ($items, $stock) {
+            return isset($items[$id], $stock[$id]) && !in_array($items[$id]->getTypeId(), self::COUNTED_TYPES, true);
+        }));
+        if ($composite) {
+            foreach ($connection->fetchPairs($connection->select()
+                ->from($this->resource->getTableName('cataloginventory_stock_status'), ['product_id', 'stock_status'])
+                ->where('product_id IN (?)', $composite)
+                ->where('stock_id = ?', 1)) as $productId => $status) {
+                $stock[(int) $productId]['is_in_stock'] = $status;
+            }
         }
 
         $bySku = [];

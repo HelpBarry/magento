@@ -222,6 +222,13 @@ class Sync
                 $active[strtolower($target['tenantId'])] = $target;
             }
         }
+        foreach (array_keys($active) as $key) {
+            if (!empty($this->state()['targets'][$key]['stale'])) {
+                // It missed changes the others received: the whole catalog again, now it may work.
+                $this->queue->enqueueAll();
+                $this->updateTarget($key, ['stale' => false]);
+            }
+        }
         $start = time();
         $after = 0;
         $sent = 0;
@@ -265,9 +272,6 @@ class Sync
                 unset($active[$key]);
             }
             foreach ($delivered as $key) {
-                if (!empty($this->state()['targets'][$key]['stale'])) {
-                    $this->queue->enqueueAll();
-                }
                 $this->updateTarget($key, null);
             }
 

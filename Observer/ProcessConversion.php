@@ -81,8 +81,25 @@ class ProcessConversion implements ObserverInterface
      */
     public function execute(Observer $observer)
     {
-        /** @var \Magento\Sales\Model\Order $order */
-        $order = $observer->getEvent()->getOrder();
+        $event = $observer->getEvent();
+        // Multi-address checkout places several orders at once and only says so in
+        // checkout_submit_all_after; a normal checkout fires that too, but with one order, handled
+        // on sales_model_service_quote_submit_success already.
+        if ($event->getName() === 'checkout_submit_all_after') {
+            foreach ((array) $event->getData('orders') as $order) {
+                $this->capture($order);
+            }
+            return;
+        }
+        $this->capture($event->getData('order'));
+    }
+
+    /**
+     * @param \Magento\Sales\Model\Order|null $order
+     * @return void
+     */
+    private function capture($order): void
+    {
         if (!$order || !$order->getId()) {
             return;
         }
