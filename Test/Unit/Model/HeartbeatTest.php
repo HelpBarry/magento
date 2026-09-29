@@ -133,6 +133,28 @@ class HeartbeatTest extends TestCase
         $this->assertSame([], $this->heartbeat([])->outcomes());
     }
 
+    public function testAFailedCheckKeepsTheRegistration_SoClearingStillTakesItBack(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        $this->heartbeat([503])->send($this->website(1)); // a later check fails
+        $this->calls = [];
+
+        $this->heartbeat([200], connected: [1 => false])->send($this->website(1));
+
+        $this->assertSame(['/data/magento/deactivate'], array_column($this->calls, 0));
+    }
+
+    public function testATakeBackBluebarryDidNotConfirmIsTriedAgain(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        $this->calls = [];
+        $this->heartbeat([0], connected: [1 => false])->send($this->website(1)); // unreachable
+        $this->heartbeat([200], connected: [1 => false])->sendDue(); // the next run
+        $this->heartbeat([], connected: [1 => false])->sendDue(); // confirmed: nothing left
+
+        $this->assertSame(['/data/magento/deactivate', '/data/magento/deactivate'], array_column($this->calls, 0));
+    }
+
     public function testMovingToAnotherCompanyTakesTheOldRegistrationBack(): void
     {
         $this->heartbeat([200])->send($this->website(1));
