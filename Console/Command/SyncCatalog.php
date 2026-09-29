@@ -65,6 +65,10 @@ class SyncCatalog extends Command
             $this->sync->queueAll();
         }
         $result = $this->sync->run();
+        if (!empty($result['busy'])) {
+            $output->writeln(sprintf('<error>The cron is sending the catalog right now; it sends the %d waiting products.</error>', $result['queued']));
+            return 1;
+        }
         $status = $this->sync->status();
         $output->writeln(sprintf('Sent %d products; %d waiting.', $result['sent'], $result['queued']));
         // A company that failed stays failed while the others emptied the queue.
