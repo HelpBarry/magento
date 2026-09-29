@@ -62,6 +62,11 @@ class NoteAddToCart implements ObserverInterface
     private $pending;
 
     /**
+     * @var int how many line edits are running (Quote::updateItem), whose re-adds are not noted
+     */
+    private $ignoring = 0;
+
+    /**
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param CookieManagerInterface $cookies
@@ -86,13 +91,30 @@ class NoteAddToCart implements ObserverInterface
     }
 
     /**
+     * Runs a change to the cart whose adds are not the shopper's (an edited line re-added).
+     *
+     * @param callable $change
+     * @return mixed what the change returned
+     */
+    public function ignoring(callable $change)
+    {
+        $this->ignoring++;
+        try {
+            return $change();
+        } finally {
+            $this->ignoring--;
+        }
+    }
+
+    /**
      * @param Observer $observer
      * @return void
      */
     public function execute(Observer $observer)
     {
         try {
-            if ($this->config->getTenantId($this->storeManager->getStore()->getId()) === null
+            if ($this->ignoring > 0
+                || $this->config->getTenantId($this->storeManager->getStore()->getId()) === null
                 || $this->cookieHelper->isUserNotAllowSaveCookie()
                 || !Visitor::isUuid($this->cookies->getCookie('bb_uid'))) {
                 return;
