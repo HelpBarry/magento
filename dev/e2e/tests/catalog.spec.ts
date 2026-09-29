@@ -165,6 +165,35 @@ test.describe('catalog sync', () => {
     expect(property(product, 'stock_quantity')).toBe(Math.floor(onHand + reserved));
   });
 
+  test('prices are sent as the catalog shows them, with tax when it shows tax', async () => {
+    const id = productId('bb-simple'); // 100 without tax, NL 21%
+    magento('config:set', 'tax/display/type', '2');
+    try {
+      syncCatalog('--all');
+      expect(property((await sent(id))[0], 'price')).toBe(121);
+    } finally {
+      sql("DELETE FROM core_config_data WHERE path = 'tax/display/type'");
+      magento('cache:flush', 'config');
+    }
+  });
+
+  test("a bundle's part changing resends the bundles it is in", async ({ request }) => {
+    syncCatalog();
+    await mockApi.reset();
+    const setPrice = async (price: number) => {
+      await rest(request, 'put', '/rest/all/V1/products/bb-part-a', { product: { sku: 'bb-part-a', price } });
+      magento('indexer:reindex', 'catalog_product_price');
+    };
+    await setPrice(26);
+    try {
+      syncCatalog();
+      const references = (await syncs()).flatMap((r) => r.body.products).map((p: any) => p.reference);
+      expect(references).toEqual(expect.arrayContaining([productId('bb-part-a'), productId('bb-bundle-dynamic'), productId('bb-bundle-fixed')]));
+    } finally {
+      await setPrice(30); // the fixtures' price, which the order specs' bundles are built from
+    }
+  });
+
   test('a deleted product is switched off', async ({ request }) => {
     const id = productId(SKU);
     await rest(request, 'delete', `/rest/V1/products/${SKU}`);

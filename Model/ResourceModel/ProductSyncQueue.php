@@ -69,31 +69,59 @@ class ProductSyncQueue
     }
 
     /**
-     * The next queued products after a product id, in id order.
+     * Claims the next queued products after a product id, in id order, and returns them. Claimed in
+     * one statement before they are read, so a change saved after this is never taken for one already
+     * handled: saving clears the claim, and remove() spares the row.
      *
      * @param int $limit
      * @param int $afterId
+     * @param string $claim
      * @return array<int, string> product id => queued_at (UTC)
      */
-    public function next(int $limit, int $afterId = 0): array
+    public function claimNext(int $limit, int $afterId, string $claim): array
     {
-        $select = $this->connection()->select()
+        $connection = $this->connection();
+        $connection->query(sprintf(
+            'UPDATE %s SET claim = ? WHERE product_id > ? ORDER BY product_id LIMIT %d',
+            $connection->quoteIdentifier($this->table()),
+            $limit
+        ), [$claim, $afterId]);
+        $select = $connection->select()
             ->from($this->table(), ['product_id', 'queued_at'])
-            ->where('product_id > ?', $afterId)
-            ->order('product_id')
-            ->limit($limit);
-        return array_map('strval', $this->connection()->fetchPairs($select));
+            ->where('claim = ?', $claim)
+            ->order('product_id');
+        return array_map('strval', $connection->fetchPairs($select));
     }
 
     /**
+     * Gives claimed products back to the queue, for a later run.
+     *
      * @param int[] $productIds
      * @param string $claim
      * @return void
      */
-    public function claim(array $productIds, string $claim): void
+    public function release(array $productIds, string $claim): void
     {
         if ($productIds) {
-            $this->connection()->update($this->table(), ['claim' => $claim], ['product_id IN (?)' => $productIds]);
+            $this->connection()->update($this->table(), ['claim' => null], ['product_id IN (?)' => $productIds, 'claim = ?' => $claim]);
+        }
+    }
+
+    /**
+     * Queues products that are not queued yet, leaving queued ones (and their attempts) as they are.
+     *
+     * @param int[] $productIds
+     * @return void
+     */
+    public function ensureQueued(array $productIds): void
+    {
+        $rows = [];
+        foreach (array_unique(array_map('intval', $productIds)) as $id) {
+            $rows[] = ['product_id' => $id, 'claim' => null, 'attempts' => 0, 'queued_at' => gmdate('Y-m-d H:i:s')];
+        }
+        if ($rows) {
+            // Updating only the key leaves a queued row as it was.
+            $this->connection()->insertOnDuplicate($this->table(), $rows, ['product_id']);
         }
     }
 

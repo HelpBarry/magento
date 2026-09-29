@@ -9,6 +9,8 @@ use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\Attribute\CollectionFactory as AttributeCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
+use Magento\Customer\Api\GroupRepositoryInterface;
+use Magento\Customer\Model\Group;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\EntityManager\MetadataPool;
@@ -16,6 +18,8 @@ use Magento\Framework\Indexer\IndexerRegistry;
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface;
 use Magento\Framework\UrlInterface;
 use Magento\Store\Model\Store;
+use Magento\Tax\Model\Calculation as TaxCalculation;
+use Magento\Tax\Model\Config as TaxConfig;
 
 /**
  * Reads a batch of products the way one website's default store view shows them, in the shape
@@ -38,7 +42,10 @@ class ProductBuilder
     private const CONTAINER_TYPES = ['configurable', 'grouped'];
 
     /** Attribute inputs synced as properties. */
-    private const ATTRIBUTE_INPUTS = ['select', 'multiselect', 'boolean', 'text', 'price', 'weight'];
+    private const ATTRIBUTE_INPUTS = ['select', 'multiselect', 'boolean', 'text', 'textarea', 'price', 'weight'];
+
+    /** A longer text attribute is cut here (it is a fact about the product, not its description). */
+    private const MAX_TEXT = 1000;
 
     /** A change waits at most this long for the price index before it is sent anyway. */
     private const PRICE_INDEX_WAIT = 3600;
@@ -85,6 +92,24 @@ class ProductBuilder
      */
     private $timezone;
 
+    /**
+     * @var TaxCalculation
+     */
+    private $taxCalculation;
+
+    /**
+     * @var TaxConfig
+     */
+    private $taxConfig;
+
+    /**
+     * @var GroupRepositoryInterface
+     */
+    private $customerGroups;
+
+    /** @var array<int, array<int, float>> store => product tax class => price factor */
+    private $taxFactors = [];
+
     /** @var array<string, \Magento\Catalog\Model\ResourceModel\Eav\Attribute>|null */
     private $syncedAttributes;
 
@@ -103,6 +128,9 @@ class ProductBuilder
      * @param MetadataPool $metadataPool
      * @param IndexerRegistry $indexers
      * @param TimezoneInterface $timezone
+     * @param TaxCalculation $taxCalculation
+     * @param TaxConfig $taxConfig
+     * @param GroupRepositoryInterface $customerGroups
      */
     public function __construct(
         ProductCollectionFactory $products,
@@ -112,7 +140,10 @@ class ProductBuilder
         ScopeConfigInterface $scopeConfig,
         MetadataPool $metadataPool,
         IndexerRegistry $indexers,
-        TimezoneInterface $timezone
+        TimezoneInterface $timezone,
+        TaxCalculation $taxCalculation,
+        TaxConfig $taxConfig,
+        GroupRepositoryInterface $customerGroups
     ) {
         $this->products = $products;
         $this->categories = $categories;
@@ -122,6 +153,9 @@ class ProductBuilder
         $this->metadataPool = $metadataPool;
         $this->indexers = $indexers;
         $this->timezone = $timezone;
+        $this->taxCalculation = $taxCalculation;
+        $this->taxConfig = $taxConfig;
+        $this->customerGroups = $customerGroups;
     }
 
     /**
@@ -169,9 +203,10 @@ class ProductBuilder
         $websiteId = (int) $store->getWebsiteId();
         $storeId = (int) $store->getId();
 
-        // A configurable product brings all of its children, so bluebarry can switch off one taken off it.
+        // A configurable product brings all of its children, so bluebarry can switch off one taken off it;
+        // a part brings the bundles it is in, whose price and stock follow it.
         $children = $this->configurableLinks('parent', $ids);
-        $all = array_values(array_unique(array_merge($ids, array_keys($children))));
+        $all = array_values(array_unique(array_merge($ids, array_keys($children), $this->bundlesWith($ids))));
         $parentsOf = [];
         foreach ($this->configurableLinks('child', $all) as $child => $parents) {
             sort($parents);
@@ -238,9 +273,10 @@ class ProductBuilder
      * @param bool $manageByDefault
      * @param bool $backordersByDefault
      * @param bool $counted whether the product type has a quantity of its own
+     * @param float $minQtyByDefault the out-of-stock threshold: what is left at or below it is not for sale
      * @return array{0: string, 1: int|null} status, quantity
      */
-    public static function stockOf(?array $row, bool $manageByDefault, bool $backordersByDefault, bool $counted): array
+    public static function stockOf(?array $row, bool $manageByDefault, bool $backordersByDefault, bool $counted, float $minQtyByDefault = 0.0): array
     {
         if ($row === null) {
             return ['instock', null];
@@ -253,7 +289,8 @@ class ProductBuilder
             return ['outofstock', null];
         }
         $backorders = (int) $row['use_config_backorders'] ? $backordersByDefault : (bool) (int) $row['backorders'];
-        $quantity = (int) floor((float) $row['qty']);
+        $minQty = (int) ($row['use_config_min_qty'] ?? 1) ? $minQtyByDefault : (float) ($row['min_qty'] ?? 0);
+        $quantity = (int) floor((float) $row['qty'] - max(0.0, $minQty));
         if ($backorders) {
             return [$counted && $quantity <= 0 ? 'onbackorder' : 'instock', null];
         }
@@ -294,10 +331,15 @@ class ProductBuilder
         $id = (int) $product->getId();
         $type = (string) $product->getTypeId();
 
+        // As shown: in the store view's currency, with or without tax as its catalog displays prices.
+        $factor = $currency['rate'] * $this->taxFactor($store, (int) $product->getData('tax_class_id'));
         if ($price !== null) {
             // A bundle's own final price is its fixed part; "as low as" is what shoppers see.
             $final = $type === 'bundle' ? (float) $price['min_price'] : (float) $price['final_price'];
-            [$final, $regular] = self::pricesOf($final * $currency['rate'], $type === 'bundle' ? null : (float) $price['price'] * $currency['rate']);
+            [$final, $regular] = self::pricesOf($final * $factor, $type === 'bundle' ? null : (float) $price['price'] * $factor);
+        } elseif ($type === 'bundle') {
+            // A bundle's price comes from its parts, through the index: none rather than a wrong one.
+            [$final, $regular] = [null, null];
         } else {
             // Not in the price index (not indexed yet, or out of stock while those are hidden): its own
             // price and special price. Catalog price rules only apply through the index.
@@ -306,15 +348,16 @@ class ProductBuilder
             $onSale = $special !== null && $special !== ''
                 && $this->timezone->isScopeDateInInterval($store, $product->getData('special_from_date'), $product->getData('special_to_date'));
             [$final, $regular] = self::pricesOf(
-                ($onSale ? min((float) $special, $regular) : $regular) * $currency['rate'],
-                $regular * $currency['rate']
+                ($onSale ? min((float) $special, $regular) : $regular) * $factor,
+                $regular * $factor
             );
         }
         [$stockStatus, $quantity] = self::stockOf(
             $stock,
             $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock'),
             (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders'),
-            in_array($type, self::COUNTED_TYPES, true)
+            in_array($type, self::COUNTED_TYPES, true),
+            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty')
         );
 
         $properties = [
@@ -390,7 +433,7 @@ class ProductBuilder
                 }
                 return $values ? ['propertyName' => $name, 'value' => $values, 'type' => 'collection'] : null;
             default:
-                $text = $this->text($value);
+                $text = mb_substr($this->text($value), 0, self::MAX_TEXT);
                 return $text === '' ? null : ['propertyName' => $name, 'value' => $text, 'type' => 'text'];
         }
     }
@@ -459,7 +502,7 @@ class ProductBuilder
         $collection = $this->products->create();
         $collection->setStoreId($storeId)
             ->addIdFilter($ids)
-            ->addAttributeToSelect(array_merge(['name', 'status', 'visibility', 'image', 'url_key', 'price', 'special_price', 'special_from_date', 'special_to_date'], array_keys($this->syncedAttributes())))
+            ->addAttributeToSelect(array_merge(['name', 'status', 'visibility', 'image', 'url_key', 'price', 'special_price', 'special_from_date', 'special_to_date', 'tax_class_id'], array_keys($this->syncedAttributes())))
             ->addUrlRewrite();
         $collection->addMediaGalleryData();
         $items = [];
@@ -506,6 +549,7 @@ class ProductBuilder
         $rows = $connection->fetchAll($connection->select()
             ->from($this->resource->getTableName('cataloginventory_stock_item'), [
                 'product_id', 'qty', 'is_in_stock', 'use_config_manage_stock', 'manage_stock', 'use_config_backorders', 'backorders',
+                'use_config_min_qty', 'min_qty',
             ])
             ->where('product_id IN (?)', $ids)
             ->where('stock_id = ?', 1));
@@ -526,6 +570,11 @@ class ProductBuilder
         $stockId = $this->salesStockId($store);
         $index = $this->resource->getTableName('inventory_stock_' . $stockId);
         if ($stockId !== 1 && $connection->isTableExists($index)) {
+            // Not in the website's stock at all: not for sale there.
+            foreach ($bySku as $id) {
+                $stock[$id]['qty'] = 0;
+                $stock[$id]['is_in_stock'] = 0;
+            }
             foreach ($connection->fetchAll($connection->select()->from($index, ['sku', 'quantity', 'is_salable'])
                 ->where('sku IN (?)', array_keys($bySku))) as $row) {
                 if (isset($bySku[$row['sku']])) {
@@ -582,6 +631,53 @@ class ProductBuilder
             ->from($this->resource->getTableName('catalog_product_website'), 'product_id')
             ->where('product_id IN (?)', $ids)
             ->where('website_id = ?', $websiteId)));
+    }
+
+    /**
+     * The bundles that contain any of the products (by entity id; Adobe Commerce links them by row id).
+     *
+     * @param int[] $ids
+     * @return int[]
+     */
+    private function bundlesWith(array $ids): array
+    {
+        $connection = $this->resource->getConnection();
+        $table = $this->resource->getTableName('catalog_product_bundle_selection');
+        if (!$ids || !$connection->isTableExists($table)) {
+            return [];
+        }
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        return array_map('intval', $connection->fetchCol($connection->select()->distinct()
+            ->from(['selection' => $table], [])
+            ->join(['bundle' => $this->resource->getTableName('catalog_product_entity')], "bundle.$linkField = selection.parent_product_id", ['entity_id'])
+            ->where('selection.product_id IN (?)', $ids)));
+    }
+
+    /**
+     * What turns a catalog price into the price guests see: the tax rate added when prices are entered
+     * without tax but shown with it, taken off in the reverse case, 1 otherwise. Guests' tax class and
+     * the store's default tax destination, as Magento prices a page for a visitor it does not know.
+     *
+     * @param Store $store
+     * @param int $productTaxClass
+     * @return float
+     */
+    private function taxFactor(Store $store, int $productTaxClass): float
+    {
+        $storeId = (int) $store->getId();
+        if (!isset($this->taxFactors[$storeId][$productTaxClass])) {
+            $entered = $this->taxConfig->priceIncludesTax($store);
+            $shown = (int) $this->taxConfig->getPriceDisplayType($store) !== TaxConfig::DISPLAY_TYPE_EXCLUDING_TAX;
+            $factor = 1.0;
+            if ($entered !== $shown && $productTaxClass > 0) {
+                $guests = (int) $this->customerGroups->getById(Group::NOT_LOGGED_IN_ID)->getTaxClassId();
+                $request = $this->taxCalculation->getRateRequest(null, null, $guests, $store);
+                $rate = (float) $this->taxCalculation->getRate($request->setProductClassId($productTaxClass)) / 100;
+                $factor = $shown ? 1 + $rate : 1 / (1 + $rate);
+            }
+            $this->taxFactors[$storeId][$productTaxClass] = $factor;
+        }
+        return $this->taxFactors[$storeId][$productTaxClass];
     }
 
     /**
