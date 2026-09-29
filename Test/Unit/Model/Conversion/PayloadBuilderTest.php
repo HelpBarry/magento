@@ -51,6 +51,18 @@ class PayloadBuilderTest extends TestCase
         $this->assertSame([0.5, 20.0], [$item['quantity'], $item['priceExclTax']]);
     }
 
+    public function testACancelledPartIsNotReported(): void
+    {
+        // 3 ordered at 100 + 21% tax each, 1 of them cancelled: 2 sold, and 121 less in total.
+        $item = $this->item(1, null, 'simple', '7', 3, 300.0, 63.0, qtyCanceled: 1);
+        $order = $this->order([$item, $this->item(2, null, 'simple', '8', 1, 50.0, 0.0, qtyCanceled: 1)], 368.0, 63.0, canceled: 121.0, taxCanceled: 21.0);
+
+        $payload = (new PayloadBuilder())->build($order, $this->visitor(), 'shop.example');
+
+        $this->assertSame([['7', 2.0, 100.0, 121.0]], array_map(fn ($i) => [$i['itemId'], $i['quantity'], $i['priceExclTax'], $i['priceInclTax']], $payload['items']));
+        $this->assertSame([200.0, 42.0, 247.0], [$payload['orderProductTotal'], $payload['orderTaxTotal'], $payload['orderGrandTotal']]);
+    }
+
     public function testDiscountsComeOffTheLines(): void
     {
         // EUR 100 line, EUR 10 off; tax on the discounted amount.
@@ -118,7 +130,7 @@ class PayloadBuilderTest extends TestCase
         return ['user_id' => self::USER, 'session_id' => self::SESSION, 'advisor_id' => self::ADVISOR, 'experiments' => null];
     }
 
-    private function order(array $items, float $grandTotal, float $taxAmount): Order
+    private function order(array $items, float $grandTotal, float $taxAmount, float $canceled = 0.0, float $taxCanceled = 0.0): Order
     {
         $order = $this->createStub(Order::class);
         $order->method('getItems')->willReturn($items);
@@ -127,10 +139,12 @@ class PayloadBuilderTest extends TestCase
         $order->method('getOrderCurrencyCode')->willReturn('EUR');
         $order->method('getGrandTotal')->willReturn($grandTotal);
         $order->method('getTaxAmount')->willReturn($taxAmount);
+        $order->method('getTotalCanceled')->willReturn($canceled);
+        $order->method('getTaxCanceled')->willReturn($taxCanceled);
         return $order;
     }
 
-    private function item(int $id, ?int $parentId, string $type, string $productId, float $qty, float $rowTotal, float $tax, float $discount = 0.0): Item
+    private function item(int $id, ?int $parentId, string $type, string $productId, float $qty, float $rowTotal, float $tax, float $discount = 0.0, float $qtyCanceled = 0.0): Item
     {
         $item = $this->createStub(Item::class);
         $item->method('getItemId')->willReturn($id);
@@ -138,6 +152,7 @@ class PayloadBuilderTest extends TestCase
         $item->method('getProductType')->willReturn($type);
         $item->method('getProductId')->willReturn($productId);
         $item->method('getQtyOrdered')->willReturn($qty);
+        $item->method('getQtyCanceled')->willReturn($qtyCanceled);
         $item->method('getRowTotal')->willReturn($rowTotal);
         $item->method('getTaxAmount')->willReturn($tax);
         $item->method('getDiscountAmount')->willReturn($discount);

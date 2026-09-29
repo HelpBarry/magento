@@ -39,9 +39,16 @@ class PayloadBuilder
                 continue;
             }
             // Decimal quantities (0.5 kg) are real; only a missing one would divide by zero.
-            $quantity = (float) $item->getQtyOrdered() > 0 ? (float) $item->getQtyOrdered() : 1.0;
-            $net = $this->netRowTotal($item);
-            $gross = $net + (float) $item->getTaxAmount();
+            $ordered = (float) $item->getQtyOrdered() > 0 ? (float) $item->getQtyOrdered() : 1.0;
+            // What the merchant cancelled of the line was not sold.
+            $quantity = $ordered - (float) $item->getQtyCanceled();
+            if ($quantity <= 0) {
+                continue;
+            }
+            $share = $quantity / $ordered;
+            $net = $this->netRowTotal($item) * $share;
+            $tax = (float) $item->getTaxAmount() * $share;
+            $gross = $net + $tax;
             $productTotal += $net;
 
             $reference = $item->getProductType() === 'configurable'
@@ -53,12 +60,12 @@ class PayloadBuilder
                 'quantity' => $quantity,
                 'priceExclTax' => round($net / $quantity, self::PRECISION),
                 'priceInclTax' => round($gross / $quantity, self::PRECISION),
-                'taxPercentage' => $net > 0 ? round(((float) $item->getTaxAmount()) / $net * 100, 2) : 0.0,
+                'taxPercentage' => $net > 0 ? round($tax / $net * 100, 2) : 0.0,
                 'value' => round($gross / $quantity, self::PRECISION),
             ];
         }
 
-        $grandTotal = round((float) $order->getGrandTotal(), self::PRECISION);
+        $grandTotal = round((float) $order->getGrandTotal() - (float) $order->getTotalCanceled(), self::PRECISION);
         $payload = [
             'userId' => $visitor['user_id'],
             'commerceSource' => 'Magento',
@@ -69,7 +76,7 @@ class PayloadBuilder
             'currencyIso' => $order->getOrderCurrencyCode(),
             // The products after discounts, without tax or shipping.
             'orderProductTotal' => round($productTotal, self::PRECISION),
-            'orderTaxTotal' => round((float) $order->getTaxAmount(), self::PRECISION),
+            'orderTaxTotal' => round((float) $order->getTaxAmount() - (float) $order->getTaxCanceled(), self::PRECISION),
             'orderGrandTotal' => $grandTotal,
             'value' => $grandTotal,
             'items' => $items,

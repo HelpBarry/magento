@@ -4,6 +4,7 @@ namespace Bluebarry\Bluebarry\Model;
 
 use Bluebarry\Bluebarry\Model\Api\Client;
 use Magento\Framework\App\ProductMetadataInterface;
+use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Module\ModuleListInterface;
 use Magento\Framework\UrlInterface;
@@ -53,12 +54,18 @@ class Heartbeat
     private $flags;
 
     /**
+     * @var EncryptorInterface
+     */
+    private $encryptor;
+
+    /**
      * @param Config $config
      * @param Client $client
      * @param StoreManagerInterface $storeManager
      * @param ProductMetadataInterface $productMetadata
      * @param ModuleListInterface $moduleList
      * @param FlagManager $flags
+     * @param EncryptorInterface $encryptor
      */
     public function __construct(
         Config $config,
@@ -66,7 +73,8 @@ class Heartbeat
         StoreManagerInterface $storeManager,
         ProductMetadataInterface $productMetadata,
         ModuleListInterface $moduleList,
-        FlagManager $flags
+        FlagManager $flags,
+        EncryptorInterface $encryptor
     ) {
         $this->config = $config;
         $this->client = $client;
@@ -74,6 +82,7 @@ class Heartbeat
         $this->productMetadata = $productMetadata;
         $this->moduleList = $moduleList;
         $this->flags = $flags;
+        $this->encryptor = $encryptor;
     }
 
     /**
@@ -129,12 +138,19 @@ class Heartbeat
         $websiteId = (int) $website->getId();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
         $apiKey = $this->config->getWebsiteApiKey($websiteId);
+        $previous = $this->outcomes()[$websiteId] ?? null;
         if ($tenantId === null || $apiKey === null) {
+            // Disconnected on purpose: bluebarry hears it now rather than when the heartbeat goes quiet.
+            $this->deactivatePrevious($previous);
             $this->record($websiteId, null);
             return null;
         }
 
         $siteUrl = $this->siteUrl($website);
+        // Moved to another company, or to another address: the old registration goes.
+        if ($previous !== null && (($previous['tenant'] ?? $tenantId) !== strtolower($tenantId) || ($previous['site'] ?? $siteUrl) !== $siteUrl)) {
+            $this->deactivatePrevious($previous);
+        }
         $response = $this->client->post('/data/magento/ping', [
             // bluebarry refuses a key from another company before it registers anything.
             'tenantId' => $tenantId,
@@ -148,6 +164,9 @@ class Heartbeat
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];
         if ($response->isSuccess()) {
             $outcome['ok'] = true;
+            // What this registration was made with, to take it back when the website moves on.
+            $outcome['tenant'] = strtolower($tenantId);
+            $outcome['key'] = $this->encryptor->encrypt($apiKey);
         } elseif ($response->getStatus() === 409) {
             $outcome['error'] = 'The API key belongs to another bluebarry company than the Tenant ID.';
         } elseif ($response->getStatus() === 401 || $response->getStatus() === 403) {
@@ -176,6 +195,23 @@ class Heartbeat
             } catch (\Exception $e) {
                 // One broken website does not keep the others registered.
             }
+        }
+    }
+
+    /**
+     * Tells bluebarry a registration this website made is gone. Best effort.
+     *
+     * @param array|null $previous the outcome of the last heartbeat bluebarry accepted
+     * @return void
+     */
+    private function deactivatePrevious(?array $previous): void
+    {
+        if (empty($previous['ok']) || empty($previous['tenant']) || empty($previous['key']) || empty($previous['site'])) {
+            return;
+        }
+        $key = $this->encryptor->decrypt((string) $previous['key']);
+        if ($key !== '') {
+            $this->client->post('/data/magento/deactivate', ['siteUrl' => $previous['site']], (string) $previous['tenant'], $key, 5);
         }
     }
 
