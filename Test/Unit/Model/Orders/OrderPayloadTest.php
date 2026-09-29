@@ -36,6 +36,29 @@ class OrderPayloadTest extends TestCase
         $this->assertSame('PENDING', (new OrderPayload())->build($this->order(Order::STATE_NEW, []), false)['financialStatus']);
     }
 
+    public function testAnOrderShippedBeforeItWasInvoicedIsNotPaidYet(): void
+    {
+        $this->assertSame('PENDING', (new OrderPayload())->build($this->order(Order::STATE_PROCESSING, [], paid: 0.0), false)['financialStatus']);
+    }
+
+    public function testCancelledUnitsAreNotCounted_AndAFullyCancelledLineIsLeftOut(): void
+    {
+        $order = $this->order(Order::STATE_PROCESSING, [
+            $this->item(12, null, 'simple', '1', 2, 60.5, canceled: 1),
+            $this->item(13, null, 'simple', '2', 1, 10.0, canceled: 1),
+        ], paid: 242.0, canceled: 60.5);
+
+        $this->assertSame([['12', 1]], array_map(fn ($l) => [$l['id'], $l['quantity']], (new OrderPayload())->build($order, false)['lines']));
+    }
+
+    public function testNamesAreCutToWhatBluebarryTakes(): void
+    {
+        $order = $this->order(Order::STATE_PROCESSING, []);
+        $order->method('getCustomerFirstname')->willReturn(str_repeat('é', 200));
+
+        $this->assertSame(128, mb_strlen((new OrderPayload())->build($order, false)['firstName']));
+    }
+
     public function testANewPurchaseIsOneNeverSentAndPlacedRecently(): void
     {
         $recent = $this->order(Order::STATE_PROCESSING, [], createdAt: gmdate('Y-m-d H:i:s', time() - 3600));
@@ -45,7 +68,7 @@ class OrderPayloadTest extends TestCase
         $this->assertFalse(Sync::isNewPurchase($this->order(Order::STATE_PROCESSING, [], createdAt: gmdate('Y-m-d H:i:s', time() - 30 * 86400)), false));
     }
 
-    private function order(string $state, array $items, float $refunded = 0.0, string $createdAt = '2026-09-28 12:30:00'): Order
+    private function order(string $state, array $items, float $refunded = 0.0, string $createdAt = '2026-09-28 12:30:00', float $paid = 302.5, float $canceled = 0.0): Order
     {
         $order = $this->createStub(Order::class);
         $order->method('getAllItems')->willReturn($items);
@@ -54,13 +77,15 @@ class OrderPayloadTest extends TestCase
         $order->method('getCreatedAt')->willReturn($createdAt);
         $order->method('getGrandTotal')->willReturn(302.5);
         $order->method('getTotalRefunded')->willReturn($refunded);
+        $order->method('getTotalPaid')->willReturn($paid);
+        $order->method('getTotalCanceled')->willReturn($canceled);
         $order->method('getOrderCurrencyCode')->willReturn('EUR');
         $order->method('getCustomerEmail')->willReturn('buyer@example.com');
         $order->method('getQuoteId')->willReturn('77');
         return $order;
     }
 
-    private function item(int $id, ?int $parentId, string $type, string $productId, float $qty, float $priceInclTax): Item
+    private function item(int $id, ?int $parentId, string $type, string $productId, float $qty, float $priceInclTax, float $canceled = 0.0): Item
     {
         $item = $this->createStub(Item::class);
         $item->method('getItemId')->willReturn($id);
@@ -68,6 +93,7 @@ class OrderPayloadTest extends TestCase
         $item->method('getProductType')->willReturn($type);
         $item->method('getProductId')->willReturn($productId);
         $item->method('getQtyOrdered')->willReturn($qty);
+        $item->method('getQtyCanceled')->willReturn($canceled);
         $item->method('getPriceInclTax')->willReturn($priceInclTax);
         $item->method('getName')->willReturn("Line $id");
         return $item;

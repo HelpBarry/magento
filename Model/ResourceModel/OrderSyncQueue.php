@@ -162,7 +162,8 @@ class OrderSyncQueue
         $dropped = array_map('intval', $connection->fetchCol($connection->select()->from($this->table(), 'order_id')
             ->where('order_id IN (?)', $orderIds)->where('attempts >= ?', self::MAX_ATTEMPTS)->where('queued_at IS NOT NULL')));
         if ($dropped) {
-            $connection->update($this->table(), ['queued_at' => null, 'live' => 0], ['order_id IN (?)' => $dropped]);
+            // Still failed: a change saved meanwhile reset its attempts, and stays queued.
+            $connection->update($this->table(), ['queued_at' => null, 'live' => 0], ['order_id IN (?)' => $dropped, 'attempts >= ?' => self::MAX_ATTEMPTS]);
         }
         return $dropped;
     }

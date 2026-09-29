@@ -44,7 +44,7 @@ test.describe('orders', () => {
     // Earlier specs' orders are no concern of this one.
     sql('DELETE FROM bluebarry_order_sync');
     sql('DELETE FROM bluebarry_checkout');
-    sql("DELETE FROM flag WHERE flag_code IN ('bluebarry_order_import', 'bluebarry_order_sync')");
+    sql("DELETE FROM flag WHERE flag_code LIKE 'bluebarry\\_order\\_import%' OR flag_code = 'bluebarry_order_sync'");
   });
 
   test.beforeEach(async () => {
@@ -54,7 +54,8 @@ test.describe('orders', () => {
   test.afterAll(async () => {
     await mockApi.reset();
     sql("DELETE FROM core_config_data WHERE path = 'bluebarry_module/general/api_key'");
-    sql("DELETE FROM flag WHERE flag_code IN ('bluebarry_order_import', 'bluebarry_order_sync', 'bluebarry_catalog')");
+    sql("DELETE FROM flag WHERE flag_code LIKE 'bluebarry\\_order\\_import%' OR flag_code IN ('bluebarry_order_sync', 'bluebarry_catalog')");
+    sql("DELETE FROM core_config_data WHERE path = 'web/cookie/cookie_restriction'");
     sql('DELETE FROM bluebarry_product_sync');
     magento('cache:flush');
   });
@@ -117,6 +118,8 @@ test.describe('orders', () => {
     expect(['REFUNDED', 'PARTIALLY_REFUNDED']).toContain(refunded.financialStatus);
   });
 
+  let imported = 0;
+
   test("bluebarry's Orders page gets the last year, as history, with its progress", async ({ request }) => {
     expect(await (await command(request, { command: 'orders.import', payload: { since: new Date(Date.now() - 365 * 86400000).toISOString() } })).json()).toEqual({ started: true });
     syncOrders();
@@ -127,17 +130,50 @@ test.describe('orders', () => {
     expect(orders.map((o: any) => o.id)).toContain(orderNumber);
     const progress = (await sent('/data/magento/orders/sync')).map((r) => r.body.import).filter(Boolean);
     expect(progress.at(-1)).toBe('Completed');
+    imported = (await sent('/data/magento/orders/sync')).at(-1)!.body.importedCount;
+    expect(imported).toBe(new Set(orders.map((o: any) => o.id)).size);
     // Imported orders are known now: a later change is not a new purchase.
     expect(sql(`SELECT COUNT(*) FROM bluebarry_order_sync WHERE synced_at IS NOT NULL`)).not.toBe('0');
   });
 
   test("bluebarry's tasks start the import for a store it could not reach", async () => {
     await fetch(`${MOCK_API}/__tasks`, { method: 'PUT', body: JSON.stringify({ importOrders: true }) });
-    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_order_import'");
+    sql("DELETE FROM flag WHERE flag_code LIKE 'bluebarry\\_order\\_import%'");
     syncOrders(); // asks for the tasks first, as the 10-minute cron does
 
     const [tasks] = await sent('/data/magento/tasks');
     expect(tasks.path).toContain('storeKey=localhost');
     expect((await sent('/data/magento/orders/sync')).map((r) => r.body.import).filter(Boolean).at(-1)).toBe('Completed');
+  });
+
+  test('a batch bluebarry did not take is sent again, not skipped', async ({ request }) => {
+    sql("DELETE FROM flag WHERE flag_code LIKE 'bluebarry\\_order\\_import%'");
+    expect(await (await command(request, { command: 'orders.import', payload: { since: new Date(Date.now() - 365 * 86400000).toISOString() } })).json()).toEqual({ started: true });
+    await mockApi.respondWith({ status: 503, body: { error: 'down' } });
+    syncOrders();
+
+    await mockApi.reset();
+    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_order_sync'"); // no outage pause: the next run is the retry
+    syncOrders();
+    const last = (await sent('/data/magento/orders/sync')).at(-1)!.body;
+    expect([last.import, last.importedCount]).toEqual(['Completed', imported]);
+  });
+
+  test("without the shopper's cookie consent the checkout's email is not kept", async ({ page }) => {
+    magento('config:set', 'web/cookie/cookie_restriction', '1');
+    magento('cache:flush');
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    const noted = await page.evaluate(async () => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch('/bluebarry/checkout/email/', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, email: 'no-consent@example.com' }).toString(),
+      });
+      return (await response.json()).noted;
+    });
+    expect(noted).toBe(false);
+    expect(sql("SELECT COUNT(*) FROM bluebarry_checkout WHERE email = 'no-consent@example.com'")).toBe('0');
   });
 });

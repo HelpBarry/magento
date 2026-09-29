@@ -31,7 +31,12 @@ class OrderPayload
             if ($item->getParentItemId()) {
                 continue;
             }
-            $quantity = max(1, (int) round((float) $item->getQtyOrdered()));
+            // What is left of it once the merchant cancelled part of the order; bluebarry counts whole units.
+            $left = (float) $item->getQtyOrdered() - (float) $item->getQtyCanceled();
+            if ($left <= 0) {
+                continue;
+            }
+            $quantity = max(1, (int) round($left));
             $lines[] = [
                 'id' => (string) $item->getItemId(),
                 'reference' => $item->getProductType() === 'configurable'
@@ -48,7 +53,9 @@ class OrderPayload
         $refunded = (float) $order->getTotalRefunded();
         $canceled = (float) $order->getTotalCanceled();
         $state = (string) $order->getState();
-        $paid = in_array($state, [Order::STATE_PROCESSING, Order::STATE_COMPLETE, Order::STATE_CLOSED], true);
+        // Processing can also mean shipped before it was invoiced: paid is what was paid.
+        $paid = in_array($state, [Order::STATE_PROCESSING, Order::STATE_COMPLETE, Order::STATE_CLOSED], true)
+            && $total - $canceled - (float) $order->getTotalPaid() < 0.005;
         if ($state === Order::STATE_CANCELED) {
             $status = 'VOIDED';
         } elseif ($refunded > 0 && $refunded >= $total - $canceled - 0.005) {
@@ -64,8 +71,8 @@ class OrderPayload
             'id' => (string) $order->getIncrementId(),
             'customerId' => $order->getCustomerId() ? (string) $order->getCustomerId() : null,
             'email' => $order->getCustomerEmail() ?: null,
-            'firstName' => $order->getCustomerFirstname() ?: ($order->getBillingAddress() ? $order->getBillingAddress()->getFirstname() : null),
-            'lastName' => $order->getCustomerLastname() ?: ($order->getBillingAddress() ? $order->getBillingAddress()->getLastname() : null),
+            'firstName' => $this->name($order->getCustomerFirstname() ?: ($order->getBillingAddress() ? $order->getBillingAddress()->getFirstname() : null)),
+            'lastName' => $this->name($order->getCustomerLastname() ?: ($order->getBillingAddress() ? $order->getBillingAddress()->getLastname() : null)),
             'createdAt' => $this->utc((string) $order->getCreatedAt()),
             'updatedAt' => $order->getUpdatedAt() ? $this->utc((string) $order->getUpdatedAt()) : null,
             'currency' => $order->getOrderCurrencyCode(),
@@ -83,6 +90,15 @@ class OrderPayload
             $payload['checkoutToken'] = (string) $order->getQuoteId();
         }
         return $payload;
+    }
+
+    /**
+     * @param string|null $name
+     * @return string|null at most what bluebarry takes
+     */
+    private function name(?string $name): ?string
+    {
+        return $name ? mb_substr($name, 0, 128) : null;
     }
 
     /**

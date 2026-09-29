@@ -67,17 +67,22 @@ class CheckoutNotes
      *
      * @param int $limit
      * @param int $settleSeconds
+     * @param int[] $skipStoreIds store views whose website bluebarry cannot take them from now
      * @return array[]
      */
-    public function due(int $limit, int $settleSeconds): array
+    public function due(int $limit, int $settleSeconds, array $skipStoreIds = []): array
     {
         $connection = $this->connection();
-        return $connection->fetchAll($connection->select()
+        $select = $connection->select()
             ->from($this->table())
             ->where('sent_at IS NULL')
             ->where('completed = 1 OR noted_at <= ?', gmdate('Y-m-d H:i:s', time() - $settleSeconds))
             ->order('noted_at')
-            ->limit($limit));
+            ->limit($limit);
+        if ($skipStoreIds) {
+            $select->where('store_id NOT IN (?)', $skipStoreIds);
+        }
+        return $connection->fetchAll($select);
     }
 
     /**
