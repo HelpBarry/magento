@@ -6,6 +6,10 @@
             <schedule>* * * * *</schedule>
         </job>
         <!-- Daily heartbeat per website (and right after an upgrade). Reads one flag when nothing is due. -->
+        <!-- The settings chosen in Studio, for when bluebarry could not reach the store. One small request per website. -->
+        <job name="bluebarry_refresh_storefront" instance="Bluebarry\Bluebarry\Cron\RefreshStorefront" method="execute">
+            <schedule>*/10 * * * *</schedule>
+        </job>
         <job name="bluebarry_send_heartbeat" instance="Bluebarry\Bluebarry\Cron\SendHeartbeat" method="execute">
             <schedule>*/10 * * * *</schedule>
         </job>

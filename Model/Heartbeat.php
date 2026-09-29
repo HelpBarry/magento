@@ -143,6 +143,8 @@ class Heartbeat
             'moduleVersion' => (string) ($this->moduleList->getOne('Bluebarry_Bluebarry')['setup_version'] ?? ''),
             'magentoVersion' => $this->productMetadata->getVersion(),
             'magentoEdition' => $this->productMetadata->getEdition(),
+            // Where bluebarry asks this website to reload its settings (Controller\Command\Index).
+            'commandUrl' => $siteUrl . '/bluebarry/command/',
         ], $tenantId, $apiKey, 10);
 
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];

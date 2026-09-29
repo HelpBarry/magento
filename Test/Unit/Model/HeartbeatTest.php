@@ -42,6 +42,7 @@ class HeartbeatTest extends TestCase
             'moduleVersion' => '1.1.0',
             'magentoVersion' => '2.4.8-p5',
             'magentoEdition' => 'Community',
+            'commandUrl' => 'https://shop1.example/bluebarry/command/',
         ], $body);
         $this->assertTrue($heartbeat->outcomes()[1]['ok']);
     }
