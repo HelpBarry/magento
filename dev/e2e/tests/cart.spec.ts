@@ -72,6 +72,31 @@ test.describe('add to cart from bluebarry', () => {
     expect(result.body).toEqual({ success: true, skipped: [productId('bb-configurable-red'), simple] });
   });
 
+  test('a line that cannot be added leaves the cart as it was', async ({ page }) => {
+    const simple = productId('bb-simple');
+    expect((await add(page, [{ reference: simple, quantity: 2 }])).body.success).toBe(true);
+
+    // More than there is: Magento refuses it, and takes the product's line out of its cart in memory.
+    const result = await add(page, [{ reference: productId('bb-configurable-red'), quantity: 1 }, { reference: simple, quantity: 999 }]);
+    expect(result.body).toEqual({ success: true, skipped: [simple] });
+
+    const { items } = await cart(page);
+    expect(Object.fromEntries(items.map((i: any) => [i.product_sku, i.qty]))).toEqual({ 'bb-simple': 2, 'bb-configurable-red': 1 });
+  });
+
+  test('a fraction is added only for a product sold in decimal quantities', async ({ page }) => {
+    const simple = productId('bb-simple');
+    expect((await add(page, [{ reference: simple, quantity: 1.5 }])).body).toEqual({ success: false, skipped: [simple], failure: 'error' });
+
+    sql(`UPDATE cataloginventory_stock_item SET is_qty_decimal = 1 WHERE product_id = ${simple}`);
+    try {
+      expect((await add(page, [{ reference: simple, quantity: 1.5 }])).body).toEqual({ success: true, skipped: [] });
+      expect((await cart(page)).items[0].qty).toBe(1.5);
+    } finally {
+      sql(`UPDATE cataloginventory_stock_item SET is_qty_decimal = 0 WHERE product_id = ${simple}`);
+    }
+  });
+
   test('a sold-out product is reported as sold out', async ({ page }) => {
     const id = productId('bb-simple');
     sql(`UPDATE cataloginventory_stock_item SET is_in_stock = 0 WHERE product_id = ${id}`);
