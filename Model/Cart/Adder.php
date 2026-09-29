@@ -130,7 +130,8 @@ class Adder
                 // Sold out when Magento says the product cannot be sold; anything else (a required
                 // option the shopper has to choose, too many for what is left) is an error.
                 $skipped[] = $reference;
-                if ($referenced->isSalable()) {
+                // The variant, or the configurable product it goes in through, not for sale.
+                if ($referenced->isSalable() && $product->isSalable()) {
                     $otherFailure = true;
                 } else {
                     $soldOut = true;
