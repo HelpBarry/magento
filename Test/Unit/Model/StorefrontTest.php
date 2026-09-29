@@ -22,6 +22,9 @@ class StorefrontTest extends TestCase
     private array $flag = [];
     private array $cache = [];
     private int $purges = 0;
+    private array $purged = [];
+    /** @var callable|null */
+    private $onGet;
     private array $answers = [];
     private bool $locked = false;
 
@@ -112,6 +115,42 @@ class StorefrontTest extends TestCase
         $this->assertSame($purges + 1, $this->purges);
     }
 
+    public function testOnlyTheWebsitesOwnPagesArePurged(): void
+    {
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        $this->storefront()->refresh($this->website(2));
+
+        $this->assertSame([[Storefront::cacheTag(2)]], $this->purged);
+    }
+
+    public function testAnOlderReadNeverReplacesNewerSettings(): void
+    {
+        $storefront = $this->storefront();
+        $old = $this->answer(['profileId' => self::PROFILE, 'resultsPage' => false]);
+        $newer = $this->answer(['profileId' => self::PROFILE, 'resultsPage' => true]);
+        // The cron's read is on its way when bluebarry's command reads the newer settings and saves them.
+        $this->answers = [$old, $newer];
+        $this->onGet = fn () => $storefront->refresh($this->website(1));
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertTrue($storefront->search(1, self::TENANT)['resultsPage']);
+    }
+
+    public function testPagesArePurgedAgainWhenTheSettingsCacheIsGoneRightAfterAChange(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false]), $this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        $storefront->refresh($this->website(1));
+        $purges = $this->purges;
+        // A page read the old settings before the change and went into the page cache after the purge.
+        unset($this->cache[Storefront::FLAG]);
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertSame($purges + 1, $this->purges);
+    }
+
     private function answer(?array $search, string $tenant = self::TENANT): Response
     {
         return new Response(200, (string) json_encode(['tenantId' => $tenant, 'search' => $search, 'version' => $search ? 'v1' : 'v0']));
@@ -130,7 +169,16 @@ class StorefrontTest extends TestCase
         $config->method('getWebsiteTenantId')->willReturn($connected ? self::TENANT : null);
         $config->method('getWebsiteApiKey')->willReturn($connected ? 'key' : null);
         $client = $this->createStub(Client::class);
-        $client->method('get')->willReturnCallback(fn () => array_shift($this->answers));
+        $client->method('get')->willReturnCallback(function () {
+            $answer = array_shift($this->answers);
+            if ($this->onGet) {
+                $onGet = $this->onGet;
+                $this->onGet = null;
+                usleep(2000); // the other read begins later
+                $onGet();
+            }
+            return $answer;
+        });
         $flags = $this->createStub(FlagManager::class);
         $flags->method('getFlagData')->willReturnCallback(fn () => $this->flag);
         $flags->method('saveFlag')->willReturnCallback(function ($code, $data) {
@@ -139,7 +187,8 @@ class StorefrontTest extends TestCase
         });
         $events = $this->createStub(ManagerInterface::class);
         $events->method('dispatch')->willReturnCallback(function ($name, $data) {
-            if ($name === 'clean_cache_by_tags' && $data['object']->getIdentities() === [Storefront::CACHE_TAG]) {
+            if ($name === 'clean_cache_by_tags') {
+                $this->purged[] = $data['object']->getIdentities();
                 $this->purges++;
             }
         });
