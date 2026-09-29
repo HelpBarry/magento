@@ -31,6 +31,9 @@ class Storefront
     /** How long after a change a page may still have kept the old settings. */
     private const SETTLE = 1800;
 
+    /** How long a page that rendered the old settings may still take to reach the page cache. */
+    private const RENDER = 60;
+
     /**
      * @var Config
      */
@@ -218,13 +221,18 @@ class Storefront
         $next = $settings ?? [];
         if ($before !== null && self::content($before) === self::content($next)) {
             $cached = $this->cache->load(self::FLAG);
-            if (is_string($cached) && json_decode($cached, true) == $state) {
+            $age = time() - (int) ($before['written'] ?? 0);
+            if (empty($before['settled']) && $age >= self::RENDER) {
+                // A page that rendered the old settings during the change can reach the page cache
+                // after its purge, whatever the settings cache holds now: purged once more, later.
+                $state[$websiteId]['settled'] = true;
+                $this->flags->saveFlag(self::FLAG, $state);
+            } elseif (is_string($cached) && json_decode($cached, true) == $state) {
                 return; // pages read what is saved
-            }
-            // A page that read the settings while they changed may have kept the old ones: in the
-            // settings cache (it differs) or only in the page cache (the settings cache is gone then).
-            // Long after a change, a missing entry is just a cold cache.
-            if (!is_string($cached) && time() - (int) ($before['written'] ?? 0) >= self::SETTLE) {
+            } elseif (!is_string($cached) && $age >= self::SETTLE) {
+                // A page that read the settings while they changed may have kept the old ones: in the
+                // settings cache (it differs) or only in the page cache (the settings cache is gone then).
+                // Long after a change, a missing entry is just a cold cache.
                 return;
             }
         } else {
@@ -280,14 +288,14 @@ class Storefront
     }
 
     /**
-     * What a website shows, without when it was read and saved.
+     * What a website shows, without when it was read, saved and purged again.
      *
      * @param array $settings
      * @return array
      */
     private static function content(array $settings): array
     {
-        return array_diff_key($settings, ['fetched' => true, 'written' => true]);
+        return array_diff_key($settings, ['fetched' => true, 'written' => true, 'settled' => true]);
     }
 
     /**
