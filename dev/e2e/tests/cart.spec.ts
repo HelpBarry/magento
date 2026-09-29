@@ -58,8 +58,9 @@ test.describe('add to cart from bluebarry', () => {
       { reference: '999999', quantity: 1 }, // no such product
       { reference: { id: 1 } as any, quantity: 1 }, // malformed
       'not a line' as any,
+      { reference: true as any, quantity: 1 }, // not product 1
     ]);
-    expect(result.body).toEqual({ success: true, skipped: ['999999', '', ''] });
+    expect(result.body).toEqual({ success: true, skipped: ['999999', '', '', ''] });
 
     const { items } = await cart(page);
     // A bundle's line carries its parts in its SKU.
