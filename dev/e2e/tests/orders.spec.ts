@@ -238,4 +238,29 @@ test.describe('orders', () => {
     const started = (await sent('/data/magento/checkout-started')).find((r) => r.body.email === 'named-later@example.com');
     expect(started?.body.firstName).toBe('Robin');
   });
+
+  test('a checkout whose note arrived after its order was placed goes as completed', async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    const noted = await page.evaluate(async () => {
+      const formKey = document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '';
+      const response = await fetch('/bluebarry/checkout/email/', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, email: 'placed-first@example.com' }).toString(),
+      });
+      return (await response.json()).noted;
+    });
+    expect(noted).toBe(true);
+    const quoteId = sql("SELECT quote_id FROM bluebarry_checkout WHERE email = 'placed-first@example.com'");
+    // The order took the quote while the note was on its way; its completion found no note to mark.
+    sql(`UPDATE quote SET is_active = 0 WHERE entity_id = ${quoteId}`);
+    sql(`UPDATE bluebarry_checkout SET noted_at = UTC_TIMESTAMP() - INTERVAL 2 MINUTE WHERE quote_id = ${quoteId}`);
+    await mockApi.reset();
+
+    syncOrders();
+
+    const started = (await sent('/data/magento/checkout-started')).find((r) => r.body.email === 'placed-first@example.com');
+    expect(started?.body.completed).toBe(true);
+  });
 });

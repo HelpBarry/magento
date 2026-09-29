@@ -89,7 +89,17 @@ if ($tenantId != null && $tenantId != "") {
         }
         document.addEventListener('input', typed, true);
         document.addEventListener('change', typed, true);
-        document.addEventListener('DOMContentLoaded', function () { send(''); });
+        // Signed in, there is no email field: the account's email, on load and again a few times while
+        // it could not be noted yet (the shopper allowing cookies, a request that failed).
+        document.addEventListener('DOMContentLoaded', function () {
+            var tries = 0;
+            send('');
+            var retry = setInterval(function () {
+                // Noted, given up, or a guest (whose email field is followed instead).
+                if (last !== null || ++tries > 8 || document.getElementById('customer-email')) { clearInterval(retry); return; }
+                send('');
+            }, 15000);
+        });
     })();
 <?php endif; ?>
 <?php $search = $block->getSearchConfig(); ?>
