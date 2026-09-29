@@ -65,6 +65,24 @@ class HeartbeatTest extends TestCase
         $this->assertArrayNotHasKey('force', $this->flag);
     }
 
+    public function testAnUpgradeDuringAForcedRunIsStillAnswered(): void
+    {
+        $heartbeat = $this->heartbeat([200, 200]);
+        $heartbeat->forceNext();
+        // While the forced run pings, a deployment asks again.
+        $this->onPost = function () use ($heartbeat) {
+            $this->onPost = null;
+            $heartbeat->forceNext();
+        };
+
+        $heartbeat->sendDue();
+        $this->assertArrayHasKey('force', $this->flag);
+        $heartbeat->sendDue();
+
+        $this->assertCount(2, $this->calls);
+        $this->assertArrayNotHasKey('force', $this->flag);
+    }
+
     public function testAKeyFromAnotherCompanyIsNotAConnection(): void
     {
         $heartbeat = $this->heartbeat([409]); // bluebarry refuses it before registering anything
