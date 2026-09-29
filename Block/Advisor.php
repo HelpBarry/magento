@@ -320,10 +320,17 @@ class Advisor extends Template implements IdentityInterface
             }
             $connection = $this->configurableLinks->getConnection();
             $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
-            $links = $connection->fetchAll($connection->select()
+            $entities = $this->configurableLinks->getTable('catalog_product_entity');
+            $select = $connection->select()
                 ->from(['link' => $this->configurableLinks->getTable('catalog_product_super_link')], ['child' => 'product_id'])
-                ->join(['parent' => $this->configurableLinks->getTable('catalog_product_entity')], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
-                ->where('link.product_id IN (?)', $missing));
+                ->join(['parent' => $entities], "parent.$linkField = link.parent_id", ['parent' => 'entity_id'])
+                ->where('link.product_id IN (?)', $missing);
+            if ($linkField !== 'entity_id' && $connection->tableColumnExists($entities, 'created_in')) {
+                // Content staging: the version live now, as the catalog sync reads it.
+                $now = time();
+                $select->where('parent.created_in <= ?', $now)->where('parent.updated_in > ?', $now);
+            }
+            $links = $connection->fetchAll($select);
             $parentIds = array_values(array_unique(array_map('intval', array_column($links, 'parent'))));
             if ($parentIds) {
                 $store = $this->storeManager->getStore();
