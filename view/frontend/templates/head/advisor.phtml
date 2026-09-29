@@ -91,7 +91,8 @@ if ($tenantId != null && $tenantId != "") {
             clearTimeout(timer);
             timer = setTimeout(function () {
                 var email = String(field.value || '').trim();
-                if (EMAIL.test(email)) { wanted = email; send(email); retry(); }
+                // An email the shopper removed or is still correcting is not sent again.
+                if (EMAIL.test(email)) { wanted = email; send(email); retry(); } else { wanted = ''; next = null; }
             }, 800);
         }
         document.addEventListener('input', typed, true);
