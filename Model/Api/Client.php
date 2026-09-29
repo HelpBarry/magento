@@ -32,6 +32,27 @@ class Client
     }
 
     /**
+     * GETs from bluebarry with a website's API key.
+     *
+     * @param string $path e.g. /data/magento/storefront
+     * @param string $apiKey
+     * @param int $timeout seconds
+     * @return Response status 0 when no answer came
+     */
+    public function get(string $path, string $apiKey, int $timeout = 15): Response
+    {
+        $curl = $this->curlFactory->create();
+        $curl->setTimeout($timeout);
+        $curl->addHeader('Authorization', $apiKey);
+        try {
+            $curl->get($this->config->getApiUrl() . $path);
+            return new Response((int) $curl->getStatus(), (string) $curl->getBody());
+        } catch (\Exception $e) {
+            return new Response(0, '', $e->getMessage());
+        }
+    }
+
+    /**
      * POSTs JSON to bluebarry.
      *
      * @param string $path e.g. /data/conversionevents

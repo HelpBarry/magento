@@ -11,6 +11,7 @@ use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Module\ModuleListInterface;
+use Magento\Framework\Url;
 use Magento\Store\Model\Group;
 use Magento\Store\Model\Store;
 use Magento\Store\Model\StoreManagerInterface;
@@ -19,6 +20,7 @@ use PHPUnit\Framework\TestCase;
 
 class HeartbeatTest extends TestCase
 {
+    private int $urlScope = 0;
     private const TENANT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
     private array $calls = [];
@@ -47,6 +49,7 @@ class HeartbeatTest extends TestCase
             'moduleVersion' => '1.1.0',
             'magentoVersion' => '2.4.8-p5',
             'magentoEdition' => 'Community',
+            'commandUrl' => 'https://shop1.example/bluebarry/command/',
         ], $body);
         $this->assertTrue($heartbeat->outcomes()[1]['ok']);
     }
@@ -330,8 +333,14 @@ class HeartbeatTest extends TestCase
 
         $locks = $this->createStub(LockManagerInterface::class);
         $locks->method('lock')->willReturnCallback(fn () => !$this->lockTaken);
+        $url = $this->createStub(Url::class);
+        $url->method('setScope')->willReturnCallback(function ($storeId) use ($url) {
+            $this->urlScope = (int) $storeId;
+            return $url;
+        });
+        $url->method('getUrl')->willReturnCallback(fn ($route) => "https://shop{$this->urlScope}.example/$route/");
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks);
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks, $url);
     }
 
     private function groupFor(int $websiteId): Group
