@@ -455,7 +455,7 @@ class Sync
                 break;
             }
             $storeId = (int) $note['store_id'];
-            $websiteId = (int) $this->storeManager->getStore($storeId)->getWebsiteId();
+            $websiteId = $this->websiteOf($storeId);
             $target = $targets[$websiteId] ?? null;
             if ($target === null || isset($waiting[$websiteId])
                 || $this->config->getTenantId($storeId) === null
@@ -507,6 +507,21 @@ class Sync
     }
 
     /**
+     * The website of a store view, or 0 (no website, nothing for bluebarry) for one deleted since.
+     *
+     * @param int $storeId
+     * @return int
+     */
+    private function websiteOf(int $storeId): int
+    {
+        try {
+            return (int) $this->storeManager->getStore($storeId)->getWebsiteId();
+        } catch (\Magento\Framework\Exception\NoSuchEntityException $e) {
+            return 0;
+        }
+    }
+
+    /**
      * The claimed orders grouped by the website that sends them and the host they are keyed by.
      *
      * @param int[] $ids
@@ -521,7 +536,7 @@ class Sync
         $found = [];
         foreach ($collection as $order) {
             $found[] = (int) $order->getId();
-            $websiteId = (int) $this->storeManager->getStore((int) $order->getStoreId())->getWebsiteId();
+            $websiteId = $this->websiteOf((int) $order->getStoreId());
             $target = $targets[$websiteId] ?? null;
             if ($target !== null && !$this->reportsTo($order, $target)) {
                 $target = null;
