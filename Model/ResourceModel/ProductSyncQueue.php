@@ -92,10 +92,17 @@ class ProductSyncQueue
             return [];
         }
         $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
-        return array_map('intval', $this->connection()->fetchCol($this->connection()->select()->distinct()
+        $entities = $this->resource->getTableName('catalog_product_entity');
+        $select = $this->connection()->select()->distinct()
             ->from(['link' => $links], ['product_id'])
-            ->join(['parent' => $this->resource->getTableName('catalog_product_entity')], "parent.$linkField = link.parent_id", [])
-            ->where('parent.entity_id IN (?)', $parentIds)));
+            ->join(['parent' => $entities], "parent.$linkField = link.parent_id", [])
+            ->where('parent.entity_id IN (?)', $parentIds);
+        if ($linkField !== 'entity_id' && $this->connection()->tableColumnExists($entities, 'created_in')) {
+            // Content staging: the links of the version live now, as the catalog sync reads them.
+            $now = time();
+            $select->where('parent.created_in <= ?', $now)->where('parent.updated_in > ?', $now);
+        }
+        return array_map('intval', $this->connection()->fetchCol($select));
     }
 
     /**
