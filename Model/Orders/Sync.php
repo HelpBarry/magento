@@ -627,9 +627,9 @@ class Sync
             if ($tenantId === null || $apiKey === null) {
                 continue;
             }
-            // The key belongs to another company than the Tenant ID (its heartbeat was refused with 409):
-            // nothing goes, since orders would land in the key's company. They wait until it is fixed.
-            if ((int) ($this->heartbeat->outcomes()[(int) $website->getId()]['status'] ?? 0) === 409) {
+            // Only once bluebarry accepted this Tenant ID and key together (a heartbeat registered them):
+            // with a key from another company, orders would land there. Until then they wait.
+            if (!$this->heartbeat->verified((int) $website->getId(), $tenantId, $apiKey)) {
                 $this->unreadable[(int) $website->getId()] = true;
                 continue;
             }

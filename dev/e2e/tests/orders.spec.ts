@@ -171,10 +171,10 @@ test.describe('orders', () => {
     expect([last.import, last.importedCount]).toEqual(['Completed', imported]);
   });
 
-  test("a website whose key belongs to another company than its Tenant ID sends no orders, and keeps them", async () => {
+  test("a website whose Tenant ID and key bluebarry has not accepted together sends no orders, and keeps them", async () => {
     const order = sql('SELECT MAX(entity_id) FROM sales_order');
     sql(`INSERT INTO bluebarry_order_sync (order_id, queued_at, live) VALUES (${order}, UTC_TIMESTAMP(), 0) ON DUPLICATE KEY UPDATE queued_at = UTC_TIMESTAMP(), claim = NULL`);
-    // The heartbeat found the key to be another company's (bluebarry answered 409).
+    // The heartbeat found the key to be another company's (bluebarry answered 409): nothing registered.
     const heartbeat = sql("SELECT flag_data FROM flag WHERE flag_code = 'bluebarry_heartbeat'");
     sql("DELETE FROM flag WHERE flag_code = 'bluebarry_heartbeat'");
     sql(`INSERT INTO flag (flag_code, state, flag_data) VALUES ('bluebarry_heartbeat', 0, '{"websites":{"1":{"at":1,"site":"","ok":false,"status":409,"error":"x"}}}')`);
