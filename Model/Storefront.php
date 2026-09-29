@@ -136,14 +136,15 @@ class Storefront
     public function refresh(WebsiteInterface $website, int $timeout = 10): ?string
     {
         $websiteId = (int) $website->getId();
+        // When this read started, before the credentials are read: a read (or disconnect) that began
+        // later and saved already wins over this one.
+        $started = self::now();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
         $apiKey = $this->config->getWebsiteApiKey($websiteId);
         if ($tenantId === null || $apiKey === null) {
-            $this->save($websiteId, null, self::now());
+            $this->save($websiteId, null, $started);
             return null;
         }
-        // When this read started: a read started later that saved already wins over this one.
-        $started = self::now();
         $response = $this->client->get('/data/magento/storefront', $apiKey, max(1, min(10, $timeout)));
         $answer = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($answer) || strtolower((string) ($answer['tenantId'] ?? '')) !== strtolower($tenantId)) {
