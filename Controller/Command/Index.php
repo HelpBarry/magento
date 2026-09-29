@@ -3,6 +3,7 @@
 namespace Bluebarry\Bluebarry\Controller\Command;
 
 use Bluebarry\Bluebarry\Model\Config;
+use Bluebarry\Bluebarry\Model\Orders\Sync as OrderSync;
 use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\App\CsrfAwareActionInterface;
@@ -57,12 +58,18 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
     private $modules;
 
     /**
+     * @var OrderSync
+     */
+    private $orders;
+
+    /**
      * @param HttpRequest $request
      * @param JsonFactory $json
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param Storefront $storefront
      * @param ModuleListInterface $modules
+     * @param OrderSync $orders
      */
     public function __construct(
         HttpRequest $request,
@@ -70,7 +77,8 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         Config $config,
         StoreManagerInterface $storeManager,
         Storefront $storefront,
-        ModuleListInterface $modules
+        ModuleListInterface $modules,
+        OrderSync $orders
     ) {
         $this->request = $request;
         $this->json = $json;
@@ -78,6 +86,7 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         $this->storeManager = $storeManager;
         $this->storefront = $storefront;
         $this->modules = $modules;
+        $this->orders = $orders;
     }
 
     /**
@@ -94,13 +103,18 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
             return $result->setHttpResponseCode(401)->setData(['ok' => false, 'error' => 'Not signed by bluebarry.']);
         }
 
-        $command = json_decode($body, true)['command'] ?? null;
+        $decoded = json_decode($body, true);
+        $command = $decoded['command'] ?? null;
         switch ($command) {
             case 'ping':
                 return $result->setData(['ok' => true, 'version' => (string) ($this->modules->getOne('Bluebarry_Bluebarry')['setup_version'] ?? '')]);
             case 'settings.refresh':
                 $version = $this->storefront->refresh($website);
                 return $result->setHttpResponseCode($version === null ? 502 : 200)->setData(['ok' => $version !== null, 'version' => $version]);
+            case 'orders.import':
+                // Studio's Orders page: the history import, run by the cron in batches.
+                $since = strtotime((string) ($decoded['payload']['since'] ?? ''));
+                return $result->setData(['started' => $this->orders->startImport((int) $website->getId(), $since ?: time() - 365 * 86400)]);
             default:
                 return $result->setHttpResponseCode(404)->setData(['ok' => false, 'error' => 'Unknown command.']);
         }

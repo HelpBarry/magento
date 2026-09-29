@@ -361,6 +361,26 @@ class Heartbeat
     }
 
     /**
+     * Whether bluebarry accepted this Tenant ID and API key together for the website (its last successful
+     * heartbeat registered exactly these): only then does data for the Tenant ID go out with the key.
+     *
+     * @param int $websiteId
+     * @param string $tenantId
+     * @param string $apiKey
+     * @return bool
+     */
+    public function verified(int $websiteId, string $tenantId, string $apiKey): bool
+    {
+        $registration = $this->state()['registrations'][$websiteId] ?? null;
+        try {
+            return is_array($registration) && ($registration['tenant'] ?? null) === strtolower($tenantId)
+                && $this->encryptor->decrypt((string) ($registration['key'] ?? '')) === $apiKey;
+        } catch (\Exception $e) {
+            return false; // registered under another crypt key: not verified until the next heartbeat
+        }
+    }
+
+    /**
      * The last outcome per website, for the settings page.
      *
      * @return array<int, array{at: int, site: string, ok: bool, status: int, error: ?string}>

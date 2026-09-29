@@ -54,6 +54,70 @@ if ($tenantId != null && $tenantId != "") {
             });
         });
     })();
+<?php $checkoutEmailUrl = $block->getCheckoutEmailUrl(); ?>
+<?php if ($checkoutEmailUrl !== null): ?>
+    // The checkout: the email the shopper gives (or, signed in, their account's) goes to the module for
+    // bluebarry's abandoned checkout flow, once it looks complete.
+    (function () {
+        var url = "<?= $block->escapeJs($checkoutEmailUrl); ?>", last = null, timer = null;
+        function formKey() {
+            var match = document.cookie.match(/(?:^|; )form_key=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+        var sending = false, next = null, wanted = '', EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        function send(email) {
+            // One at a time, the latest last: an older answer never overwrites a newer email.
+            if (sending) { next = email; return; }
+            if (email === last) return;
+            sending = true;
+            fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
+                body: new URLSearchParams({form_key: formKey(), email: email}).toString()
+            }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
+                // Only a noted email is not sent again; after a failure retry() sends it again.
+                if (result && result.noted) last = email;
+            }).catch(function () {}).then(function () {
+                sending = false;
+                if (next !== null) { var queued = next; next = null; send(queued); }
+            });
+        }
+        function typed(event) {
+            // The shopper's own email field (Luma's checkout and the checkouts built on it), not any
+            // other email field on the page, such as a gift recipient's.
+            var field = event.target;
+            if (!field || field.id !== 'customer-email') return;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                var email = String(field.value || '').trim();
+                // An email the shopper removed or is still correcting is not sent again.
+                if (EMAIL.test(email)) { wanted = email; send(email); retry(); } else { wanted = ''; next = null; }
+            }, 800);
+        }
+        document.addEventListener('input', typed, true);
+        document.addEventListener('change', typed, true);
+        // Signed in, there is no email field: the account's email, on load. Again a few times while the email wanted is not noted yet (the shopper allowing cookies, a
+        // request that failed): the account's, or the one a guest typed, counted afresh for each new one.
+        // The checkout may have filled the field in itself (a returning guest's, without a keystroke):
+        // that one counts as typed. A guest with nothing in the field yet is left to it.
+        var retrying = null, tries = 0;
+        function retry() {
+            tries = 0;
+            if (retrying !== null) return;
+            retrying = setInterval(function () {
+                var field = document.getElementById('customer-email'), filled = field ? String(field.value || '').trim() : '';
+                if (wanted === '' && EMAIL.test(filled)) wanted = filled;
+                if (last === wanted || ++tries > 8 || (wanted === '' && field)) { clearInterval(retrying); retrying = null; return; }
+                send(wanted);
+            }, 15000);
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            send('');
+            retry();
+        });
+    })();
+<?php endif; ?>
 <?php $search = $block->getSearchConfig(); ?>
 <?php if ($search !== null): ?>
     // Search, as chosen in Studio.

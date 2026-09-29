@@ -3,6 +3,8 @@
 namespace Bluebarry\Bluebarry\Setup;
 
 use Bluebarry\Bluebarry\Model\Heartbeat;
+use Bluebarry\Bluebarry\Model\ResourceModel\CheckoutNotes;
+use Bluebarry\Bluebarry\Model\ResourceModel\OrderSyncQueue;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
 use Bluebarry\Bluebarry\Model\ResourceModel\ProductSyncQueue;
 use Magento\Framework\Setup\ModuleContextInterface;
@@ -19,7 +21,9 @@ class Uninstall implements UninstallInterface
     /**
      * The module's own tables; Magento leaves declarative schema tables behind on uninstall.
      */
-    private const TABLES = [OrderVisitor::TABLE, ProductSyncQueue::TABLE];
+    private const TABLES = [
+        OrderVisitor::TABLE, ProductSyncQueue::TABLE, OrderSyncQueue::TABLE, CheckoutNotes::TABLE,
+    ];
 
     /**
      * @var Heartbeat
