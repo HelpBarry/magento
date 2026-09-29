@@ -97,7 +97,8 @@ class Advisor extends Template implements IdentityInterface
      */
     public function getSearchConfig(): ?array
     {
-        $tenantId = (string) $this->getTenantId();
+        // Trimmed like the Tenant ID the settings were read for.
+        $tenantId = trim((string) $this->getTenantId());
         $search = $tenantId === '' ? null : $this->storefront->search($this->storeManager->getStore()->getWebsiteId(), $tenantId);
         if ($search === null) {
             return null;
