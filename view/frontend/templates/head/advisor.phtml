@@ -64,8 +64,12 @@ if ($tenantId != null && $tenantId != "") {
             var match = document.cookie.match(/(?:^|; )form_key=([^;]+)/);
             return match ? decodeURIComponent(match[1]) : '';
         }
+        var sending = false, next = null;
         function send(email) {
+            // One at a time, the latest last: an older answer never overwrites a newer email.
+            if (sending) { next = email; return; }
             if (email === last) return;
+            sending = true;
             fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -74,7 +78,10 @@ if ($tenantId != null && $tenantId != "") {
             }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
                 // Only a noted email is not sent again; after a failure the next keystroke retries.
                 if (result && result.noted) last = email;
-            }).catch(function () {});
+            }).catch(function () {}).then(function () {
+                sending = false;
+                if (next !== null) { var queued = next; next = null; send(queued); }
+            });
         }
         function typed(event) {
             // The shopper's own email field (Luma's checkout and the checkouts built on it), not any
