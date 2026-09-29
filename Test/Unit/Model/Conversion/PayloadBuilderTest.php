@@ -41,6 +41,16 @@ class PayloadBuilderTest extends TestCase
         ]], $payload['items']);
     }
 
+    public function testADecimalQuantityIsKept(): void
+    {
+        // 0.5 kg at 20 a kilo.
+        $order = $this->order([$this->item(1, null, 'simple', '7', 0.5, 10.0, 0.0)], 10.0, 0.0);
+
+        $item = (new PayloadBuilder())->build($order, $this->visitor(), 'shop.example')['items'][0];
+
+        $this->assertSame([0.5, 20.0], [$item['quantity'], $item['priceExclTax']]);
+    }
+
     public function testDiscountsComeOffTheLines(): void
     {
         // EUR 100 line, EUR 10 off; tax on the discounted amount.

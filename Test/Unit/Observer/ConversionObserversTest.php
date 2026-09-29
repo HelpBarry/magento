@@ -77,6 +77,18 @@ class ConversionObserversTest extends TestCase
         $observer->execute($this->event($this->order(Order::STATE_NEW, stateChanged: true)));
     }
 
+    public function testAnOrderShippedBeforeItIsPaidWaitsForTheInvoice(): void
+    {
+        $visitors = $this->createMock(OrderVisitor::class);
+        $visitors->expects($this->once())->method('markQueued')->with(5)->willReturn(true);
+        $observer = new QueuePaidOrder(new Queue($visitors, $this->createStub(PublisherInterface::class), $this->createStub(LoggerInterface::class)), $this->createStub(LoggerInterface::class));
+
+        // Shipped: processing, nothing paid yet. Then partly invoiced. Then invoiced in full.
+        $observer->execute($this->event($this->order(Order::STATE_PROCESSING, stateChanged: true, paid: 0.0)));
+        $observer->execute($this->event($this->order(Order::STATE_PROCESSING, stateChanged: false, paid: 40.0, paidChanged: true)));
+        $observer->execute($this->event($this->order(Order::STATE_PROCESSING, stateChanged: false, paid: 100.0, paidChanged: true)));
+    }
+
     public function testPublishFailureLeavesTheConversionToTheCron(): void
     {
         $visitors = $this->createStub(OrderVisitor::class);
@@ -101,13 +113,15 @@ class ConversionObserversTest extends TestCase
         return new ProcessConversion($config, $reader, $visitors, $queue, $logger ?? $this->createStub(LoggerInterface::class), $state);
     }
 
-    private function order(string $state, bool $stateChanged = true): Order
+    private function order(string $state, bool $stateChanged = true, float $paid = 100.0, bool $paidChanged = false): Order
     {
         $order = $this->createStub(Order::class);
         $order->method('getId')->willReturn(5);
         $order->method('getStoreId')->willReturn(1);
         $order->method('getState')->willReturn($state);
-        $order->method('dataHasChangedFor')->willReturn($stateChanged);
+        $order->method('getGrandTotal')->willReturn(100.0);
+        $order->method('getTotalPaid')->willReturn($paid);
+        $order->method('dataHasChangedFor')->willReturnCallback(fn ($field) => $field === 'state' ? $stateChanged : ($field === 'total_paid' && $paidChanged));
         return $order;
     }
 

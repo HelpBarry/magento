@@ -64,10 +64,12 @@ class Visitor
 
         // A quiz taken before the cookies existed, or on the advisor's own domain, is only known from
         // the storefront script's session update (Controller\Session\Update). The order then goes to
-        // that quiz's visitor, session and quiz together, so the buyer's email joins their answers.
+        // that quiz's visitor, session and quiz together, so the buyer's email joins their answers. A
+        // visitor cookie still wins: an older quiz in the session never takes the order from it.
         if ($userId === null || $sessionId === null) {
             $quiz = $this->session->getSession()['bluebarry'] ?? null;
-            if (is_array($quiz) && self::isUuid($quiz['user_id'] ?? null)) {
+            if (is_array($quiz) && self::isUuid($quiz['user_id'] ?? null)
+                && ($userId === null || $userId === strtolower($quiz['user_id']))) {
                 $userId = strtolower($quiz['user_id']);
                 $sessionId = self::isUuid($quiz['session_id'] ?? null) ? strtolower($quiz['session_id']) : null;
                 $advisorId = self::isUuid($quiz['advisor_id'] ?? null) ? strtolower($quiz['advisor_id']) : null;
