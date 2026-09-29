@@ -49,6 +49,13 @@ class QueueChangedProductsTest extends TestCase
         $this->assertSame([[20, 21, 22]], $this->queued);
     }
 
+    public function testAnImportDeletingConfigurableProductsQueuesTheirVariants(): void
+    {
+        $this->observer(connected: false)->execute($this->event('catalog_product_import_bunch_delete_commit_before', ['ids_to_delete' => [30]]));
+
+        $this->assertSame([[30, 21, 22]], $this->queued);
+    }
+
     public function testAMassUpdateIsQueuedOnlyWhileConnected(): void
     {
         $this->observer(connected: false)->queueChanged([1, 2]);
