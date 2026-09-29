@@ -9,6 +9,7 @@ use Magento\Framework\DataObject;
 use Magento\Framework\DataObject\IdentityInterface;
 use Magento\Framework\Event\ManagerInterface as EventManager;
 use Magento\Framework\FlagManager;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Store\Api\Data\WebsiteInterface;
 use Magento\Store\Model\StoreManagerInterface;
 
@@ -58,12 +59,18 @@ class Storefront
     private $cache;
 
     /**
+     * @var LockManagerInterface
+     */
+    private $locks;
+
+    /**
      * @param Config $config
      * @param Client $client
      * @param StoreManagerInterface $storeManager
      * @param FlagManager $flags
      * @param EventManager $events
      * @param CacheInterface $cache
+     * @param LockManagerInterface $locks
      */
     public function __construct(
         Config $config,
@@ -71,7 +78,8 @@ class Storefront
         StoreManagerInterface $storeManager,
         FlagManager $flags,
         EventManager $events,
-        CacheInterface $cache
+        CacheInterface $cache,
+        LockManagerInterface $locks
     ) {
         $this->config = $config;
         $this->client = $client;
@@ -79,6 +87,7 @@ class Storefront
         $this->flags = $flags;
         $this->events = $events;
         $this->cache = $cache;
+        $this->locks = $locks;
     }
 
     /**
@@ -134,12 +143,18 @@ class Storefront
         if (!is_array($answer) || strtolower((string) ($answer['tenantId'] ?? '')) !== strtolower($tenantId)) {
             return null; // kept as it was: a bad answer never switches a store's search off
         }
+        if (!array_key_exists('search', $answer)) {
+            return null;
+        }
+        // Only an explicit null switches search off; anything else unexpected keeps what the store has.
         $search = null;
-        if (is_array($answer['search'] ?? null) && Visitor::isUuid($answer['search']['profileId'] ?? null)) {
+        if (is_array($answer['search']) && Visitor::isUuid($answer['search']['profileId'] ?? null)) {
             $search = [
                 'profileId' => strtolower($answer['search']['profileId']),
                 'resultsPage' => !empty($answer['search']['resultsPage']),
             ];
+        } elseif ($answer['search'] !== null) {
+            return null;
         }
         $version = (string) ($answer['version'] ?? '');
         $this->save($websiteId, ['tenantId' => strtolower($tenantId), 'version' => $version, 'search' => $search]);
@@ -153,6 +168,25 @@ class Storefront
      */
     private function save(int $websiteId, ?array $settings): void
     {
+        // Websites refresh on their own (the cron, bluebarry's commands): one writes at a time, so
+        // none saves over another's newer settings. Not now: the next refresh saves them.
+        if (!$this->locks->lock(self::FLAG, 10)) {
+            return;
+        }
+        try {
+            $this->write($websiteId, $settings);
+        } finally {
+            $this->locks->unlock(self::FLAG);
+        }
+    }
+
+    /**
+     * @param int $websiteId
+     * @param array|null $settings
+     * @return void
+     */
+    private function write(int $websiteId, ?array $settings): void
+    {
         $state = $this->state();
         $before = $state[$websiteId] ?? null;
         if ($settings === null) {
@@ -161,9 +195,14 @@ class Storefront
             $state[$websiteId] = $settings;
         }
         if ($before === ($state[$websiteId] ?? null)) {
-            return;
+            // A page that read the settings while they changed may have cached the old ones.
+            $cached = $this->cache->load(self::FLAG);
+            if (!is_string($cached) || json_decode($cached, true) == $state) {
+                return;
+            }
+        } else {
+            $this->flags->saveFlag(self::FLAG, $state);
         }
-        $this->flags->saveFlag(self::FLAG, $state);
         $this->cache->remove(self::FLAG);
         // Every page prints these, so every page carries the tag. The same event Magento's own saves
         // use: it cleans the built-in page cache and purges Varnish.

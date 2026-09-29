@@ -2,7 +2,10 @@
 
 namespace Bluebarry\Bluebarry\Model\ResourceModel;
 
+use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\Framework\App\ResourceConnection;
+use Magento\Framework\DB\Adapter\AdapterInterface;
+use Magento\Framework\EntityManager\MetadataPool;
 
 /**
  * The bluebarry_product_sync table: products whose change still has to reach bluebarry. Queuing is
@@ -27,11 +30,18 @@ class ProductSyncQueue
     private $resource;
 
     /**
-     * @param ResourceConnection $resource
+     * @var MetadataPool
      */
-    public function __construct(ResourceConnection $resource)
+    private $metadataPool;
+
+    /**
+     * @param ResourceConnection $resource
+     * @param MetadataPool $metadataPool
+     */
+    public function __construct(ResourceConnection $resource, MetadataPool $metadataPool)
     {
         $this->resource = $resource;
+        $this->metadataPool = $metadataPool;
     }
 
     /**
@@ -65,6 +75,37 @@ class ProductSyncQueue
             . ' ON DUPLICATE KEY UPDATE claim = NULL, attempts = 0, queued_at = VALUES(queued_at)',
             $this->connection()->quoteIdentifier($this->table()),
             $this->connection()->quoteIdentifier($this->resource->getTableName('catalog_product_entity'))
+        ));
+    }
+
+    /**
+     * Queues the bundles that have one of these products as a selection, in one statement.
+     *
+     * @param int[] $productIds
+     * @return void
+     */
+    public function enqueueBundlesWith(array $productIds): void
+    {
+        $productIds = array_values(array_unique(array_filter(array_map('intval', $productIds))));
+        $selections = $this->resource->getTableName('catalog_product_bundle_selection');
+        if (!$productIds || !$this->connection()->isTableExists($selections)) {
+            return;
+        }
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        $select = $this->connection()->select()->distinct()
+            ->from(['selection' => $selections], [])
+            ->join(['bundle' => $this->resource->getTableName('catalog_product_entity')], "bundle.$linkField = selection.parent_product_id", [
+                'product_id' => 'entity_id',
+                'claim' => new \Zend_Db_Expr('NULL'),
+                'attempts' => new \Zend_Db_Expr('0'),
+                'queued_at' => new \Zend_Db_Expr('UTC_TIMESTAMP()'),
+            ])
+            ->where('selection.product_id IN (?)', $productIds);
+        $this->connection()->query($this->connection()->insertFromSelect(
+            $select,
+            $this->table(),
+            ['product_id', 'claim', 'attempts', 'queued_at'],
+            AdapterInterface::INSERT_ON_DUPLICATE
         ));
     }
 

@@ -10,6 +10,7 @@ use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Module\ModuleListInterface;
+use Magento\Framework\Url;
 use Magento\Store\Model\Group;
 use Magento\Store\Model\Store;
 use Magento\Store\Model\StoreManagerInterface;
@@ -18,6 +19,7 @@ use PHPUnit\Framework\TestCase;
 
 class HeartbeatTest extends TestCase
 {
+    private int $urlScope = 0;
     private const TENANT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
     private array $calls = [];
@@ -235,7 +237,14 @@ class HeartbeatTest extends TestCase
         $encryptor->method('encrypt')->willReturnCallback(fn ($value) => "enc:$value");
         $encryptor->method('decrypt')->willReturnCallback(fn ($value) => substr((string) $value, 4));
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor);
+        $url = $this->createStub(Url::class);
+        $url->method('setScope')->willReturnCallback(function ($storeId) use ($url) {
+            $this->urlScope = (int) $storeId;
+            return $url;
+        });
+        $url->method('getUrl')->willReturnCallback(fn ($route) => "https://shop{$this->urlScope}.example/$route/");
+
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $url);
     }
 
     private function groupFor(int $websiteId): Group
