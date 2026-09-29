@@ -79,22 +79,23 @@ class ProductSyncQueue
     }
 
     /**
-     * A configurable product's children.
+     * The children of configurable products.
      *
-     * @param int $parentId
+     * @param int|int[] $parentIds
      * @return int[]
      */
-    public function configurableChildren(int $parentId): array
+    public function configurableChildren($parentIds): array
     {
+        $parentIds = array_map('intval', (array) $parentIds);
         $links = $this->resource->getTableName('catalog_product_super_link');
-        if (!$this->connection()->isTableExists($links)) {
+        if (!$parentIds || !$this->connection()->isTableExists($links)) {
             return [];
         }
         $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
         return array_map('intval', $this->connection()->fetchCol($this->connection()->select()->distinct()
             ->from(['link' => $links], ['product_id'])
             ->join(['parent' => $this->resource->getTableName('catalog_product_entity')], "parent.$linkField = link.parent_id", [])
-            ->where('parent.entity_id = ?', $parentId)));
+            ->where('parent.entity_id IN (?)', $parentIds)));
     }
 
     /**
