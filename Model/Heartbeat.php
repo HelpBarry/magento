@@ -65,6 +65,9 @@ class Heartbeat
      */
     private $locks;
 
+    /** @var bool whether this process holds the heartbeat lock (during send()) */
+    private $holding = false;
+
     /**
      * @var Url
      */
@@ -137,6 +140,13 @@ class Heartbeat
     public function send(WebsiteInterface $website): ?array
     {
         $websiteId = (int) $website->getId();
+        // One heartbeat at a time (the cron, a settings save): one that read credentials a save
+        // changed since must not register them again after the save took them back.
+        if (!$this->holding && !$this->locks->lock(self::FLAG, 30)) {
+            return ['at' => time(), 'site' => '', 'ok' => false, 'status' => 0, 'error' => 'Another check of this website is running. Try again in a minute.'];
+        }
+        $holding = $this->holding;
+        $this->holding = true;
         try {
             return $this->ping($website);
         } catch (\Exception $e) {
@@ -146,6 +156,11 @@ class Heartbeat
             $outcome = ['at' => time(), 'site' => '', 'ok' => false, 'status' => 0, 'error' => $e->getMessage()];
             $this->record($websiteId, $outcome);
             return $outcome;
+        } finally {
+            $this->holding = $holding;
+            if (!$holding) {
+                $this->locks->unlock(self::FLAG);
+            }
         }
     }
 
@@ -373,7 +388,11 @@ class Heartbeat
      */
     private function update(callable $change): void
     {
-        $locked = $this->locks->lock(self::FLAG, 10);
+        if (!$this->holding && !$this->locks->lock(self::FLAG, 30)) {
+            // Never written without the lock: another run would save its older copy over it. What is
+            // lost here (an outcome, a registration) is written again by the next heartbeat.
+            return;
+        }
         try {
             $state = $this->state();
             $next = $change($state);
@@ -381,7 +400,7 @@ class Heartbeat
                 $this->flags->saveFlag(self::FLAG, $next);
             }
         } finally {
-            if ($locked) {
+            if (!$this->holding) {
                 $this->locks->unlock(self::FLAG);
             }
         }
