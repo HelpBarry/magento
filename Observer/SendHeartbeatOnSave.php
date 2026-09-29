@@ -89,8 +89,10 @@ class SendHeartbeatOnSave implements ObserverInterface
                 // What bluebarry has for it (search), right away rather than on the next schedule; for
                 // at most about 15 seconds of the save, however many websites it covers.
                 try {
-                    if (time() - $started < self::REFRESH_BUDGET) {
-                        $this->storefront->refresh($website);
+                    // Each read only as long as the budget has left.
+                    $left = self::REFRESH_BUDGET - (time() - $started);
+                    if ($left >= 1) {
+                        $this->storefront->refresh($website, $left);
                     }
                 } catch (\Exception $e) {
                     // The schedule catches up.
