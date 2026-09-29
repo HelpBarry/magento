@@ -102,7 +102,8 @@ class Adder
         $otherFailure = false;
         foreach (array_values($items) as $index => $item) {
             // Whatever the request holds: an array here is a malformed line, skipped like an unknown one.
-            $reference = is_array($item) && is_scalar($item['reference'] ?? null) ? (string) $item['reference'] : '';
+            $given = is_array($item) ? ($item['reference'] ?? null) : null;
+            $reference = is_string($given) || is_int($given) ? (string) $given : '';
             $quantity = is_array($item) ? ($item['quantity'] ?? 1) : null;
             // Beyond the limits nothing is guessed: the line is reported as not added. A fraction goes
             // as is; Magento refuses it for a product not sold in decimal quantities.
