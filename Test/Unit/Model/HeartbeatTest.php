@@ -7,6 +7,7 @@ use Bluebarry\Bluebarry\Model\Api\Response;
 use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Heartbeat;
 use Magento\Framework\App\ProductMetadataInterface;
+use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Module\ModuleListInterface;
 use Magento\Store\Model\Group;
@@ -120,6 +121,29 @@ class HeartbeatTest extends TestCase
         $this->assertSame(['key-2'], array_column($this->calls, 3));
     }
 
+    public function testClearingTheCredentialsTakesTheRegistrationBack(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        $this->calls = [];
+
+        $this->heartbeat([200], connected: [1 => false])->send($this->website(1));
+
+        $this->assertSame([['/data/magento/deactivate', ['siteUrl' => 'https://shop1.example'], self::TENANT, 'key-1']], $this->calls);
+        $this->assertSame([], $this->heartbeat([])->outcomes());
+    }
+
+    public function testMovingToAnotherCompanyTakesTheOldRegistrationBack(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        $this->calls = [];
+
+        $this->heartbeat([200, 200], tenant: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')->send($this->website(1));
+
+        $this->assertSame(['/data/magento/deactivate', '/data/magento/ping'], array_column($this->calls, 0));
+        $this->assertSame(self::TENANT, $this->calls[0][2]);
+        $this->assertSame('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', $this->calls[1][2]);
+    }
+
     public function testUninstallDeactivatesEveryConnectedWebsite(): void
     {
         $this->heartbeat([200, 200], connected: [1 => true, 2 => true])->deactivateAll();
@@ -142,14 +166,14 @@ class HeartbeatTest extends TestCase
         return $website;
     }
 
-    private function heartbeat(array $statuses, array $connected = [1 => true], ?int $brokenWebsite = null): Heartbeat
+    private function heartbeat(array $statuses, array $connected = [1 => true], ?int $brokenWebsite = null, string $tenant = self::TENANT): Heartbeat
     {
         $websites = [];
         foreach (array_keys($connected) as $id) {
             $websites[$id] = $this->website($id);
         }
         $config = $this->createStub(Config::class);
-        $config->method('getWebsiteTenantId')->willReturnCallback(fn ($id) => ($connected[(int) $id] ?? false) ? self::TENANT : null);
+        $config->method('getWebsiteTenantId')->willReturnCallback(fn ($id) => ($connected[(int) $id] ?? false) ? $tenant : null);
         $config->method('getWebsiteApiKey')->willReturnCallback(function ($id) use ($connected, $brokenWebsite) {
             if ((int) $id === $brokenWebsite) {
                 throw new \Exception('Unable to decrypt the key.');
@@ -184,7 +208,11 @@ class HeartbeatTest extends TestCase
             return true;
         });
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags);
+        $encryptor = $this->createStub(EncryptorInterface::class);
+        $encryptor->method('encrypt')->willReturnCallback(fn ($value) => "enc:$value");
+        $encryptor->method('decrypt')->willReturnCallback(fn ($value) => substr((string) $value, 4));
+
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor);
     }
 
     private function groupFor(int $websiteId): Group

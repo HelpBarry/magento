@@ -53,8 +53,9 @@ class Queue
      */
     public function isPaid(OrderInterface $order): bool
     {
+        // A part the merchant cancelled is not due either.
         return in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE], true)
-            && (float) $order->getGrandTotal() - (float) $order->getTotalPaid() < 0.005;
+            && (float) $order->getGrandTotal() - (float) $order->getTotalCanceled() - (float) $order->getTotalPaid() < 0.005;
     }
 
     /**
