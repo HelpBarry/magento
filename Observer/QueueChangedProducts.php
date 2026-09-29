@@ -59,19 +59,51 @@ class QueueChangedProducts implements ObserverInterface
      */
     public function execute(Observer $observer)
     {
+        $event = $observer->getEvent();
+        $deletion = in_array($event->getName(), ['catalog_product_delete_before', 'catalog_product_import_bunch_delete_commit_before'], true);
         try {
-            $event = $observer->getEvent();
-            $deletion = in_array($event->getName(), ['catalog_product_delete_before', 'catalog_product_import_bunch_delete_commit_before'], true);
             if (!$deletion && !$this->anyWebsiteConnected()) {
                 return;
             }
-            $ids = $this->productIds($event);
-            if ($ids) {
-                $this->queue->enqueue($ids);
-            }
+            $this->queue($this->productIds($event), $deletion);
         } catch (\Exception $e) {
             // Never in the way of a save, an import or an order; the nightly sync catches up.
             $this->logger->error('bluebarry: could not queue changed products: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Queues products changed without an event after the change (a mass attribute update).
+     *
+     * @param int[] $ids
+     * @return void
+     */
+    public function queueChanged(array $ids): void
+    {
+        try {
+            if ($this->anyWebsiteConnected()) {
+                $this->queue($ids, false);
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('bluebarry: could not queue changed products: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * @param int[] $ids
+     * @param bool $deletion
+     * @return void
+     */
+    private function queue(array $ids, bool $deletion): void
+    {
+        if (!$ids) {
+            return;
+        }
+        $this->queue->enqueue($ids);
+        if ($deletion) {
+            // A bundle's price and availability come from its selections; once the product is gone,
+            // nothing links it to the bundle any more.
+            $this->queue->enqueueBundlesWith($ids);
         }
     }
 
@@ -100,7 +132,6 @@ class QueueChangedProducts implements ObserverInterface
             case 'catalog_product_save_after':
             case 'catalog_product_delete_before':
                 return [(int) $event->getData('product')->getId()];
-            case 'catalog_product_attribute_update_before':
             case 'catalog_category_change_products':
                 return (array) $event->getData('product_ids');
             case 'catalog_product_to_website_change':
@@ -125,6 +156,15 @@ class QueueChangedProducts implements ObserverInterface
                 $ids = [];
                 foreach ($event->getData('order')->getAllItems() as $item) {
                     $ids[] = (int) $item->getProductId();
+                }
+                return $ids;
+            case 'checkout_submit_all_after':
+                // Multi-address checkout; a single order is queued on quote submit.
+                $ids = [];
+                foreach ((array) $event->getData('orders') as $order) {
+                    foreach ($order->getAllItems() as $item) {
+                        $ids[] = (int) $item->getProductId();
+                    }
                 }
                 return $ids;
             case 'sales_order_creditmemo_save_after':
