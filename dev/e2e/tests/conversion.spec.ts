@@ -97,7 +97,7 @@ test('simple product: checkout after quiz sends a valid conversion and identify 
     commerceSource: 'Magento',
     commerceStoreKey: 'localhost',
     currencyIso: 'EUR',
-    conversionId: orderEntityId(incrementId),
+    conversionId: incrementId,
   });
   expect(Date.parse(body.occurredAtUtc)).toBeGreaterThan(Date.now() - 10 * 60_000);
   // EUR 100.00 excl. tax, NL 21% VAT; the grand total is the order's, shipping included.
