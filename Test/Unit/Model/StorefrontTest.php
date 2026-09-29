@@ -164,6 +164,20 @@ class StorefrontTest extends TestCase
         $this->assertNull($storefront->search(1, self::TENANT));
     }
 
+    public function testADisconnectObservedBeforeAReconnectDoesNotSwitchSearchOff(): void
+    {
+        // The disconnect saw the missing key first, but saves after the reconnect's read.
+        $late = new \ReflectionMethod(Storefront::class, 'write');
+        $disconnectSeenAt = (int) round(microtime(true) * 1000) - 1000;
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+        $storefront->refresh($this->website(1));
+
+        $late->invoke($storefront, 1, null, $disconnectSeenAt);
+
+        $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
+    }
+
     private function answer(?array $search, string $tenant = self::TENANT): Response
     {
         return new Response(200, (string) json_encode(['tenantId' => $tenant, 'search' => $search, 'version' => $search ? 'v1' : 'v0']));
