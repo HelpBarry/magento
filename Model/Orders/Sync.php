@@ -591,7 +591,14 @@ class Sync
         $targets = [];
         foreach ($this->storeManager->getWebsites() as $website) {
             $tenantId = $this->config->getWebsiteTenantId($website->getId());
-            $apiKey = $this->config->getWebsiteApiKey($website->getId());
+            try {
+                $apiKey = $this->config->getWebsiteApiKey($website->getId());
+            } catch (\Exception $e) {
+                // An undecryptable key (a database restored under another crypt key): this website's
+                // orders wait until its key is saved again, the others still go.
+                $this->logger->warning('bluebarry: skipping the orders of a website whose API key cannot be read: ' . $e->getMessage(), ['website' => $website->getId()]);
+                continue;
+            }
             if ($tenantId === null || $apiKey === null) {
                 continue;
             }
