@@ -211,7 +211,10 @@ class Storefront
         if ($settings !== null && (int) ($before['fetched'] ?? 0) > $started) {
             return; // a read that began later saved newer settings already
         }
-        if (self::content($before) === self::content($settings)) {
+        // Not connected is kept too, with when that was decided: a read begun before a disconnect must
+        // not bring the website's search back.
+        $next = $settings ?? [];
+        if ($before !== null && self::content($before) === self::content($next)) {
             $cached = $this->cache->load(self::FLAG);
             if (is_string($cached) && json_decode($cached, true) == $state) {
                 return; // pages read what is saved
@@ -223,11 +226,7 @@ class Storefront
                 return;
             }
         } else {
-            if ($settings === null) {
-                unset($state[$websiteId]);
-            } else {
-                $state[$websiteId] = $settings + ['fetched' => $started, 'written' => time()];
-            }
+            $state[$websiteId] = $next + ['fetched' => $started, 'written' => time()];
             $this->flags->saveFlag(self::FLAG, $state);
         }
         $this->cache->remove(self::FLAG);
@@ -281,12 +280,12 @@ class Storefront
     /**
      * What a website shows, without when it was read and saved.
      *
-     * @param array|null $settings
-     * @return array|null
+     * @param array $settings
+     * @return array
      */
-    private static function content(?array $settings): ?array
+    private static function content(array $settings): array
     {
-        return $settings === null ? null : array_diff_key($settings, ['fetched' => true, 'written' => true]);
+        return array_diff_key($settings, ['fetched' => true, 'written' => true]);
     }
 
     /**
