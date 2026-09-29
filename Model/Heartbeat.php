@@ -7,6 +7,7 @@ use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Module\ModuleListInterface;
+use Magento\Framework\Url;
 use Magento\Framework\UrlInterface;
 use Magento\Store\Api\Data\WebsiteInterface;
 use Magento\Store\Model\StoreManagerInterface;
@@ -59,6 +60,11 @@ class Heartbeat
     private $encryptor;
 
     /**
+     * @var Url
+     */
+    private $frontendUrl;
+
+    /**
      * @param Config $config
      * @param Client $client
      * @param StoreManagerInterface $storeManager
@@ -66,6 +72,7 @@ class Heartbeat
      * @param ModuleListInterface $moduleList
      * @param FlagManager $flags
      * @param EncryptorInterface $encryptor
+     * @param Url $frontendUrl
      */
     public function __construct(
         Config $config,
@@ -74,7 +81,8 @@ class Heartbeat
         ProductMetadataInterface $productMetadata,
         ModuleListInterface $moduleList,
         FlagManager $flags,
-        EncryptorInterface $encryptor
+        EncryptorInterface $encryptor,
+        Url $frontendUrl
     ) {
         $this->config = $config;
         $this->client = $client;
@@ -83,6 +91,7 @@ class Heartbeat
         $this->moduleList = $moduleList;
         $this->flags = $flags;
         $this->encryptor = $encryptor;
+        $this->frontendUrl = $frontendUrl;
     }
 
     /**
@@ -162,8 +171,9 @@ class Heartbeat
             'moduleVersion' => (string) ($this->moduleList->getOne('Bluebarry_Bluebarry')['setup_version'] ?? ''),
             'magentoVersion' => $this->productMetadata->getVersion(),
             'magentoEdition' => $this->productMetadata->getEdition(),
-            // Where bluebarry asks this website to reload its settings (Controller\Command\Index).
-            'commandUrl' => $siteUrl . '/bluebarry/command/',
+            // Where bluebarry asks this website to reload its settings (Controller\Command\Index): in
+            // its own store view, with the store code where URLs carry one.
+            'commandUrl' => $this->commandUrl($website),
         ], $tenantId, $apiKey, 10);
 
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];
@@ -274,6 +284,17 @@ class Heartbeat
     public function outcomes(): array
     {
         return $this->state()['websites'] ?? [];
+    }
+
+    /**
+     * @param WebsiteInterface $website
+     * @return string
+     */
+    private function commandUrl(WebsiteInterface $website): string
+    {
+        $group = $this->storeManager->getGroup((string) $website->getDefaultGroupId());
+        return (string) $this->frontendUrl->setScope($group->getDefaultStoreId())
+            ->getUrl('bluebarry/command', ['_secure' => true, '_nosid' => true, '_scope_to_url' => true]);
     }
 
     /**
