@@ -60,7 +60,8 @@ class OrderPayload
         }
 
         $payload = [
-            'id' => (string) $order->getEntityId(),
+            // The order number, as the merchant and the shopper know it, and as the conversion is keyed.
+            'id' => (string) $order->getIncrementId(),
             'customerId' => $order->getCustomerId() ? (string) $order->getCustomerId() : null,
             'email' => $order->getCustomerEmail() ?: null,
             'firstName' => $order->getCustomerFirstname() ?: ($order->getBillingAddress() ? $order->getBillingAddress()->getFirstname() : null),

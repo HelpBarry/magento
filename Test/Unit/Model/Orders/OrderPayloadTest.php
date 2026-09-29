@@ -24,7 +24,7 @@ class OrderPayloadTest extends TestCase
             ['id' => '10', 'reference' => '3', 'name' => 'Line 10', 'quantity' => 2, 'unitPrice' => 121.0],
             ['id' => '12', 'reference' => '1', 'name' => 'Line 12', 'quantity' => 1, 'unitPrice' => 60.5],
         ], $payload['lines']);
-        $this->assertSame(['1042', 'PAID', true, '77', '2026-09-28T12:30:00+00:00'], [$payload['id'], $payload['financialStatus'], $payload['live'], $payload['checkoutToken'], $payload['createdAt']]);
+        $this->assertSame(['000001042', 'PAID', true, '77', '2026-09-28T12:30:00+00:00'], [$payload['id'], $payload['financialStatus'], $payload['live'], $payload['checkoutToken'], $payload['createdAt']]);
     }
 
     public function testRefundsAndCancellationsAreNamedAsShopifyNamesThem(): void
@@ -49,7 +49,7 @@ class OrderPayloadTest extends TestCase
     {
         $order = $this->createStub(Order::class);
         $order->method('getAllItems')->willReturn($items);
-        $order->method('getEntityId')->willReturn('1042');
+        $order->method('getIncrementId')->willReturn('000001042');
         $order->method('getState')->willReturn($state);
         $order->method('getCreatedAt')->willReturn($createdAt);
         $order->method('getGrandTotal')->willReturn(302.5);
