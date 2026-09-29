@@ -15,6 +15,9 @@ use Magento\Store\Model\StoreManagerInterface;
  */
 class SendHeartbeatOnSave implements ObserverInterface
 {
+    /** Seconds a save spends reading the websites' settings; the 10-minute cron reads the rest. */
+    private const REFRESH_BUDGET = 15;
+
     /**
      * @var Heartbeat
      */
@@ -55,6 +58,7 @@ class SendHeartbeatOnSave implements ObserverInterface
      */
     public function execute(Observer $observer)
     {
+        $started = time();
         $websiteId = (string) $observer->getEvent()->getData('website');
         $storeId = (string) $observer->getEvent()->getData('store');
         if ($storeId !== '') {
@@ -82,9 +86,12 @@ class SendHeartbeatOnSave implements ObserverInterface
             }
             $name = (string) $website->getName();
             if ($outcome['ok']) {
-                // What bluebarry has for it (search), right away rather than on the next schedule.
+                // What bluebarry has for it (search), right away rather than on the next schedule; for
+                // at most about 15 seconds of the save, however many websites it covers.
                 try {
-                    $this->storefront->refresh($website);
+                    if (time() - $started < self::REFRESH_BUDGET) {
+                        $this->storefront->refresh($website);
+                    }
                 } catch (\Exception $e) {
                     // The schedule catches up.
                 }
