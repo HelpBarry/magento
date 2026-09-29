@@ -176,11 +176,18 @@ test.describe('catalog sync', () => {
 
   test('prices are sent as the catalog shows them, with tax when it shows tax', async () => {
     const id = productId('bb-simple'); // 100 without tax, NL 21%
+    const bundle = productId('bb-bundle-dynamic');
+    // A dynamically priced bundle has no tax class of its own: Magento taxes its parts.
+    const taxClass = `(SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'tax_class_id' AND entity_type_id = 4)`;
+    sql(`UPDATE catalog_product_entity_int SET value = 0 WHERE entity_id = ${bundle} AND attribute_id = ${taxClass} AND store_id = 0`);
     magento('config:set', 'tax/display/type', '2');
     try {
       syncCatalog('--all');
       expect(property((await sent(id))[0], 'price')).toBe(121);
+      const minPrice = Number(sql(`SELECT min_price FROM catalog_product_index_price WHERE entity_id = ${bundle} AND customer_group_id = 0 AND website_id = 1`));
+      expect(property((await sent(bundle))[0], 'price')).toBeCloseTo(Math.round(minPrice * 121) / 100, 2);
     } finally {
+      sql(`UPDATE catalog_product_entity_int SET value = 2 WHERE entity_id = ${bundle} AND attribute_id = ${taxClass} AND store_id = 0`);
       sql("DELETE FROM core_config_data WHERE path = 'tax/display/type'");
       magento('cache:flush', 'config');
     }
@@ -236,6 +243,18 @@ test.describe('catalog sync', () => {
 
     expect(queued(productId('bb-configurable-red'))).toBe(1);
     expect(queued(productId('bb-configurable'))).toBe(0);
+  });
+
+  test('a variant taken off its configurable product is queued as a product of its own', async ({ request }) => {
+    const blue = productId('bb-configurable-blue');
+    sql('DELETE FROM bluebarry_product_sync');
+    await rest(request, 'delete', '/rest/V1/configurable-products/bb-configurable/children/bb-configurable-blue');
+    try {
+      expect(queued(productId('bb-configurable'))).toBe(1);
+      expect(queued(blue)).toBe(1);
+    } finally {
+      await rest(request, 'post', '/rest/V1/configurable-products/bb-configurable/child', { childSku: 'bb-configurable-blue' });
+    }
   });
 
   test('stock saved through multi-source inventory is queued', async ({ request }) => {

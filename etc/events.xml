@@ -16,6 +16,9 @@
         <observer name="bluebarry_queue_order_sync" instance="Bluebarry\Bluebarry\Observer\QueueOrderSync" />
     </event>
     <!-- Catalog sync: queue the products a change touched (one insert; sent from the cron). -->
+    <event name="catalog_product_save_before">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
     <event name="catalog_product_save_after">
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>

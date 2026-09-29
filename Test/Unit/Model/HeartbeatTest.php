@@ -9,6 +9,7 @@ use Bluebarry\Bluebarry\Model\Heartbeat;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Module\ModuleListInterface;
 use Magento\Framework\Url;
 use Magento\Store\Model\Group;
@@ -284,6 +285,8 @@ class HeartbeatTest extends TestCase
             return substr((string) $value, 4);
         });
 
+        $locks = $this->createStub(LockManagerInterface::class);
+        $locks->method('lock')->willReturn(true);
         $url = $this->createStub(Url::class);
         $url->method('setScope')->willReturnCallback(function ($storeId) use ($url) {
             $this->urlScope = (int) $storeId;
@@ -291,7 +294,7 @@ class HeartbeatTest extends TestCase
         });
         $url->method('getUrl')->willReturnCallback(fn ($route) => "https://shop{$this->urlScope}.example/$route/");
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $url);
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks, $url);
     }
 
     private function groupFor(int $websiteId): Group

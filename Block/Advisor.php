@@ -3,7 +3,11 @@
 namespace Bluebarry\Bluebarry\Block;
 
 use Bluebarry\Bluebarry\Model\Storefront;
+use Magento\Catalog\Model\Product\Attribute\Source\Status;
+use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
+use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
+use Magento\ConfigurableProduct\Model\ResourceModel\Product\Type\Configurable as ConfigurableLinks;
 use Magento\Csp\Helper\CspNonceProvider;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\DataObject\IdentityInterface;
@@ -60,6 +64,19 @@ class Advisor extends Template implements IdentityInterface
     private $categories;
 
     /**
+     * @var ProductCollectionFactory
+     */
+    private $products;
+
+    /**
+     * @var ConfigurableLinks
+     */
+    private $configurableLinks;
+
+    /** @var array<int, int|null> child => the configurable product the catalog sync groups it under */
+    private $syncedParents = [];
+
+    /**
      * @param Context $context
      * @param ScopeConfigInterface $scopeConfig
      * @param StoreManagerInterface $storeManager
@@ -67,6 +84,8 @@ class Advisor extends Template implements IdentityInterface
      * @param Storefront $storefront
      * @param Registry $registry
      * @param CategoryCollectionFactory $categories
+     * @param ProductCollectionFactory $products
+     * @param ConfigurableLinks $configurableLinks
      * @param array $data
      */
     public function __construct(
@@ -77,6 +96,8 @@ class Advisor extends Template implements IdentityInterface
         Storefront $storefront,
         Registry $registry,
         CategoryCollectionFactory $categories,
+        ProductCollectionFactory $products,
+        ConfigurableLinks $configurableLinks,
         array $data = []
     ) {
         $this->scopeConfig = $scopeConfig;
@@ -85,6 +106,8 @@ class Advisor extends Template implements IdentityInterface
         $this->storefront = $storefront;
         $this->registry = $registry;
         $this->categories = $categories;
+        $this->products = $products;
+        $this->configurableLinks = $configurableLinks;
 
         parent::__construct($context, $data);
     }
@@ -157,6 +180,7 @@ class Advisor extends Template implements IdentityInterface
                 $category = $this->registry->registry('current_category');
                 return ['type' => 'collection'] + ($category ? ['collectionId' => (string) $category->getId()] : []);
             case 'catalogsearch_result_index':
+            case 'catalogsearch_advanced_result':
                 return ['type' => 'search'];
             case 'checkout_cart_index':
                 return ['type' => 'cart'];
@@ -183,13 +207,19 @@ class Advisor extends Template implements IdentityInterface
         $config = [];
         if ($page['type'] === 'product') {
             $product = $this->registry->registry('current_product');
-            if ($product->getTypeId() === 'configurable') {
-                $config['groupReference'] = (string) $product->getId();
+            // The product as the catalog sync sends it: a variant with a page of its own is still
+            // grouped under its configurable product, with that product's categories.
+            $group = $product->getTypeId() === 'configurable' ? (int) $product->getId() : $this->syncedParentId((int) $product->getId());
+            if ($group !== null) {
+                $config['groupReference'] = (string) $group;
             }
             if (isset($page['productReference'])) {
                 $config['variantReference'] = $page['productReference'];
             }
-            $context['productCollectionIds'] = $this->collectionIds($product);
+            $categoryIds = $group !== null && $group !== (int) $product->getId()
+                ? (array) $this->products->create()->addIdFilter([$group])->addCategoryIds()->getFirstItem()->getCategoryIds()
+                : (array) $product->getCategoryIds();
+            $context['productCollectionIds'] = $this->collectionIds($categoryIds);
         } elseif ($page['type'] === 'collection') {
             $category = $this->registry->registry('current_category');
             if ($category) {
@@ -216,9 +246,10 @@ class Advisor extends Template implements IdentityInterface
 
     /**
      * The variant a product page opens with, for its product view: a configurable product's first
-     * variant for sale (by id, as the catalog sync orders them), else its first; any other product
-     * itself. None for a configurable product without variants or a grouped product: the catalog sync
-     * sends neither, only their products.
+     * variant for sale (by id, as the catalog sync orders them) of the ones the sync groups under it
+     * (a variant of several configurable products goes under one), else its first; any other product
+     * itself. None for a configurable product without such variants or a grouped product: the catalog
+     * sync sends neither, only their products.
      *
      * @param \Magento\Catalog\Model\Product $product
      * @return string|null
@@ -237,25 +268,55 @@ class Advisor extends Template implements IdentityInterface
         usort($children, function ($a, $b) {
             return (int) $a->getId() <=> (int) $b->getId();
         });
-        foreach ($children as $child) {
+        $own = array_values(array_filter($children, function ($child) use ($product) {
+            return $this->syncedParentId((int) $child->getId()) === (int) $product->getId();
+        }));
+        foreach ($own as $child) {
             if ($child instanceof \Magento\Catalog\Model\Product && $child->isSalable()) {
                 return (string) $child->getId();
             }
         }
         // Without variants there is nothing the catalog sync sends for it.
-        return $children ? (string) $children[0]->getId() : null;
+        return $own ? (string) $own[0]->getId() : null;
+    }
+
+    /**
+     * The configurable product the catalog sync groups a product under: its lowest parent that is
+     * enabled, has a page and is in this website (ProductBuilder::build()), or null.
+     *
+     * @param int $childId
+     * @return int|null
+     */
+    private function syncedParentId(int $childId): ?int
+    {
+        if (!array_key_exists($childId, $this->syncedParents)) {
+            $parentIds = array_map('intval', $this->configurableLinks->getParentIdsByChild($childId));
+            $this->syncedParents[$childId] = null;
+            if ($parentIds) {
+                $store = $this->storeManager->getStore();
+                $shown = array_map('intval', $this->products->create()
+                    ->setStoreId((int) $store->getId())
+                    ->addIdFilter($parentIds)
+                    ->addWebsiteFilter([(int) $store->getWebsiteId()])
+                    ->addAttributeToFilter('status', ['eq' => Status::STATUS_ENABLED])
+                    ->addAttributeToFilter('visibility', ['neq' => Visibility::VISIBILITY_NOT_VISIBLE])
+                    ->getAllIds());
+                sort($shown);
+                $this->syncedParents[$childId] = $shown[0] ?? null;
+            }
+        }
+        return $this->syncedParents[$childId];
     }
 
     /**
      * The product's active categories in this store's category tree, as the catalog sync sends them:
      * category assignments are shared by every website.
      *
-     * @param \Magento\Catalog\Model\Product $product
+     * @param array $ids the product's category ids
      * @return string[]
      */
-    private function collectionIds($product): array
+    private function collectionIds(array $ids): array
     {
-        $ids = (array) $product->getCategoryIds();
         $store = $this->storeManager->getStore();
         if (!$ids || !$store instanceof \Magento\Store\Model\Store) {
             return [];
@@ -314,6 +375,6 @@ class Advisor extends Template implements IdentityInterface
      */
     public function getIdentities()
     {
-        return [Storefront::CACHE_TAG];
+        return [Storefront::cacheTag((int) $this->storeManager->getStore()->getWebsiteId())];
     }
 }
