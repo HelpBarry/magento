@@ -148,7 +148,21 @@ class QueueChangedProducts implements ObserverInterface
     private function productIds($event): array
     {
         switch ($event->getName()) {
+            case 'catalog_product_save_before':
+                // A configurable product's children before the save: one it loses is a product of its own again.
+                $product = $event->getData('product');
+                if ($product->getTypeId() === 'configurable' && $product->getId()) {
+                    $product->setData('bluebarry_children', $this->queue->configurableChildren((int) $product->getId()));
+                }
+                return [];
             case 'catalog_product_save_after':
+                $product = $event->getData('product');
+                $ids = [(int) $product->getId()];
+                if (is_array($product->getData('bluebarry_children'))) {
+                    $ids = array_merge($ids, array_diff($product->getData('bluebarry_children'), $this->queue->configurableChildren((int) $product->getId())));
+                    $product->unsetData('bluebarry_children');
+                }
+                return $ids;
             case 'catalog_product_delete_before':
                 return [(int) $event->getData('product')->getId()];
             case 'catalog_category_change_products':

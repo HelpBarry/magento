@@ -35,7 +35,6 @@ class Sync
     private const RETRY_AFTER = 300;
 
     /** The nightly full sync: at least this long after the last one, between 01:00 and 05:00 store time. */
-    private const FULL_SYNC_INTERVAL = 72000;
 
     /**
      * @var Config
@@ -388,15 +387,31 @@ class Sync
         $sources = self::sources($targets);
         $saved = is_array($state['tenants'] ?? null) ? $state['tenants'] : [];
         $changed = array_diff_assoc($sources, $saved) !== [];
-        $hour = (int) $this->timezone->date()->format('G');
-        $nightly = $targets && time() - ($state['full_at'] ?? 0) >= self::FULL_SYNC_INTERVAL && $hour >= 1 && $hour < 5;
+        // Once a night, between 1 and 5 in the store's time zone, whenever the last full sync was.
+        $now = $this->timezone->date();
+        $hour = (int) $now->format('G');
+        $lastDay = isset($state['full_at']) ? $this->timezone->date(new \DateTime('@' . (int) $state['full_at']))->format('Y-m-d') : '';
+        $nightly = $targets && $hour >= 1 && $hour < 5 && ($lastDay !== $now->format('Y-m-d') || $this->fullAtBefore($state, 1));
         if ($changed || $nightly) {
             $this->queue->enqueueAll();
             $this->saveState(['tenants' => $sources, 'full_at' => time()]);
         } elseif ($sources != $saved) {
-            // A company left: it gets the whole catalog when it comes back.
-            $this->saveState(['tenants' => $sources]);
+            // A company left: it gets the whole catalog when it comes back, and its failure is no more.
+            $this->saveState(['tenants' => $sources, 'targets' => array_intersect_key($state['targets'] ?? [], $sources) ?: null]);
         }
+    }
+
+    /**
+     * Whether the last full sync was today before the given hour (store time): one the day before at
+     * noon counts as yesterday's, one at 00:30 as not yet tonight's.
+     *
+     * @param array $state
+     * @param int $hour
+     * @return bool
+     */
+    private function fullAtBefore(array $state, int $hour): bool
+    {
+        return (int) $this->timezone->date(new \DateTime('@' . (int) ($state['full_at'] ?? 0)))->format('G') < $hour;
     }
 
     /**
