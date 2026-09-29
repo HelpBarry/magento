@@ -215,6 +215,13 @@ class Sync
                 $active[strtolower($target['tenantId'])] = $target;
             }
         }
+        // Companies waiting out an earlier failure: they miss what the others receive now.
+        $cooling = [];
+        foreach ($targets as $target) {
+            if (!isset($active[strtolower($target['tenantId'])])) {
+                $cooling[] = strtolower($target['tenantId']);
+            }
+        }
         foreach (array_keys($active) as $key) {
             if (!empty($this->state()['targets'][$key]['stale'])) {
                 // It missed changes the others received: the whole catalog again, now it may work.
@@ -232,7 +239,7 @@ class Sync
                 break;
             }
             $after = (int) max(array_keys($queued));
-            $waiting = $this->builder->awaitingPriceIndex($queued);
+            $waiting = $this->builder->awaitingIndexes($queued);
             $this->queue->release($waiting, $claim);
             $ids = array_values(array_diff(array_keys($queued), $waiting));
             if (!$ids) {
@@ -259,6 +266,12 @@ class Sync
                 }
                 return $sent;
             }
+            foreach ($cooling as $key) {
+                if (empty($this->state()['targets'][$key]['stale'])) {
+                    $this->updateTarget($key, ['stale' => true]);
+                }
+            }
+            $cooling = [];
             foreach ($refused as $key => $error) {
                 // The others received changes this company missed.
                 $this->updateTarget($key, ['retry_at' => time() + self::RETRY_AFTER, 'error' => $error, 'stale' => true]);
