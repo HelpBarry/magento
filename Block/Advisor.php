@@ -234,6 +234,17 @@ class Advisor extends Template implements IdentityInterface
     }
 
     /**
+     * Where the checkout page tells the module the shopper's email (Controller\Checkout\Email), or
+     * null on any other page.
+     *
+     * @return string|null
+     */
+    public function getCheckoutEmailUrl(): ?string
+    {
+        return $this->fullActionName() === 'checkout_index_index' ? $this->getUrl('bluebarry/checkout/email') : null;
+    }
+
+    /**
      * Whether this page is Magento's catalog search results page.
      *
      * @return bool

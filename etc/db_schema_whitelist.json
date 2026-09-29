@@ -33,5 +33,41 @@
         "index": {
             "BLUEBARRY_PRODUCT_SYNC_CLAIM_PRODUCT_ID": true
         }
+    },
+    "bluebarry_order_sync": {
+        "column": {
+            "order_id": true,
+            "queued_at": true,
+            "live": true,
+            "claim": true,
+            "attempts": true,
+            "synced_at": true
+        },
+        "index": {
+            "BLUEBARRY_ORDER_SYNC_QUEUED_AT": true,
+            "BLUEBARRY_ORDER_SYNC_CLAIM": true
+        },
+        "constraint": {
+            "PRIMARY": true,
+            "BLUEBARRY_ORDER_SYNC_ORDER_ID_SALES_ORDER_ENTITY_ID": true
+        }
+    },
+    "bluebarry_checkout": {
+        "column": {
+            "quote_id": true,
+            "store_id": true,
+            "email": true,
+            "first_name": true,
+            "completed": true,
+            "noted_at": true,
+            "sent_at": true
+        },
+        "index": {
+            "BLUEBARRY_CHECKOUT_SENT_AT_NOTED_AT": true
+        },
+        "constraint": {
+            "PRIMARY": true,
+            "BLUEBARRY_CHECKOUT_QUOTE_ID_QUOTE_ENTITY_ID": true
+        }
     }
 }

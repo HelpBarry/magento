@@ -63,12 +63,33 @@
             <argument name="commands" xsi:type="array">
                 <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
                 <item name="bluebarry_catalog_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncCatalog</item>
+                <item name="bluebarry_orders_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncOrders</item>
             </argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Console\Command\SendDueConversions">
         <arguments>
             <argument name="job" xsi:type="object">Bluebarry\Bluebarry\Cron\SendDueConversions\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\SyncOrders">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Orders\Sync\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Orders\Sync">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Observer\QueueOrderSync">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Observer\CompleteCheckout">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Console\Command\SyncCatalog">

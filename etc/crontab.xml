@@ -15,6 +15,10 @@
         </job>
     </group>
     <group id="bluebarry">
+        <!-- Orders, the history import and checkouts, at most 50 seconds a run. A few indexed queries when idle. -->
+        <job name="bluebarry_sync_orders" instance="Bluebarry\Bluebarry\Cron\SyncOrders" method="execute">
+            <schedule>* * * * *</schedule>
+        </job>
         <!-- Catalog sync: changed products in batches, at most 50 seconds a run. One query when idle. -->
         <job name="bluebarry_sync_catalog" instance="Bluebarry\Bluebarry\Cron\SyncCatalog" method="execute">
             <schedule>* * * * *</schedule>

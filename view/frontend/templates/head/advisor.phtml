@@ -41,6 +41,40 @@ if ($tenantId != null && $tenantId != "") {
             });
         });
     })();
+<?php $checkoutEmailUrl = $block->getCheckoutEmailUrl(); ?>
+<?php if ($checkoutEmailUrl !== null): ?>
+    // The checkout: the email the shopper gives (or, signed in, their account's) goes to the module for
+    // bluebarry's abandoned checkout flow, once it looks complete.
+    (function () {
+        var url = "<?= $block->escapeJs($checkoutEmailUrl); ?>", last = null, timer = null;
+        function formKey() {
+            var match = document.cookie.match(/(?:^|; )form_key=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+        function send(email) {
+            if (email === last) return;
+            last = email;
+            fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
+                body: new URLSearchParams({form_key: formKey(), email: email}).toString()
+            }).catch(function () {});
+        }
+        function typed(event) {
+            var field = event.target;
+            if (!field || (field.id !== 'customer-email' && field.type !== 'email')) return;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                var email = String(field.value || '').trim();
+                if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) send(email);
+            }, 800);
+        }
+        document.addEventListener('input', typed, true);
+        document.addEventListener('change', typed, true);
+        document.addEventListener('DOMContentLoaded', function () { send(''); });
+    })();
+<?php endif; ?>
 <?php $search = $block->getSearchConfig(); ?>
 <?php if ($search !== null): ?>
     // Search, as chosen in Studio.
