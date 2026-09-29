@@ -24,7 +24,7 @@ class PayloadBuilderTest extends TestCase
         $this->assertSame(self::ADVISOR, $payload['advisorId']);
         $this->assertSame('Magento', $payload['commerceSource']);
         $this->assertSame('shop.example', $payload['commerceStoreKey']);
-        $this->assertSame('1042', $payload['conversionId']);
+        $this->assertSame('000001042', $payload['conversionId']);
         $this->assertSame('2026-09-28T12:30:00+00:00', $payload['occurredAtUtc']);
         $this->assertSame('EUR', $payload['currencyIso']);
         $this->assertSame(200.0, $payload['orderProductTotal']);
@@ -135,6 +135,7 @@ class PayloadBuilderTest extends TestCase
         $order = $this->createStub(Order::class);
         $order->method('getItems')->willReturn($items);
         $order->method('getEntityId')->willReturn('1042');
+        $order->method('getIncrementId')->willReturn('000001042');
         $order->method('getCreatedAt')->willReturn('2026-09-28 12:30:00');
         $order->method('getOrderCurrencyCode')->willReturn('EUR');
         $order->method('getGrandTotal')->willReturn($grandTotal);
