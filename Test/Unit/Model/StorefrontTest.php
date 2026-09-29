@@ -152,6 +152,29 @@ class StorefrontTest extends TestCase
         $this->assertSame($purges + 1, $this->purges);
     }
 
+    public function testAChangeIsPurgedOnceMoreAMinuteLater_ForPagesStillRenderingDuringIt(): void
+    {
+        $storefront = $this->storefront();
+        $same = fn () => $this->answer(['profileId' => self::PROFILE, 'resultsPage' => false]);
+        $this->answers = [$same(), $same(), $same(), $same()];
+        $storefront->refresh($this->website(1));
+        $storefront->search(1, self::TENANT); // a page refilled the settings cache
+        $storefront->refresh($this->website(1)); // right away: a page may still be rendering
+        $this->assertSame(1, $this->purges);
+
+        // A page that rendered the old settings reached the page cache after the purge.
+        $this->flag[1]['written'] -= 61;
+        unset($this->cache[Storefront::FLAG]);
+        $storefront->search(1, self::TENANT); // the settings cache is current
+        $storefront->refresh($this->website(1));
+        $this->assertSame(2, $this->purges);
+
+        $storefront->search(1, self::TENANT);
+        $storefront->refresh($this->website(1)); // and only once
+        $this->assertSame(2, $this->purges);
+        $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
+    }
+
     public function testAReadBegunBeforeADisconnectDoesNotBringSearchBack(): void
     {
         $storefront = $this->storefront();
