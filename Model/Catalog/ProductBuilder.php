@@ -249,7 +249,8 @@ class ProductBuilder
         $items = $this->load(array_values(array_unique(array_merge($all, $parentIds))), $storeId);
         $inWebsite = array_flip($this->inWebsite(array_keys($items), $websiteId));
         $prices = $this->prices($all, $websiteId, $storeId);
-        $stock = $this->stock($all, $items, $store);
+        // The parents' too: a configurable product marked out of stock takes its variants with it.
+        $stock = $this->stock(array_values(array_unique(array_merge($all, $parentIds))), $items, $store);
         $categoryIds = $this->productCategories(array_keys($items));
         $currency = $this->currency($store);
         $this->bundleTaxClasses = $this->dynamicBundleTaxClasses($items);
@@ -289,7 +290,9 @@ class ProductBuilder
                     $products[] = ['reference' => (string) $id, 'inactive' => true];
                     continue;
                 }
-                $products[] = $this->product($product, $parent, $store, $prices[$id] ?? null, $stock[$id] ?? null, $categoryIds, $currency);
+                $parentOutOfStock = $parent !== null && isset($stock[(int) $parent->getId()]['is_in_stock'])
+                    && !(int) $stock[(int) $parent->getId()]['is_in_stock'];
+                $products[] = $this->product($product, $parent, $store, $prices[$id] ?? null, $stock[$id] ?? null, $categoryIds, $currency, $parentOutOfStock);
             } catch (\Exception $e) {
                 $failed[] = $id;
             }
@@ -369,9 +372,10 @@ class ProductBuilder
      * @param array|null $stock
      * @param array<int, int[]> $categoryIds
      * @param array{code: string, rate: float} $currency
+     * @param bool $parentOutOfStock
      * @return array
      */
-    private function product(Product $product, ?Product $parent, Store $store, ?array $price, ?array $stock, array $categoryIds, array $currency): array
+    private function product(Product $product, ?Product $parent, Store $store, ?array $price, ?array $stock, array $categoryIds, array $currency, bool $parentOutOfStock = false): array
     {
         $shown = $parent ?? $product;
         $id = (int) $product->getId();
@@ -408,6 +412,10 @@ class ProductBuilder
             in_array($type, self::COUNTED_TYPES, true),
             (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, $store)
         );
+        if ($parentOutOfStock) {
+            // Bought through its configurable product, which is not for sale.
+            [$stockStatus, $quantity] = ['outofstock', null];
+        }
 
         $properties = [
             ['propertyName' => 'price', 'value' => $final, 'type' => 'numeric'],
