@@ -175,6 +175,19 @@ class StorefrontTest extends TestCase
         $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
     }
 
+    public function testAWebsiteThatWasNeverConnectedPurgesNothing(): void
+    {
+        $storefront = $this->storefront(connected: false);
+
+        $storefront->refresh($this->website(1));
+        $this->flag[1]['written'] -= 61;
+        $this->cache[Storefront::FLAG] = (string) json_encode($this->flag);
+        $storefront->refresh($this->website(1));
+
+        $this->assertSame(0, $this->purges);
+        $this->assertNull($storefront->search(1, self::TENANT));
+    }
+
     public function testAReadBegunBeforeADisconnectDoesNotBringSearchBack(): void
     {
         $storefront = $this->storefront();
