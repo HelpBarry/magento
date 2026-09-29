@@ -27,6 +27,8 @@ class SyncTest extends TestCase
     private array $flag = [];
     private array $awaitingIndex = [];
     private array $unreadable = [];
+    /** @var array<int, int[]> queued configurable product => the children build() adds */
+    private array $expanded = [];
     private bool $locked = false;
     /** @var callable|null */
     private $onPost;
@@ -65,7 +67,7 @@ class SyncTest extends TestCase
 
         $this->assertSame(0, $sync->run()['sent']);
         $this->assertArrayHasKey(5, $this->queued);
-        $this->assertGreaterThan(time() + 200, $this->flag['retry_at']);
+        $this->assertGreaterThan(time() + 200, $this->flag['targets']['a']['retry_at']);
         $this->assertSame('bluebarry answered HTTP 503.', $sync->status()['error']);
 
         $sync->run(); // still waiting: nothing sent
@@ -134,6 +136,61 @@ class SyncTest extends TestCase
         $this->assertSame([5], array_keys($this->queued));
     }
 
+    public function testOneCompanysFailureDoesNotHoldUpAnother_ItGetsTheWholeCatalogOnceItWorks(): void
+    {
+        $sync = $this->sync([503, 200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->flag = ['tenants' => ['a', 'b'], 'full_at' => time()];
+        $this->queued = [5 => ''];
+
+        $this->assertSame(1, $sync->run()['sent']); // b received it; a waits
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertTrue($this->flag['targets']['a']['stale']);
+        $this->assertSame('bluebarry answered HTTP 503.', $sync->status()['error']);
+
+        // Five minutes later a works again: it missed changes, so the whole catalog goes out again.
+        $this->flag['targets']['a']['retry_at'] = time() - 1;
+        $this->queued = [6 => ''];
+        $sync->run();
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertArrayNotHasKey('targets', array_filter($this->flag));
+        $this->assertNull($sync->status()['error']);
+    }
+
+    public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
+    {
+        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->sync([], tenants: [])->run(); // disconnected
+        $this->assertArrayNotHasKey('tenants', $this->flag);
+
+        $this->sync([200], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testAVariantThatCannotBeReadIsQueuedOnItsOwn(): void
+    {
+        $sync = $this->sync([200]);
+        $this->flag = ['tenants' => ['a'], 'full_at' => time()];
+        $this->queued = [4 => '']; // the configurable product; its child 68 fails to build
+        $this->unreadable = [68];
+        $this->expanded = [4 => [68, 69]];
+
+        $sync->run();
+
+        $this->assertSame([68], array_keys($this->queued));
+    }
+
+    public function testRequestsStayUnderTheApiLimitAndKeepAGroupWithItsSwitchOff(): void
+    {
+        $group = fn (string $id, int $n) => array_map(fn ($i) => ['reference' => "$id-$i", 'groupId' => $id], range(1, $n));
+        $requests = Sync::requests(array_merge($group('10', 300), $group('20', 300), $group('30', 600)), ['10', '20', '30', '40']);
+
+        $this->assertSame([300, 500, 100, 300], array_map(fn ($r) => count($r['products']), $requests));
+        $this->assertSame(['10'], $requests[0]['reconcileGroupIds']);
+        // 30 is too big for one request, so it is never switched off; 40 (deleted) rides along.
+        $this->assertSame([[], []], [$requests[1]['reconcileGroupIds'], $requests[2]['reconcileGroupIds']]);
+        $this->assertSame(['20', '40'], $requests[3]['reconcileGroupIds']);
+    }
+
     public function testOneRunAtATime(): void
     {
         $sync = $this->sync([200]);
@@ -187,10 +244,14 @@ class SyncTest extends TestCase
         $builder->method('awaitingPriceIndex')->willReturnCallback(fn ($queued) => array_values(array_intersect(array_keys($queued), $this->awaitingIndex)));
         $builder->method('build')->willReturnCallback(function ($ids, $store) {
             $this->calls[] = ['built' => array_merge($ids, [$store->getCode()])];
+            $all = $ids;
+            foreach ($ids as $id) {
+                $all = array_merge($all, $this->expanded[$id] ?? []);
+            }
             return [
-                'products' => array_map(fn ($id) => ['reference' => (string) $id], array_values(array_diff($ids, $this->unreadable))),
+                'products' => array_map(fn ($id) => ['reference' => (string) $id], array_values(array_diff($all, $this->unreadable))),
                 'reconcileGroupIds' => [],
-                'failed' => array_values(array_intersect($ids, $this->unreadable)),
+                'failed' => array_values(array_intersect($all, $this->unreadable)),
             ];
         });
 
@@ -198,19 +259,27 @@ class SyncTest extends TestCase
         $queue->method('enqueueAll')->willReturnCallback(function () {
             $this->catalogQueued++;
         });
-        $queue->method('next')->willReturnCallback(function ($limit, $after) {
+        $queue->method('claimNext')->willReturnCallback(function ($limit, $after, $claim) {
             ksort($this->queued);
             $next = [];
             foreach (array_keys($this->queued) as $id) {
                 if ($id > $after && count($next) < $limit) {
+                    $this->queued[$id] = $claim;
                     $next[$id] = gmdate('Y-m-d H:i:s');
                 }
             }
             return $next;
         });
-        $queue->method('claim')->willReturnCallback(function ($ids, $claim) {
+        $queue->method('release')->willReturnCallback(function ($ids, $claim) {
             foreach ($ids as $id) {
-                $this->queued[$id] = $claim;
+                if (($this->queued[$id] ?? null) === $claim) {
+                    $this->queued[$id] = '';
+                }
+            }
+        });
+        $queue->method('ensureQueued')->willReturnCallback(function ($ids) {
+            foreach ($ids as $id) {
+                $this->queued[$id] = $this->queued[$id] ?? '';
             }
         });
         $queue->method('remove')->willReturnCallback(function ($ids, $claim) {

@@ -32,4 +32,10 @@
     <event name="cataloginventory_stock_item_save_after">
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
     </event>
+    <event name="order_cancel_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
+    <event name="sales_order_creditmemo_save_after">
+        <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />
+    </event>
 </config>
