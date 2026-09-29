@@ -36,8 +36,8 @@ class Client
      *
      * @param string $path e.g. /data/conversionevents
      * @param array $body
-     * @param string $tenantId
-     * @param string|null $apiKey authenticates as the store's integration when given
+     * @param string $tenantId for public (storefront-level) calls
+     * @param string|null $apiKey authenticates as the store's integration instead, when given
      * @param int $timeout seconds
      * @return Response status 0 when no answer came
      */
@@ -47,9 +47,12 @@ class Client
         $curl = $this->curlFactory->create();
         $curl->setTimeout($timeout);
         $curl->addHeader('Content-Type', 'application/json');
-        $curl->addHeader('BB-Tenant-Id', $tenantId);
+        // One or the other: bluebarry authenticates a request that names a tenant as that tenant's
+        // public storefront and ignores any key on it.
         if ($apiKey !== null && $apiKey !== '') {
             $curl->addHeader('Authorization', $apiKey);
+        } else {
+            $curl->addHeader('BB-Tenant-Id', $tenantId);
         }
 
         try {
