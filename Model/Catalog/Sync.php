@@ -156,14 +156,10 @@ class Sync
         }
         try {
             $targets = $this->targets();
+            $this->queueCatalogIfDue($targets);
             if (!$targets) {
-                // Nothing was queued while disconnected: reconnecting sends the whole catalog again.
-                if (isset($this->state()['tenants'])) {
-                    $this->saveState(['tenants' => null]);
-                }
                 return ['sent' => 0, 'queued' => $this->queue->count()];
             }
-            $this->queueCatalogIfDue($targets);
             $sent = $this->drain($targets, $seconds);
             return ['sent' => $sent, 'queued' => $this->queue->count()];
         } finally {
@@ -179,10 +175,7 @@ class Sync
     public function queueAll(): void
     {
         $this->queue->enqueueAll();
-        $tenants = array_map(function ($target) {
-            return strtolower($target['tenantId']);
-        }, $this->targets());
-        $this->saveState(['tenants' => $tenants, 'full_at' => time(), 'targets' => null]);
+        $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
     }
 
     /**
@@ -369,23 +362,41 @@ class Sync
     }
 
     /**
+     * The whole catalog goes to a company that is new, came back, or is now read from another store
+     * view: changes made meanwhile never reached it, or it holds the other view's names and prices.
+     * Everyone gets it at night once a day.
+     *
      * @param array $targets
      * @return void
      */
     private function queueCatalogIfDue(array $targets): void
     {
         $state = $this->state();
-        $tenants = array_map(function ($target) {
-            return strtolower($target['tenantId']);
-        }, $targets);
-        $newCompany = array_diff($tenants, $state['tenants'] ?? []) !== [];
+        $sources = self::sources($targets);
+        $saved = is_array($state['tenants'] ?? null) ? $state['tenants'] : [];
+        $changed = array_diff_assoc($sources, $saved) !== [];
         $hour = (int) $this->timezone->date()->format('G');
-        $nightly = time() - ($state['full_at'] ?? 0) >= self::FULL_SYNC_INTERVAL && $hour >= 1 && $hour < 5;
-        if (!$newCompany && !$nightly) {
-            return;
+        $nightly = $targets && time() - ($state['full_at'] ?? 0) >= self::FULL_SYNC_INTERVAL && $hour >= 1 && $hour < 5;
+        if ($changed || $nightly) {
+            $this->queue->enqueueAll();
+            $this->saveState(['tenants' => $sources, 'full_at' => time()]);
+        } elseif ($sources != $saved) {
+            // A company left: it gets the whole catalog when it comes back.
+            $this->saveState(['tenants' => $sources]);
         }
-        $this->queue->enqueueAll();
-        $this->saveState(['tenants' => $tenants, 'full_at' => time()]);
+    }
+
+    /**
+     * @param array $targets
+     * @return array<string, int> company => the store view its catalog is read in
+     */
+    private static function sources(array $targets): array
+    {
+        $sources = [];
+        foreach ($targets as $target) {
+            $sources[strtolower($target['tenantId'])] = (int) $target['store']->getId();
+        }
+        return $sources;
     }
 
     /**
