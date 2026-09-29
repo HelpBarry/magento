@@ -173,6 +173,20 @@ class SyncTest extends TestCase
         $this->assertFalse($this->flag['targets']['a']['stale'] ?? false);
     }
 
+    public function testACompanyThatTakesAnEmptyRequestButNoBatchDoesNotSendTheOthersBackToTheStart(): void
+    {
+        $sync = $this->sync([200, 503, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() - 1, 'error' => 'x', 'stale' => true]]];
+        $this->queued = [5 => ''];
+
+        $sync->run();
+
+        $this->assertSame(0, $this->catalogQueued);
+        $this->assertSame([], array_keys($this->queued)); // b received it
+        $this->assertTrue($this->flag['targets']['a']['stale']);
+        $this->assertGreaterThan(time(), $this->flag['targets']['a']['retry_at']);
+    }
+
     public function testAWebsiteWhoseKeyCannotBeReadDoesNotStopTheOthers(): void
     {
         $sync = $this->sync([200], tenants: [1 => 'a', 3 => 'b']);
