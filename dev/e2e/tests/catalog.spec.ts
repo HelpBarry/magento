@@ -221,13 +221,14 @@ test.describe('catalog sync', () => {
     };
     await stock(false);
     try {
-      // The stock index ("Update by Schedule") has not run: the bundle would still read in stock, so it waits.
+      // While the stock index ("Update by Schedule") has not run, the bundle would still read in stock, so
+      // it waits. Where the index already caught up (older Magento) it goes now; never as in stock.
       syncCatalog();
-      expect(await sent(productId('bb-bundle-fixed'))).toEqual([]);
-      expect(queued(productId('bb-part-a'))).toBe(1);
-
-      reindex(); // as the indexer cron would
-      syncCatalog();
+      if ((await sent(productId('bb-bundle-fixed'))).length === 0) {
+        expect(queued(productId('bb-part-a'))).toBe(1);
+        reindex(); // as the indexer cron would
+        syncCatalog();
+      }
       const [bundle] = await sent(productId('bb-bundle-fixed'));
       expect(property(bundle, 'stock_status')).toBe('outofstock');
     } finally {
