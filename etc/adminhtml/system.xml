@@ -24,6 +24,11 @@
                     <label>Connection</label>
                     <frontend_model>Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Connection</frontend_model>
                 </field>
+                <field id="catalog" translate="label comment" type="label" sortOrder="45" showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Catalog</label>
+                    <comment>Products, prices and stock are sent to bluebarry as they change, and in full every night.</comment>
+                    <frontend_model>Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Catalog</frontend_model>
+                </field>
                 <field id="write_to_debug_file" translate="label comment" type="select" sortOrder="50" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Write conversion requests to debug log</label>
                     <comment>Written to var/log/bluebarry.log. Only turn this on while troubleshooting.</comment>

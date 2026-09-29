@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { expect, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin');
 export const MOCK_API = process.env.MOCK_API_URL ?? 'http://localhost:8099';
@@ -231,9 +231,7 @@ export function orderGrandTotal(incrementId: string): number {
  * admin). The order moves to processing, which is when bluebarry counts it as a sale.
  */
 export async function payForOrder(page: Page, incrementId: string): Promise<void> {
-  const token = await (
-    await page.request.post('/rest/V1/integration/admin/token', { data: { username: 'admin', password: 'Admin12345!' } })
-  ).json();
+  const token = await adminToken(page.request);
   const invoice = await page.request.post(`/rest/V1/order/${orderEntityId(incrementId)}/invoice`, {
     headers: { Authorization: `Bearer ${token}` },
     data: { capture: true, notify: false },
@@ -242,6 +240,13 @@ export async function payForOrder(page: Page, incrementId: string): Promise<void
 }
 
 // --- Magento admin ------------------------------------------------------------------------------------
+
+/** A Magento REST token for the admin user. */
+export async function adminToken(request: APIRequestContext): Promise<string> {
+  const response = await request.post('/rest/V1/integration/admin/token', { data: { username: 'admin', password: 'Admin12345!' } });
+  expect(response.status(), await response.text()).toBe(200);
+  return response.json();
+}
 
 /** Signs in to the Magento admin (the test store has no 2FA and no secret keys in admin URLs). */
 export async function adminLogin(page: Page): Promise<void> {

@@ -10,4 +10,10 @@
             <schedule>*/10 * * * *</schedule>
         </job>
     </group>
+    <group id="bluebarry">
+        <!-- Catalog sync: changed products in batches, at most 50 seconds a run. One query when idle. -->
+        <job name="bluebarry_sync_catalog" instance="Bluebarry\Bluebarry\Cron\SyncCatalog" method="execute">
+            <schedule>* * * * *</schedule>
+        </job>
+    </group>
 </config>
