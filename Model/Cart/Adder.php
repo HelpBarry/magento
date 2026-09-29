@@ -120,7 +120,9 @@ class Adder
             $before = $this->snapshot();
             try {
                 $this->cart->addProduct($product, $request);
-                $added[] = [$product, $request];
+                // As it was for this line: the next line's variant of the same configurable product is
+                // added through the same (repository-cached) product and changes its options.
+                $added[] = [clone $product, $request];
             } catch (LocalizedException $e) {
                 // What Magento changed for this line must not be saved with the others: on a stock
                 // error it even removes the product's line already in the cart.
