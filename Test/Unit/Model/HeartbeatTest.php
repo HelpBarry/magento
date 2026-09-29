@@ -9,6 +9,7 @@ use Bluebarry\Bluebarry\Model\Heartbeat;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Module\ModuleListInterface;
 use Magento\Store\Model\Group;
 use Magento\Store\Model\Store;
@@ -281,7 +282,10 @@ class HeartbeatTest extends TestCase
             return substr((string) $value, 4);
         });
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor);
+        $locks = $this->createStub(LockManagerInterface::class);
+        $locks->method('lock')->willReturn(true);
+
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks);
     }
 
     private function groupFor(int $websiteId): Group

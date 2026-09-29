@@ -120,6 +120,9 @@ class ProductBuilder
     /** @var array<int, array<int, string>> store => category => name */
     private $categoryNames = [];
 
+    /** @var array<int, int> dynamically priced bundle => the tax class of its parts, for the current build */
+    private $bundleTaxClasses = [];
+
     /**
      * @param ProductCollectionFactory $products
      * @param CategoryCollectionFactory $categories
@@ -238,6 +241,7 @@ class ProductBuilder
         $stock = $this->stock($all, $items, $store);
         $categoryIds = $this->productCategories(array_keys($items));
         $currency = $this->currency($store);
+        $this->bundleTaxClasses = $this->dynamicBundleTaxClasses($items);
 
         $products = [];
         $failed = [];
@@ -359,7 +363,9 @@ class ProductBuilder
         $type = (string) $product->getTypeId();
 
         // As shown: in the store view's currency, with or without tax as its catalog displays prices.
-        $factor = $currency['rate'] * $this->taxFactor($store, (int) $product->getData('tax_class_id'));
+        // A dynamically priced bundle is taxed through its parts, not by a class of its own.
+        $taxClass = $this->bundleTaxClasses[$id] ?? (int) $product->getData('tax_class_id');
+        $factor = $currency['rate'] * $this->taxFactor($store, $taxClass);
         if ($price !== null) {
             // A bundle's own final price is its fixed part; "as low as" is what shoppers see.
             $final = $type === 'bundle' ? (float) $price['min_price'] : (float) $price['final_price'];
@@ -694,6 +700,60 @@ class ProductBuilder
             ->from(['selection' => $table], [])
             ->join(['bundle' => $this->resource->getTableName('catalog_product_entity')], "bundle.$linkField = selection.parent_product_id", ['entity_id'])
             ->where('selection.product_id IN (?)', $ids)));
+    }
+
+    /**
+     * The tax class a dynamically priced bundle's "as low as" price is taxed by: its parts' (the default
+     * selection first), as Magento taxes each part. A fixed-price bundle has a tax class of its own.
+     *
+     * @param array<int, Product> $items
+     * @return array<int, int> bundle id => tax class
+     */
+    private function dynamicBundleTaxClasses(array $items): array
+    {
+        $bundles = array_filter($items, function (Product $product) {
+            return $product->getTypeId() === 'bundle';
+        });
+        if (!$bundles) {
+            return [];
+        }
+        $resource = $this->products->create()->getResource();
+        if (!$resource instanceof \Magento\Eav\Model\Entity\AbstractEntity) {
+            return [];
+        }
+        $priceType = $resource->getAttribute('price_type');
+        $taxClass = $resource->getAttribute('tax_class_id');
+        if (!$priceType || !$taxClass) {
+            return [];
+        }
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        $idByLink = [];
+        foreach ($bundles as $id => $bundle) {
+            $idByLink[(int) $bundle->getData($linkField)] = $id;
+        }
+        $connection = $this->resource->getConnection();
+        $int = $this->resource->getTableName('catalog_product_entity_int');
+        $dynamic = $connection->fetchCol($connection->select()->from($int, [$linkField])
+            ->where('attribute_id = ?', (int) $priceType->getId())
+            ->where('store_id = ?', 0)
+            ->where('value = ?', 0)
+            ->where("$linkField IN (?)", array_keys($idByLink)));
+        if (!$dynamic) {
+            return [];
+        }
+        $classes = [];
+        foreach ($connection->fetchAll($connection->select()
+            ->from(['selection' => $this->resource->getTableName('catalog_product_bundle_selection')], ['parent_product_id'])
+            ->join(['part' => $this->resource->getTableName('catalog_product_entity')], 'part.entity_id = selection.product_id', [])
+            ->join(['tax' => $int], "tax.$linkField = part.$linkField AND tax.store_id = 0 AND tax.attribute_id = " . (int) $taxClass->getId(), ['value'])
+            ->where('selection.parent_product_id IN (?)', array_map('intval', $dynamic))
+            ->order(['selection.is_default DESC', 'selection.position', 'selection.selection_id'])) as $row) {
+            $bundleId = $idByLink[(int) $row['parent_product_id']] ?? null;
+            if ($bundleId !== null && !isset($classes[$bundleId])) {
+                $classes[$bundleId] = (int) $row['value'];
+            }
+        }
+        return $classes;
     }
 
     /**
