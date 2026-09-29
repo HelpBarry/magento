@@ -32,8 +32,11 @@ if ($tenantId != null && $tenantId != "") {
     // The cart changed (Luma's customer data, Hyvä's private content): the SDK reports the adds noted
     // since and updates popup cart rules.
     (function () {
-        function cartChanged() { document.dispatchEvent(new CustomEvent('cart:updated')); }
-        window.addEventListener('private-content-loaded', cartChanged);
+        // With the cart section: Hyvä announces new sections before it stores them.
+        function cartChanged(cart) { document.dispatchEvent(new CustomEvent('cart:updated', {detail: {cart: cart || null}})); }
+        window.addEventListener('private-content-loaded', function (event) {
+            cartChanged(event.detail && event.detail.data && event.detail.data.cart);
+        });
         document.addEventListener('DOMContentLoaded', function () {
             if (typeof window.require !== 'function') return;
             window.require(['Magento_Customer/js/customer-data'], function (customerData) {
