@@ -216,8 +216,9 @@ class Advisor extends Template implements IdentityInterface
 
     /**
      * The variant a product page opens with, for its product view: a configurable product's first
-     * variant for sale (by id, as the catalog sync orders them), else its first; any other product itself.
-     * None for a grouped product: the catalog sync sends its products, not the group.
+     * variant for sale (by id, as the catalog sync orders them), else its first; any other product
+     * itself. None for a configurable product without variants or a grouped product: the catalog sync
+     * sends neither, only their products.
      *
      * @param \Magento\Catalog\Model\Product $product
      * @return string|null
@@ -241,12 +242,13 @@ class Advisor extends Template implements IdentityInterface
                 return (string) $child->getId();
             }
         }
-        return $children ? (string) $children[0]->getId() : (string) $product->getId();
+        // Without variants there is nothing the catalog sync sends for it.
+        return $children ? (string) $children[0]->getId() : null;
     }
 
     /**
-     * The product's categories in this store's category tree, as the catalog sync sends them: category
-     * assignments are shared by every website.
+     * The product's active categories in this store's category tree, as the catalog sync sends them:
+     * category assignments are shared by every website.
      *
      * @param \Magento\Catalog\Model\Product $product
      * @return string[]
@@ -259,8 +261,10 @@ class Advisor extends Template implements IdentityInterface
             return [];
         }
         return array_map('strval', $this->categories->create()
+            ->setStoreId((int) $store->getId())
             ->addIdFilter($ids)
             ->addAttributeToFilter('path', ['like' => '1/' . (int) $store->getRootCategoryId() . '/%'])
+            ->addAttributeToFilter('is_active', ['eq' => 1])
             ->getAllIds(100));
     }
 
