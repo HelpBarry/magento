@@ -64,7 +64,7 @@ if ($tenantId != null && $tenantId != "") {
             var match = document.cookie.match(/(?:^|; )form_key=([^;]+)/);
             return match ? decodeURIComponent(match[1]) : '';
         }
-        var sending = false, next = null;
+        var sending = false, next = null, wanted = '';
         function send(email) {
             // One at a time, the latest last: an older answer never overwrites a newer email.
             if (sending) { next = email; return; }
@@ -91,7 +91,7 @@ if ($tenantId != null && $tenantId != "") {
             clearTimeout(timer);
             timer = setTimeout(function () {
                 var email = String(field.value || '').trim();
-                if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) send(email);
+                if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { wanted = email; send(email); }
             }, 800);
         }
         document.addEventListener('input', typed, true);
@@ -101,10 +101,12 @@ if ($tenantId != null && $tenantId != "") {
         document.addEventListener('DOMContentLoaded', function () {
             var tries = 0;
             send('');
+            // Again a few times while the email wanted is not noted yet (the shopper allowing cookies, a
+            // request that failed): the account's, or the one a guest typed. A guest who typed nothing
+            // yet is left to the field.
             var retry = setInterval(function () {
-                // Noted, given up, or a guest (whose email field is followed instead).
-                if (last !== null || ++tries > 8 || document.getElementById('customer-email')) { clearInterval(retry); return; }
-                send('');
+                if (last === wanted || ++tries > 8 || (wanted === '' && document.getElementById('customer-email'))) { clearInterval(retry); return; }
+                send(wanted);
             }, 15000);
         });
     })();

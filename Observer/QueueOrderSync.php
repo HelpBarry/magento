@@ -85,11 +85,18 @@ class QueueOrderSync implements ObserverInterface
         }
         try {
             $websiteId = (int) $this->storeManager->getStore((int) $order->getStoreId())->getWebsiteId();
-            if ($this->config->getWebsiteTenantId($websiteId) === null || !$this->config->hasWebsiteApiKey($websiteId)) {
+            $connected = $this->config->getWebsiteTenantId($websiteId) !== null && $this->config->hasWebsiteApiKey($websiteId);
+            $paid = $this->conversions->isPaid($order);
+            // Not connected: nothing new is queued, but an order already on its way that is no sale any
+            // more is still marked so (it must never go as a new purchase once reconnected).
+            if (!$connected && $paid) {
                 return;
             }
             $sync = $this->queue->state((int) $order->getId());
-            if ($this->conversions->isPaid($order)) {
+            if (!$connected && !$sync['queued']) {
+                return;
+            }
+            if ($paid) {
                 $this->queue->enqueue((int) $order->getId(), Sync::isNewPurchase($order, $sync['synced']));
             } elseif ($sync['synced'] || $sync['queued']) {
                 // Cancelled, refunded or put on hold after bluebarry has it, or while it is on its way: the
