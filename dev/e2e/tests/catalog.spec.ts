@@ -43,6 +43,15 @@ const property = (product: any, name: string) => product.properties.find((p: any
 const productId = (sku: string) => sql(`SELECT entity_id FROM catalog_product_entity WHERE sku = '${sku}'`);
 const queued = (id: string) => Number(sql(`SELECT COUNT(*) FROM bluebarry_product_sync WHERE product_id = ${Number(id)}`));
 
+/** Runs PHP in Magento, as the admin's mass actions and their queue consumer do. */
+function inMagento(code: string): string {
+  const script = `<?php require 'app/bootstrap.php';
+    $om = \\Magento\\Framework\\App\\Bootstrap::create(BP, $_SERVER)->getObjectManager();
+    $om->get(\\Magento\\Framework\\App\\State::class)->setAreaCode('adminhtml');
+    ${code}`;
+  return execFileSync(path.join(BIN, 'shell'), ['-c', 'cd /var/www/html && php'], { input: script, encoding: 'utf8' });
+}
+
 async function rest(request: APIRequestContext, method: 'post' | 'put' | 'delete', url: string, data?: unknown) {
   const response = await request[method](url, { headers: { Authorization: `Bearer ${await adminToken(request)}` }, data });
   expect(response.status(), await response.text()).toBe(200);
@@ -210,6 +219,31 @@ test.describe('catalog sync', () => {
     } finally {
       await stock(true);
     }
+  });
+
+  test('a mass attribute update is sent with its new values', async () => {
+    const id = productId(SKU);
+    sql('DELETE FROM bluebarry_product_sync');
+    inMagento(`$om->get(\\Magento\\Catalog\\Model\\Product\\Action::class)->updateAttributes([${id}], ['name' => 'Bluebarry Catalog Product Renamed'], 0);`);
+    expect(queued(id)).toBe(1);
+
+    syncCatalog();
+    expect((await sent(id))[0].name).toBe('Bluebarry Catalog Product Renamed');
+  });
+
+  test("deleting a bundle's part resends the bundle", async ({ request }) => {
+    const bundle = productId('bb-bundle-dynamic');
+    await rest(request, 'post', '/rest/all/V1/products', {
+      product: { sku: 'bb-part-gone', name: 'BB Part Gone', attribute_set_id: 4, price: 5, status: 1, visibility: 1, type_id: 'simple',
+        extension_attributes: { website_ids: [1], stock_item: { qty: 10, is_in_stock: true } } },
+    });
+    // One more selection in the bundle's first option, as the admin would add it.
+    sql(`INSERT INTO catalog_product_bundle_selection (option_id, parent_product_id, product_id, position, is_default, selection_price_type, selection_price_value, selection_qty, selection_can_change_qty)
+      SELECT option_id, parent_product_id, ${productId('bb-part-gone')}, 99, 0, 0, 0, 1, 1 FROM catalog_product_bundle_selection WHERE parent_product_id = ${bundle} LIMIT 1`);
+    sql('DELETE FROM bluebarry_product_sync');
+
+    await rest(request, 'delete', '/rest/V1/products/bb-part-gone');
+    expect(queued(bundle)).toBe(1);
   });
 
   test('a deleted product is switched off', async ({ request }) => {

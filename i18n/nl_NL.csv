@@ -12,6 +12,7 @@
 "Catalog","Catalogus"
 "Products, prices and stock are sent to bluebarry as they change, and in full every night.","Producten, prijzen en voorraad gaan naar bluebarry zodra ze veranderen, en elke nacht volledig."
 "%1 products waiting: %2 Trying again every 5 minutes.","%1 producten wachten: %2 Elke 5 minuten volgt een nieuwe poging."
+"Not sent: %1 Trying again every 5 minutes.","Niet verstuurd: %1 Elke 5 minuten volgt een nieuwe poging."
 "%1 products waiting to be sent.","%1 producten wachten om verstuurd te worden."
 "Up to date, last sent %1.","Bijgewerkt, laatst verstuurd %1."
 "Sent once a website is connected.","Wordt verstuurd zodra een website verbonden is."
