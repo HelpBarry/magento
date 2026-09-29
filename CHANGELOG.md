@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
-- **API Key** setting (encrypted, per website) that connects the website to bluebarry. Saving the settings checks the connection and shows the result; **Connection** shows the last check per website. The module reports in daily from Magento's cron and after an upgrade, so bluebarry shows the store as connected, and `module:uninstall` tells bluebarry the store is gone.
+- **API Key** setting (encrypted, per website) that connects the website to bluebarry. Saving the settings checks the connection and shows the result; **Connection** shows the last check per website. The module reports in daily from Magento's cron and after an upgrade, so bluebarry shows the store as connected, and `module:uninstall --remove-data` (or clearing a website's credentials) tells bluebarry the store is gone.
 - Every paid order from a shopper who used bluebarry is recorded, not only quiz orders: search, recommendations, product chat and popups attribute through the visitor's `bb_uid` cookie, and the buyer's email is identified on every recorded order.
 - Conversions are sent from the background with retries (after 1, 4, 9 and 16 minutes), and a cron job sends what no queue consumer picked up. `bin/magento bluebarry:conversions:send-due` runs that job on demand.
 - Installation notes for zero-downtime deployments: flush the cache once the previous release's PHP processes (cron jobs, queue consumers, PHP-FPM workers) have stopped, or orders from a first install aren't tracked until the next cache rebuild.
