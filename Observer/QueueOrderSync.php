@@ -92,9 +92,9 @@ class QueueOrderSync implements ObserverInterface
             if ($this->conversions->isPaid($order)) {
                 $this->queue->enqueue((int) $order->getId(), Sync::isNewPurchase($order, $sync['synced']));
             } elseif ($sync['synced'] || $sync['queued']) {
-                // Cancelled or refunded after bluebarry has it, or while it is on its way: the stored order
-                // follows. An order that is no sale any more is no new purchase either.
-                $this->queue->enqueue((int) $order->getId(), false, in_array($order->getState(), [Order::STATE_CANCELED, Order::STATE_CLOSED], true));
+                // Cancelled, refunded or put on hold after bluebarry has it, or while it is on its way: the
+                // stored order follows. An order that is no sale (any more) is no new purchase either.
+                $this->queue->enqueue((int) $order->getId(), false, true);
             }
         } catch (\Exception $e) {
             // Never in the way of an order save; the history import catches up.
