@@ -81,6 +81,13 @@
             <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
         </arguments>
     </type>
+    <!-- Multi-source inventory saves stock without a product or stock item event. -->
+    <type name="Magento\InventoryApi\Api\SourceItemsSaveInterface">
+        <plugin name="bluebarry_queue_source_item_products" type="Bluebarry\Bluebarry\Plugin\Inventory\QueueSourceItemProducts"/>
+    </type>
+    <type name="Magento\InventoryApi\Api\SourceItemsDeleteInterface">
+        <plugin name="bluebarry_queue_source_item_products" type="Bluebarry\Bluebarry\Plugin\Inventory\QueueSourceItemProducts"/>
+    </type>
     <!-- Mass attribute updates have no event after the write; queue them once it is done. -->
     <type name="Magento\Catalog\Model\Product\Action">
         <plugin name="bluebarry_queue_mass_updated_products" type="Bluebarry\Bluebarry\Plugin\Catalog\QueueMassUpdatedProducts"/>
