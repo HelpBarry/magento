@@ -22,6 +22,33 @@
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
         </arguments>
     </type>
+    <type name="Bluebarry\Bluebarry\Model\Conversion\Sender">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Conversion\Queue">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Observer\QueuePaidOrder">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
+            </argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\SendDueConversions">
+        <arguments>
+            <argument name="job" xsi:type="object">Bluebarry\Bluebarry\Cron\SendDueConversions\Proxy</argument>
+        </arguments>
+    </type>
     <type name="Magento\MysqlMq\Model\QueueManagement">
         <plugin name="bluebarry_route_conversion_to_queue" type="Bluebarry\Bluebarry\Plugin\MysqlMq\RouteConversionToQueue"/>
     </type>

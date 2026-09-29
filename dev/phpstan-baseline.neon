@@ -11,16 +11,6 @@ parameters:
 			path: /module/Controller/Session/Update.php
 
 		-
-			message: "#^Call to an undefined method Magento\\\\Sales\\\\Api\\\\Data\\\\OrderInterface\\:\\:getId\\(\\)\\.$#"
-			count: 1
-			path: /module/Model/Consumer/ConversionProcessor.php
-
-		-
 			message: "#^Constructor of class Bluebarry\\\\Bluebarry\\\\Model\\\\Session\\\\Storage has an unused parameter \\$storeManager\\.$#"
 			count: 1
 			path: /module/Model/Session/Storage.php
-
-		-
-			message: "#^Method Bluebarry\\\\Bluebarry\\\\Observer\\\\ProcessConversion\\:\\:execute\\(\\) with return type void returns \\$this\\(Bluebarry\\\\Bluebarry\\\\Observer\\\\ProcessConversion\\) but should not return anything\\.$#"
-			count: 2
-			path: /module/Observer/ProcessConversion.php
