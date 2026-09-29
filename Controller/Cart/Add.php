@@ -60,12 +60,15 @@ class Add implements HttpPostActionInterface, CsrfAwareActionInterface
      */
     public function execute()
     {
-        $items = json_decode((string) $this->request->getParam('items'), true);
+        // A JSON string; anything else (form-array syntax) is a bad request, not a server error.
+        $raw = $this->request->getParam('items');
+        $items = is_string($raw) ? json_decode($raw, true) : null;
         if (!is_array($items) || !$items) {
             return $this->json->create()->setHttpResponseCode(400)
                 ->setData(['success' => false, 'skipped' => [], 'failure' => 'error']);
         }
-        return $this->json->create()->setData($this->adder->add(array_values(array_filter($items, 'is_array'))));
+        // Every line, malformed ones too: the adder reports them as skipped.
+        return $this->json->create()->setData($this->adder->add(array_values($items)));
     }
 
     /**
