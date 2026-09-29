@@ -223,16 +223,27 @@ class Heartbeat
     {
         // What each website registered with, which is what bluebarry knows it by; the settings may
         // hold a newer key it refused since.
+        // Under the heartbeat lock from moving them to taking them back: a heartbeat in between would
+        // register a website again and take it off the list.
+        $locked = $this->locks->lock(self::FLAG, 30);
+        $this->holding = $locked;
         $registered = [];
-        $this->update(function (array $state) use (&$registered) {
-            $registered = array_keys($state['registrations'] ?? []);
-            foreach ($registered as $websiteId) {
-                $state['retire'][] = $state['registrations'][$websiteId];
-                unset($state['registrations'][$websiteId]);
+        try {
+            $this->update(function (array $state) use (&$registered) {
+                $registered = array_keys($state['registrations'] ?? []);
+                foreach ($registered as $websiteId) {
+                    $state['retire'][] = $state['registrations'][$websiteId];
+                    unset($state['registrations'][$websiteId]);
+                }
+                return $state;
+            });
+            $this->retirePending();
+        } finally {
+            if ($locked) {
+                $this->holding = false;
+                $this->locks->unlock(self::FLAG);
             }
-            return $state;
-        });
-        $this->retirePending();
+        }
         foreach ($this->storeManager->getWebsites() as $website) {
             if (in_array((int) $website->getId(), $registered, true)) {
                 continue;
