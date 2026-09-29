@@ -167,6 +167,18 @@ class SyncTest extends TestCase
         $this->assertFalse($this->flag['targets']['a']['stale'] ?? false);
     }
 
+    public function testACompanyWaitingOutAFailureMissesWhatAnotherReceives_SoItGetsTheCatalogLater(): void
+    {
+        $sync = $this->sync([200], tenants: [1 => 'a', 3 => 'b']);
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'targets' => ['a' => ['retry_at' => time() + 60, 'error' => 'x']]];
+        $this->queued = [5 => ''];
+
+        $sync->run();
+
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        $this->assertTrue($this->flag['targets']['a']['stale']);
+    }
+
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
         $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
@@ -273,7 +285,7 @@ class SyncTest extends TestCase
         });
 
         $builder = $this->createStub(ProductBuilder::class);
-        $builder->method('awaitingPriceIndex')->willReturnCallback(fn ($queued) => array_values(array_intersect(array_keys($queued), $this->awaitingIndex)));
+        $builder->method('awaitingIndexes')->willReturnCallback(fn ($queued) => array_values(array_intersect(array_keys($queued), $this->awaitingIndex)));
         $builder->method('build')->willReturnCallback(function ($ids, $store) {
             $this->calls[] = ['built' => array_merge($ids, [$store->getCode()])];
             $all = $ids;
