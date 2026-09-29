@@ -79,9 +79,11 @@ class StorefrontTest extends TestCase
             new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'version' => 'v2'])), // no search at all
             new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'search' => ['profileId' => 'nope'], 'version' => 'v2'])),
             new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'search' => 'on', 'version' => 'v2'])),
+            new Response(200, (string) json_encode(['tenantId' => self::TENANT, 'search' => ['profileId' => self::PROFILE, 'resultsPage' => 'true'], 'version' => 'v2'])),
         ];
         $storefront->refresh($this->website(1));
 
+        $this->assertNull($storefront->refresh($this->website(1)));
         $this->assertNull($storefront->refresh($this->website(1)));
         $this->assertNull($storefront->refresh($this->website(1)));
         $this->assertNull($storefront->refresh($this->website(1)));

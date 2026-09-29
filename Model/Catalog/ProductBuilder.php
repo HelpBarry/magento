@@ -49,7 +49,7 @@ class ProductBuilder
     private const MAX_TEXT = 1000;
 
     /** A change waits at most this long for the price index before it is sent anyway. */
-    private const PRICE_INDEX_WAIT = 3600;
+    private const INDEX_WAIT = 3600;
 
     private const MAX_SECONDARY_IMAGES = 5;
 
@@ -160,37 +160,54 @@ class ProductBuilder
     }
 
     /**
-     * The queued products whose new price Magento has not indexed yet ("Update by Schedule"), so they
-     * wait a cron run or two instead of going out with the old price. Never longer than an hour.
+     * The queued products Magento has not indexed yet ("Update by Schedule"): their new price, or their
+     * stock (a bundle's availability comes from its parts through the stock index). They wait a cron run
+     * or two instead of going out with the old values. Never longer than an hour.
      *
      * @param array<int, string> $queued product id => queued_at (UTC)
      * @return int[]
      */
-    public function awaitingPriceIndex(array $queued): array
+    public function awaitingIndexes(array $queued): array
     {
-        if (!$queued) {
-            return [];
-        }
-        $indexer = $this->indexers->get('catalog_product_price');
-        if (!$indexer->isScheduled()) {
-            return [];
-        }
         $recent = array_keys(array_filter($queued, function ($at) {
-            return strtotime($at . ' UTC') > time() - self::PRICE_INDEX_WAIT;
+            return strtotime($at . ' UTC') > time() - self::INDEX_WAIT;
         }));
         if (!$recent) {
             return [];
         }
-        $view = $indexer->getView();
-        $changelog = $view->getChangelog();
         $connection = $this->resource->getConnection();
-        // Only products that still exist: a deleted one has nothing to wait for.
-        $select = $connection->select()->distinct()
-            ->from(['changelog' => $this->resource->getTableName($changelog->getName())], [$changelog->getColumnName()])
-            ->join(['product' => $this->resource->getTableName('catalog_product_entity')], 'product.entity_id = changelog.' . $changelog->getColumnName(), [])
-            ->where('changelog.version_id > ?', (int) $view->getState()->getVersionId())
-            ->where('changelog.' . $changelog->getColumnName() . ' IN (?)', $recent);
-        return array_map('intval', $connection->fetchCol($select));
+        $products = $this->resource->getTableName('catalog_product_entity');
+        $waiting = [];
+        foreach (['catalog_product_price', 'cataloginventory_stock', 'inventory'] as $indexerId) {
+            try {
+                $indexer = $this->indexers->get($indexerId);
+            } catch (\InvalidArgumentException $e) {
+                continue; // multi-source inventory is not installed
+            }
+            if (!$indexer->isScheduled()) {
+                continue;
+            }
+            $view = $indexer->getView();
+            $changelog = $view->getChangelog();
+            $column = 'changelog.' . $changelog->getColumnName();
+            $select = $connection->select()->distinct()
+                ->from(['changelog' => $this->resource->getTableName($changelog->getName())], [])
+                ->where('changelog.version_id > ?', (int) $view->getState()->getVersionId());
+            if ($indexerId === 'inventory') {
+                // Its changelog names source items; they name the product by SKU.
+                $select->join(['source_item' => $this->resource->getTableName('inventory_source_item')], "source_item.source_item_id = $column", [])
+                    ->join(['product' => $products], 'product.sku = source_item.sku', ['entity_id']);
+            } else {
+                // Only products that still exist: a deleted one has nothing to wait for.
+                $select->join(['product' => $products], "product.entity_id = $column", ['entity_id']);
+            }
+            $select->where('product.entity_id IN (?)', array_values(array_diff($recent, $waiting)));
+            $waiting = array_merge($waiting, array_map('intval', $connection->fetchCol($select)));
+            if (count($waiting) === count($recent)) {
+                break;
+            }
+        }
+        return array_values(array_unique($waiting));
     }
 
     /**
