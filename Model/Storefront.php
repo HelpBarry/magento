@@ -208,8 +208,8 @@ class Storefront
     {
         $state = $this->state();
         $before = $state[$websiteId] ?? null;
-        if ($settings !== null && (int) ($before['fetched'] ?? 0) > $started) {
-            return; // a read that began later saved newer settings already
+        if ((int) ($before['fetched'] ?? 0) > $started) {
+            return; // decided later already: newer settings, or a disconnect or reconnect since
         }
         // Not connected is kept too, with when that was decided: a read begun before a disconnect must
         // not bring the website's search back.
