@@ -53,17 +53,21 @@ if ($tenantId != null && $tenantId != "") {
         }
         function send(email) {
             if (email === last) return;
-            last = email;
             fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
                 body: new URLSearchParams({form_key: formKey(), email: email}).toString()
+            }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
+                // Only a noted email is not sent again; after a failure the next keystroke retries.
+                if (result && result.noted) last = email;
             }).catch(function () {});
         }
         function typed(event) {
+            // The shopper's own email field (Luma's checkout and the checkouts built on it), not any
+            // other email field on the page, such as a gift recipient's.
             var field = event.target;
-            if (!field || (field.id !== 'customer-email' && field.type !== 'email')) return;
+            if (!field || field.id !== 'customer-email') return;
             clearTimeout(timer);
             timer = setTimeout(function () {
                 var email = String(field.value || '').trim();

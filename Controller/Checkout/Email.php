@@ -8,6 +8,7 @@ use Magento\Checkout\Model\Session as CheckoutSession;
 use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\App\CsrfAwareActionInterface;
 use Magento\Framework\App\Request\InvalidRequestException;
+use Magento\Cookie\Helper\Cookie as CookieHelper;
 use Magento\Framework\App\RequestInterface;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Data\Form\FormKey\Validator as FormKeyValidator;
@@ -57,6 +58,11 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
     private $formKeys;
 
     /**
+     * @var CookieHelper
+     */
+    private $cookieHelper;
+
+    /**
      * @param RequestInterface $request
      * @param JsonFactory $json
      * @param CheckoutSession $checkoutSession
@@ -64,6 +70,7 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param FormKeyValidator $formKeys
+     * @param CookieHelper $cookieHelper
      */
     public function __construct(
         RequestInterface $request,
@@ -72,7 +79,8 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
         CheckoutNotes $notes,
         Config $config,
         StoreManagerInterface $storeManager,
-        FormKeyValidator $formKeys
+        FormKeyValidator $formKeys,
+        CookieHelper $cookieHelper
     ) {
         $this->request = $request;
         $this->json = $json;
@@ -81,6 +89,7 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
         $this->config = $config;
         $this->storeManager = $storeManager;
         $this->formKeys = $formKeys;
+        $this->cookieHelper = $cookieHelper;
     }
 
     /**
@@ -90,7 +99,9 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
     {
         $result = $this->json->create();
         $store = $this->storeManager->getStore();
-        if ($this->config->getTenantId($store->getId()) === null || !$this->config->hasWebsiteApiKey($store->getWebsiteId())) {
+        // Nothing before the shopper allowed cookies (Magento's cookie restriction mode), like all tracking.
+        if ($this->config->getTenantId($store->getId()) === null || !$this->config->hasWebsiteApiKey($store->getWebsiteId())
+            || $this->cookieHelper->isUserNotAllowSaveCookie()) {
             return $result->setData(['noted' => false]);
         }
         $quote = $this->checkoutSession->getQuote();

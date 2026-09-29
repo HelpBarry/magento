@@ -281,7 +281,8 @@ class Advisor extends Template implements IdentityInterface
      */
     public function getCheckoutEmailUrl(): ?string
     {
-        return $this->fullActionName() === 'checkout_index_index' ? $this->getUrl('bluebarry/checkout/email') : null;
+        // The one-page checkout and multi-address checkout's steps.
+        return $this->getPageContext()['type'] === 'checkout' ? $this->getUrl('bluebarry/checkout/email') : null;
     }
 
     /**

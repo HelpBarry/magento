@@ -174,12 +174,13 @@ class Sync
                 return $seconds === 0 || time() - $start < $seconds;
             };
             $done['orders'] = $this->drain($targets, $inTime);
+            // Before the history: a checkout reminder is timely, an import can take many runs.
+            $done['checkouts'] = $this->sendCheckouts($targets, $inTime);
             foreach ($targets as $websiteId => $target) {
                 while ($inTime() && $this->importBatch($websiteId, $target, $done['imported'])) {
                     // one batch at a time
                 }
             }
-            $done['checkouts'] = $this->sendCheckouts($targets, $inTime);
             return $done;
         } finally {
             $this->locks->unlock(self::LOCK);
@@ -198,13 +199,11 @@ class Sync
         if (!isset($this->targets()[$websiteId])) {
             return false;
         }
-        $imports = $this->imports();
-        $running = $imports[$websiteId] ?? null;
+        $running = $this->import($websiteId);
         if (is_array($running) && empty($running['done']) && time() - (int) ($running['touched'] ?? 0) < self::IMPORT_STALE) {
             return false;
         }
-        $imports[$websiteId] = ['since' => $since, 'after' => 0, 'count' => 0, 'attempts' => 0, 'touched' => time()];
-        $this->flags->saveFlag(self::IMPORT_FLAG, $imports);
+        $this->saveImport($websiteId, ['since' => $since, 'after' => 0, 'count' => 0, 'attempts' => 0, 'touched' => time()]);
         return true;
     }
 
@@ -300,11 +299,12 @@ class Sync
      */
     private function importBatch(int $websiteId, array $target, int &$imported): bool
     {
-        $imports = $this->imports();
-        $state = $imports[$websiteId] ?? null;
+        $state = $this->import($websiteId);
         if (!is_array($state) || !empty($state['done']) || isset($this->waitingWebsites()[$websiteId])) {
             return false;
         }
+        // Where a failed batch starts again.
+        $before = $state;
         $storeIds = $this->storeIds($websiteId);
         $collection = $this->orders->create();
         $collection->addFieldToFilter('store_id', ['in' => $storeIds ?: [-1]])
@@ -314,6 +314,8 @@ class Sync
             ->setOrder('entity_id', 'ASC')
             ->setPageSize(self::BATCH)
             ->setCurPage(1);
+        // Paid: processing can also mean shipped before it was invoiced. As Conversion\Queue::isPaid().
+        $collection->getSelect()->where('IFNULL(main_table.total_paid, 0) > main_table.grand_total - IFNULL(main_table.total_canceled, 0) - 0.005');
         $orders = [];
         foreach ($collection as $order) {
             if ($this->reportsTo($order, $target)) {
@@ -354,6 +356,9 @@ class Sync
             $ok = $response->isSuccess();
         }
         if (!$ok) {
+            // The whole batch again next time; bluebarry takes an order it has already as an update.
+            $state['after'] = $before['after'];
+            $state['count'] = $before['count'];
             $state['attempts'] = (int) $state['attempts'] + 1;
             if ($state['attempts'] >= 10) {
                 $state['done'] = true;
@@ -362,14 +367,12 @@ class Sync
                 ], $target['tenantId'], $target['apiKey'], 30);
                 $this->logger->error('bluebarry: order history import stopped: bluebarry did not take it', ['website_id' => $websiteId]);
             }
-            $imports[$websiteId] = $state;
-            $this->flags->saveFlag(self::IMPORT_FLAG, $imports);
+            $this->saveImport($websiteId, $state);
             return false;
         }
         $state['attempts'] = 0;
         $state['done'] = $finished;
-        $imports[$websiteId] = $state;
-        $this->flags->saveFlag(self::IMPORT_FLAG, $imports);
+        $this->saveImport($websiteId, $state);
         return !$finished;
     }
 
@@ -384,7 +387,11 @@ class Sync
     {
         $sent = 0;
         $waiting = $this->waitingWebsites();
-        foreach ($this->checkouts->due(self::BATCH, self::CHECKOUT_SETTLE) as $note) {
+        $skip = [];
+        foreach (array_keys($waiting) as $websiteId) {
+            $skip = array_merge($skip, $this->storeIds((int) $websiteId));
+        }
+        foreach ($this->checkouts->due(self::BATCH, self::CHECKOUT_SETTLE, $skip) as $note) {
             if (!$inTime()) {
                 break;
             }
@@ -416,7 +423,7 @@ class Sync
                 'storeKey' => $this->storeKey($storeId),
                 'token' => (string) $note['quote_id'],
                 'email' => (string) $note['email'],
-                'firstName' => $note['first_name'] ?: null,
+                'firstName' => $note['first_name'] ? mb_substr((string) $note['first_name'], 0, 128) : null,
                 'completed' => (bool) (int) $note['completed'],
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
@@ -591,11 +598,25 @@ class Sync
     }
 
     /**
-     * @return array
+     * A website's history import, in a flag of its own: Studio can start one website's while the cron
+     * imports another's.
+     *
+     * @param int $websiteId
+     * @return array|null
      */
-    private function imports(): array
+    private function import(int $websiteId): ?array
     {
-        $imports = $this->flags->getFlagData(self::IMPORT_FLAG);
-        return is_array($imports) ? $imports : [];
+        $state = $this->flags->getFlagData(self::IMPORT_FLAG . '_' . $websiteId);
+        return is_array($state) ? $state : null;
+    }
+
+    /**
+     * @param int $websiteId
+     * @param array $state
+     * @return void
+     */
+    private function saveImport(int $websiteId, array $state): void
+    {
+        $this->flags->saveFlag(self::IMPORT_FLAG . '_' . $websiteId, $state);
     }
 }
