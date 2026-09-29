@@ -296,10 +296,14 @@ class ProductBuilder
         }
 
         // A child that could not be read is missing from the batch, so its parent's children must not
-        // be switched off by what is missing: that waits until the child is read.
+        // be switched off by what is missing: that waits until the child is read, and the parent is
+        // tried again with it (a child's own retry would not switch anything off).
+        $withheld = [];
         foreach ($failed as $id) {
+            $withheld = array_merge($withheld, array_intersect($reconcile, array_map('strval', $parentsOf[$id] ?? [])));
             $reconcile = array_diff($reconcile, array_map('strval', $parentsOf[$id] ?? []));
         }
+        $failed = array_values(array_unique(array_merge($failed, array_map('intval', $withheld))));
 
         return ['products' => $products, 'reconcileGroupIds' => array_values($reconcile), 'failed' => $failed];
     }

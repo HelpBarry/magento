@@ -229,6 +229,22 @@ class HeartbeatTest extends TestCase
         $this->assertSame([], $this->flag);
     }
 
+    public function testMovingBackBeforeTheOldRegistrationWasTakenBackKeepsIt(): void
+    {
+        $this->heartbeat([200])->send($this->website(1));
+        // Moved to company b; bluebarry could not be told a's registration is gone.
+        $this->heartbeat([0, 200], tenant: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')->send($this->website(1));
+        $this->assertCount(1, $this->flag['retire']);
+
+        // Back to a before that was done: b's registration goes, and a's is current again.
+        $this->calls = [];
+        $this->heartbeat([0, 200, 200])->send($this->website(1)); // taking a back fails again, b goes, a pings
+
+        $this->assertSame('/data/magento/ping', end($this->calls)[0]);
+        $this->assertSame(self::TENANT, $this->flag['registrations'][1]['tenant']);
+        $this->assertSame([], $this->flag['retire']);
+    }
+
     private function website(int $id): Website
     {
         $store = $this->createStub(Store::class);
