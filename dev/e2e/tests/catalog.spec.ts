@@ -265,6 +265,14 @@ test.describe('catalog sync', () => {
     });
     try {
       expect(queued(productId('bb-simple'))).toBe(1);
+
+      // Taken off its source: queued too, and it waits for the inventory index like a save does.
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+      sql('DELETE FROM bluebarry_product_sync');
+      await rest(request, 'post', '/rest/V1/inventory/source-items-delete', { sourceItems: [{ sku: 'bb-simple', source_code: 'default' }] });
+      expect(queued(productId('bb-simple'))).toBe(1);
+      syncCatalog();
+      expect(await sent(productId('bb-simple'))).toEqual([]);
     } finally {
       await rest(request, 'post', '/rest/V1/inventory/source-items', {
         sourceItems: [{ sku: 'bb-simple', source_code: 'default', quantity, status: 1 }],

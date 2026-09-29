@@ -203,6 +203,16 @@ class SyncTest extends TestCase
         $this->assertNull($sync->status()['error']);
     }
 
+    public function testAReplacedCompanysFailureIsForgotten(): void
+    {
+        $this->flag = ['tenants' => ['b' => 3], 'full_at' => time(), 'targets' => ['b' => ['retry_at' => time() + 60, 'error' => 'x']]];
+
+        $this->sync([], tenants: [1 => 'a'])->run(); // b left, a came
+
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertArrayNotHasKey('targets', $this->flag);
+    }
+
     public function testReconnectingACompanyAfterADisconnectResendsTheCatalog(): void
     {
         $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
