@@ -214,6 +214,21 @@ test.describe('orders', () => {
     expect(sql("SELECT sent_at IS NULL FROM bluebarry_checkout WHERE email = 'cart-changed@example.com'")).toBe('1');
   });
 
+  test("a returning guest's email the checkout filled in itself is noted too", async ({ page }) => {
+    test.setTimeout(60_000);
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    await page.goto('/checkout/');
+    // Luma's checkout restores the email a guest gave before (its checkout-data) without an input or
+    // change event: the field is filled in the same way here.
+    await page.locator('#customer-email').waitFor({ timeout: 20_000 });
+    await page.evaluate(() => { (document.getElementById('customer-email') as HTMLInputElement).value = 'restored@example.com'; });
+
+    await expect
+      .poll(() => sql("SELECT COUNT(*) FROM bluebarry_checkout WHERE email = 'restored@example.com'"), { timeout: 30_000 })
+      .toBe('1');
+  });
+
   test("a guest's first name typed after the email still goes with the checkout", async ({ page }) => {
     await stubAdvisor(page, null, { visitor: false });
     await addToCart(page, 'bb-simple');
