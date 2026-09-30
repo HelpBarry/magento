@@ -56,7 +56,8 @@ class CheckoutNotes
 
     /**
      * A guest removed their email before it was sent: that email is not sent, and the next one noted
-     * counts as a change, the same one again included. A note bluebarry has already is left as it is.
+     * counts as a change, the same one again included. A note bluebarry has already, or that is on its
+     * way there (claim()), is left as it is: it still gets its completion.
      *
      * @param int $quoteId
      * @return void
@@ -128,6 +129,36 @@ class CheckoutNotes
             $select->where('store_id NOT IN (?)', $skipStoreIds);
         }
         return $connection->fetchAll($select);
+    }
+
+    /**
+     * Takes a due note for delivery, right before it goes: only while it is still the revision read (a
+     * change or a withdrawal since wins), and marked sent from then on, so a withdrawal can no longer
+     * take away an email that is on its way to bluebarry.
+     *
+     * @param int $quoteId
+     * @param int $revision the one read with due()
+     * @return bool whether it may go
+     */
+    public function claim(int $quoteId, int $revision): bool
+    {
+        return $this->connection()->update(
+            $this->table(),
+            ['sent_at' => gmdate('Y-m-d H:i:s')],
+            ['quote_id = ?' => $quoteId, 'revision = ?' => $revision, 'sent_at IS NULL', "email <> ''"]
+        ) === 1;
+    }
+
+    /**
+     * A claimed note that did not arrive (bluebarry could not be reached): due again, unless it changed.
+     *
+     * @param int $quoteId
+     * @param int $revision the one claimed
+     * @return void
+     */
+    public function release(int $quoteId, int $revision): void
+    {
+        $this->connection()->update($this->table(), ['sent_at' => null], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]);
     }
 
     /**

@@ -35,6 +35,8 @@ class SyncTest extends TestCase
     private array $expanded = [];
     private bool $locked = false;
     private ?int $brokenKey = null;
+    /** A website whose stored key decrypts to nothing. */
+    private ?int $emptyKey = null;
     private string $now = '2026-09-29 14:00:00 UTC';
     /** @var callable|null */
     private $onPost;
@@ -296,6 +298,20 @@ class SyncTest extends TestCase
         $this->assertSame([], array_keys($this->queued));
     }
 
+    public function testADeletionStaysQueuedForACompanyWhoseKeyDecryptsToNothing(): void
+    {
+        $sync = $this->sync([200], tenants: [1 => 'a', 3 => 'b']);
+        $this->emptyKey = 1;
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->queued = [5 => '', 9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([9], array_keys($this->queued));
+    }
+
     public function testAnUnreadableKeyOfACompanyAnotherWebsiteReachesKeepsNoDeletion(): void
     {
         // Websites 1 and 2 share company a; 2's key cannot be read, 1 still reaches a.
@@ -405,8 +421,9 @@ class SyncTest extends TestCase
             if ((int) $id === $this->brokenKey) {
                 throw new \Exception('Unable to decrypt the key.');
             }
-            return isset($tenants[(int) $id]) ? "key-$id" : null;
+            return isset($tenants[(int) $id]) && (int) $id !== $this->emptyKey ? "key-$id" : null;
         });
+        $config->method('hasWebsiteApiKey')->willReturnCallback(fn ($id) => isset($tenants[(int) $id]));
 
         $storeManager = $this->createStub(StoreManagerInterface::class);
         $storeManager->method('getWebsites')->willReturn(array_reverse($websites, true));

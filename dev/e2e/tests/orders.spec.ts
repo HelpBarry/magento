@@ -213,6 +213,28 @@ test.describe('orders', () => {
       .toBe('wrong-recipient@example.com:1');
   });
 
+  test('a withdrawal that did not arrive is sent again', async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    await page.goto('/checkout/');
+    const email = page.locator('#customer-email');
+    await expect(email).toBeVisible({ timeout: 60_000 });
+    await email.fill('withdrawn-later@example.com');
+    await expect.poll(() => sql("SELECT COUNT(*) FROM bluebarry_checkout WHERE email = 'withdrawn-later@example.com'"), { timeout: 10_000 }).toBe('1');
+    const quoteId = sql("SELECT quote_id FROM bluebarry_checkout WHERE email = 'withdrawn-later@example.com'");
+
+    // The first withdrawal is lost on the way; the page tries again (every 15 seconds).
+    let failed = 0;
+    await page.route((url) => url.pathname.startsWith('/bluebarry/checkout/email'), (route) => {
+      if ((route.request().postData() ?? '').includes('withdraw=1') && failed++ === 0) return route.abort();
+      return route.continue();
+    });
+    await email.fill('');
+    await expect.poll(() => sql(`SELECT email FROM bluebarry_checkout WHERE quote_id = ${quoteId}`), { timeout: 40_000 }).toBe('');
+    expect(failed).toBeGreaterThan(1);
+  });
+
   test("without the shopper's cookie consent the checkout's email is not kept", async ({ page }) => {
     magento('config:set', 'web/cookie/cookie_restriction', '1');
     magento('cache:flush');
