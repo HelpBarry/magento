@@ -116,7 +116,8 @@ if ($tenantId != null && $tenantId != "") {
             if (retrying !== null) return;
             retrying = setInterval(function () {
                 var field = document.getElementById('customer-email'), filled = field ? String(field.value || '').trim() : '';
-                if (wanted === '' && EMAIL.test(filled)) wanted = filled;
+                // Also after a withdrawal: the checkout may fill the field in again itself.
+                if ((wanted === '' || wanted === WITHDRAW) && EMAIL.test(filled)) wanted = filled;
                 if (last === wanted || ++tries > 8 || (wanted === '' && field)) { clearInterval(retrying); retrying = null; return; }
                 send(wanted);
             }, 15000);
