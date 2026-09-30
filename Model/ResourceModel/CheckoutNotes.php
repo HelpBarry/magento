@@ -154,11 +154,28 @@ class CheckoutNotes
     /**
      * @param int $quoteId
      * @param int $revision the one that was sent: a change since waits to go again
+     * @return bool whether it was still that revision
+     */
+    public function markSent(int $quoteId, int $revision): bool
+    {
+        return $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]) > 0;
+    }
+
+    /**
+     * An email that reached bluebarry while the guest withdrew it: bluebarry has it now, so its checkout
+     * still gets its completion (complete()). Not sent again: the withdrawal marked the note sent.
+     *
+     * @param int $quoteId
+     * @param string $email the one delivered
      * @return void
      */
-    public function markSent(int $quoteId, int $revision): void
+    public function delivered(int $quoteId, string $email): void
     {
-        $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]);
+        $this->connection()->update(
+            $this->table(),
+            ['email' => mb_substr($email, 0, 255)],
+            ['quote_id = ?' => $quoteId, "email = ''", 'completed = ?' => 0]
+        );
     }
 
     /**
