@@ -286,7 +286,9 @@ class SyncTest extends TestCase
         $sync->run();
 
         $this->assertSame(['key-3'], array_column($this->calls, 'key'));
-        $this->assertSame([9], array_keys($this->queued)); // 5 went; 9's switch-off still has to reach a
+        // 5 and 9 went to b; 9's switch-off is kept for a, out of the queue, so b is not sent it every run.
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertSame(['a' => [9]], $this->flag['deletions']);
 
         // a's key is saved again: the whole catalog, and 9's switch-off with it.
         $this->brokenKey = null;
@@ -295,6 +297,18 @@ class SyncTest extends TestCase
 
         $this->assertSame(1, $this->catalogQueued);
         $this->assertSame(['key-1', 'key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([[9, 'store-1'], [9, 'store-3']], array_column($this->calls, 'built'));
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertArrayNotHasKey('deletions', $this->flag);
+    }
+
+    public function testADeletionKeptForADisconnectedCompanyIsForgotten(): void
+    {
+        $this->flag = ['tenants' => ['b' => 3], 'full_at' => time(), 'deletions' => ['a' => [9]]];
+
+        $this->sync([], tenants: [3 => 'b'])->run(); // a's website is no longer connected at all
+
+        $this->assertArrayNotHasKey('deletions', $this->flag);
         $this->assertSame([], array_keys($this->queued));
     }
 
@@ -309,7 +323,8 @@ class SyncTest extends TestCase
         $sync->run();
 
         $this->assertSame(['key-3'], array_column($this->calls, 'key'));
-        $this->assertSame([9], array_keys($this->queued));
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertSame(['a' => [9]], $this->flag['deletions']);
     }
 
     public function testAnUnreadableKeyOfACompanyAnotherWebsiteReachesKeepsNoDeletion(): void
@@ -474,6 +489,11 @@ class SyncTest extends TestCase
         $queue = $this->createStub(ProductSyncQueue::class);
         $queue->method('enqueueAll')->willReturnCallback(function () {
             $this->catalogQueued++;
+        });
+        $queue->method('enqueue')->willReturnCallback(function ($ids) {
+            foreach ($ids as $id) {
+                $this->queued[$id] = '';
+            }
         });
         $queue->method('claimNext')->willReturnCallback(function ($limit, $after, $claim) {
             ksort($this->queued);
