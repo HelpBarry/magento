@@ -17,8 +17,8 @@ use Magento\Store\Model\StoreManagerInterface;
 /**
  * POST bluebarry/checkout/email: the checkout page tells the module the email the shopper gave (or,
  * signed in, their account's), for bluebarry's abandoned checkout flow. One row on the module's own
- * table; the cron sends it once the shopper stopped typing (Model\Orders\Sync). Only for the shopper's
- * own cart, with the form key.
+ * table; the cron sends it once the shopper stopped typing (Model\Orders\Sync). With withdraw=1, a
+ * guest removed the email: it is not sent. Only for the shopper's own cart, with the form key.
  */
 class Email implements HttpPostActionInterface, CsrfAwareActionInterface
 {
@@ -98,6 +98,19 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
     public function execute()
     {
         $result = $this->json->create();
+        $email = trim((string) $this->request->getParam('email'));
+        $valid = strlen($email) <= 254 && filter_var($email, FILTER_VALIDATE_EMAIL);
+        if ($this->request->getParam('withdraw') || ($email !== '' && !$valid)) {
+            // A guest removed their email, or is correcting it (an address the page took for one but
+            // that is none counts too): the one noted is not sent. Always, also once the store is
+            // disconnected or the shopper took back their cookie consent. A signed-in shopper's account
+            // email is theirs whatever the field says. Answered either way, so the page stops asking.
+            $quote = $this->checkoutSession->getQuote();
+            if ($quote->getId() && !$quote->getCustomerId()) {
+                $this->notes->withdraw((int) $quote->getId());
+            }
+            return $result->setData(['noted' => false, 'withdrawn' => true]);
+        }
         $store = $this->storeManager->getStore();
         // Nothing before the shopper allowed cookies (Magento's cookie restriction mode), like all tracking.
         if ($this->config->getTenantId($store->getId()) === null || !$this->config->hasWebsiteApiKey($store->getWebsiteId())
@@ -108,7 +121,6 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
         if (!$quote->getId() || !$quote->getItemsCount()) {
             return $result->setData(['noted' => false]);
         }
-        $email = trim((string) $this->request->getParam('email'));
         if ($email === '') {
             $email = (string) $quote->getCustomerEmail();
         }

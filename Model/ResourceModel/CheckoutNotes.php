@@ -55,6 +55,24 @@ class CheckoutNotes
     }
 
     /**
+     * A guest removed their email before it was sent: that email is not sent, and the next one noted
+     * counts as a change, the same one again included. A note bluebarry has already is left as it is: it
+     * still gets its completion.
+     *
+     * @param int $quoteId
+     * @return void
+     */
+    public function withdraw(int $quoteId): void
+    {
+        $this->connection()->update(
+            $this->table(),
+            // Nothing left to send: an empty email is never sent, nor completed (complete()).
+            ['email' => '', 'sent_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
+            ['quote_id = ?' => $quoteId, 'completed = ?' => 0, 'sent_at IS NULL']
+        );
+    }
+
+    /**
      * A cart's lines as bluebarry gets them: the catalog's reference (the variant for a configurable
      * product) and the quantity in whole units.
      *
@@ -75,7 +93,9 @@ class CheckoutNotes
     }
 
     /**
-     * The checkout became an order: bluebarry hears it, so no reminder goes out.
+     * The checkout became an order: bluebarry hears it, so no reminder goes out. A withdrawn note (no
+     * email) completes with the email bluebarry last received for it; with none, it is completed but
+     * stays unsent, unless an email turns out to have reached bluebarry after all (delivered()).
      *
      * @param int $quoteId
      * @return void
@@ -84,7 +104,14 @@ class CheckoutNotes
     {
         $this->connection()->update(
             $this->table(),
-            ['completed' => 1, 'sent_at' => null, 'noted_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
+            [
+                // In this order: MySQL evaluates each assignment with the ones before it applied.
+                'sent_at' => new \Zend_Db_Expr("IF(email = '' AND delivered_email IS NULL, sent_at, NULL)"),
+                'email' => new \Zend_Db_Expr("IF(email = '', COALESCE(delivered_email, ''), email)"),
+                'completed' => 1,
+                'noted_at' => gmdate('Y-m-d H:i:s'),
+                'revision' => new \Zend_Db_Expr('revision + 1'),
+            ],
             ['quote_id = ?' => $quoteId, 'completed = ?' => 0]
         );
     }
@@ -114,13 +141,58 @@ class CheckoutNotes
     }
 
     /**
+     * Whether a due note is still the one read, right before it goes: a change or a withdrawal since
+     * wins. Nothing is held meanwhile, so a withdrawal always applies, and a note whose delivery never
+     * finished stays due.
+     *
+     * @param int $quoteId
+     * @param int $revision the one read with due()
+     * @return bool whether it may go
+     */
+    public function isCurrent(int $quoteId, int $revision): bool
+    {
+        $connection = $this->connection();
+        return (bool) $connection->fetchOne($connection->select()
+            ->from($this->table(), ['quote_id'])
+            ->where('quote_id = ?', $quoteId)
+            ->where('revision = ?', $revision)
+            ->where('sent_at IS NULL')
+            ->where("email <> ''"));
+    }
+
+    /**
      * @param int $quoteId
      * @param int $revision the one that was sent: a change since waits to go again
+     * @return bool whether it was still that revision
+     */
+    public function markSent(int $quoteId, int $revision): bool
+    {
+        return $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]) > 0;
+    }
+
+    /**
+     * An email reached bluebarry: its checkout gets its completion with it, also once the guest withdrew
+     * a later one (complete()). If the guest withdrew this one while it was on its way, the note gets it
+     * back, still marked sent; if the order was placed meanwhile, the completion is due now.
+     *
+     * @param int $quoteId
+     * @param string $email the one delivered
      * @return void
      */
-    public function markSent(int $quoteId, int $revision): void
+    public function delivered(int $quoteId, string $email): void
     {
-        $this->connection()->update($this->table(), ['sent_at' => gmdate('Y-m-d H:i:s')], ['quote_id = ?' => $quoteId, 'revision = ?' => $revision]);
+        $email = mb_substr($email, 0, 255);
+        $connection = $this->connection();
+        $connection->update(
+            $this->table(),
+            [
+                // In this order: MySQL evaluates each assignment with the ones before it applied.
+                'sent_at' => new \Zend_Db_Expr("IF(email = '' AND completed = 1, NULL, sent_at)"),
+                'email' => new \Zend_Db_Expr($connection->quoteInto("IF(email = '', ?, email)", $email)),
+                'delivered_email' => $email,
+            ],
+            ['quote_id = ?' => $quoteId]
+        );
     }
 
     /**
