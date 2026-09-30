@@ -98,11 +98,13 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
     public function execute()
     {
         $result = $this->json->create();
-        if ($this->request->getParam('withdraw')) {
-            // A guest removed their email, or is correcting it: the one noted is not sent. Always, also
-            // once the store is disconnected or the shopper took back their cookie consent. A signed-in
-            // shopper's account email is theirs whatever the field says. Answered either way, so the
-            // page stops asking.
+        $email = trim((string) $this->request->getParam('email'));
+        $valid = strlen($email) <= 254 && filter_var($email, FILTER_VALIDATE_EMAIL);
+        if ($this->request->getParam('withdraw') || ($email !== '' && !$valid)) {
+            // A guest removed their email, or is correcting it (an address the page took for one but
+            // that is none counts too): the one noted is not sent. Always, also once the store is
+            // disconnected or the shopper took back their cookie consent. A signed-in shopper's account
+            // email is theirs whatever the field says. Answered either way, so the page stops asking.
             $quote = $this->checkoutSession->getQuote();
             if ($quote->getId() && !$quote->getCustomerId()) {
                 $this->notes->withdraw((int) $quote->getId());
@@ -119,7 +121,6 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
         if (!$quote->getId() || !$quote->getItemsCount()) {
             return $result->setData(['noted' => false]);
         }
-        $email = trim((string) $this->request->getParam('email'));
         if ($email === '') {
             $email = (string) $quote->getCustomerEmail();
         }

@@ -80,9 +80,9 @@ if ($tenantId != null && $tenantId != "") {
                 headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
                 body: new URLSearchParams(fields).toString()
             }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
-                // Only a noted email, or a withdrawal the module answered, is not sent again; after a
-                // failure retry() sends it again.
-                if (result && (result.noted || (email === WITHDRAW && result.withdrawn))) last = email;
+                // Only a noted email, or a withdrawal the module answered (also of an address it took
+                // for none), is not sent again; after a failure retry() sends it again.
+                if (result && (result.noted || result.withdrawn)) last = email;
             }).catch(function () {}).then(function () {
                 sending = false;
                 if (next !== null) { var queued = next; next = null; send(queued); }
