@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-09-30
 ### Added
 - Orders in bluebarry: each order is sent once it is paid (a new purchase when placed within 14 days) and again when it is refunded or cancelled; bluebarry's Orders page imports the last 12 months, per website, in batches. A checkout where the shopper gave an email (or is signed in) is sent a minute later for the abandoned checkout flow, and again once it became an order. All from the cron's `bluebarry_orders` group, never while a shopper waits; `bin/magento bluebarry:orders:sync [--import]` runs it now. Orders and conversions are keyed by the order number.
 - Page tracking for bluebarry's SDK: each page says what it is (product and the variant it opens with, category, search, cart, checkout) and gives product chat its product or category. Only what the address decides, so it is right from the full page cache; the cart comes from the shopper's own customer data. Every add to the cart is noted in a short-lived cookie that the SDK reports. With Magento's cookie restriction mode on, nothing is tracked or noted until the shopper allowed cookies.
