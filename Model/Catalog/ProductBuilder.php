@@ -13,6 +13,7 @@ use Magento\CatalogInventory\Api\StockConfigurationInterface;
 use Magento\Customer\Api\GroupRepositoryInterface;
 use Magento\Customer\Model\Group;
 use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\EntityManager\MetadataPool;
 use Magento\Framework\Indexer\IndexerRegistry;
@@ -129,6 +130,9 @@ class ProductBuilder
     /** @var StockConfigurationInterface */
     private $stockConfig;
 
+    /** @var int */
+    private $bundleDiscountPrecision;
+
     /** @var array<int, array<int, float>> store => product tax class => price factor */
     private $taxFactors = [];
 
@@ -161,6 +165,7 @@ class ProductBuilder
      * @param QuoteDetailsItemInterfaceFactory $taxItems
      * @param TaxClassKeyInterfaceFactory $taxClasses
      * @param StockConfigurationInterface $stockConfig
+     * @param ProductMetadataInterface $productMetadata
      */
     public function __construct(
         ProductCollectionFactory $products,
@@ -178,7 +183,8 @@ class ProductBuilder
         QuoteDetailsInterfaceFactory $taxQuotes,
         QuoteDetailsItemInterfaceFactory $taxItems,
         TaxClassKeyInterfaceFactory $taxClasses,
-        StockConfigurationInterface $stockConfig
+        StockConfigurationInterface $stockConfig,
+        ProductMetadataInterface $productMetadata
     ) {
         $this->products = $products;
         $this->categories = $categories;
@@ -196,6 +202,11 @@ class ProductBuilder
         $this->taxItems = $taxItems;
         $this->taxClasses = $taxClasses;
         $this->stockConfig = $stockConfig;
+        // 2.4.7 rounds the discounted selection to four decimals. 2.4.6 and 2.4.8
+        // round the percentage result to two, before the catalog tax calculation.
+        $version = $productMetadata->getVersion();
+        $this->bundleDiscountPrecision = version_compare($version, '2.4.7', '>=')
+            && version_compare($version, '2.4.8', '<') ? 4 : 2;
     }
 
     /**
@@ -896,7 +907,8 @@ class ProductBuilder
         }
         foreach ($parts as $bundleId => $selections) {
             $bundle = $bundles[$bundleId];
-            $percent = 100 - (float) $partItems[$bundleId]->getTierPrice(1);
+            // Magento ignores a tier whose remaining percentage is zero.
+            $percent = (100 - (float) $partItems[$bundleId]->getTierPrice(1)) ?: 100;
             $special = $bundle->getData('special_price');
             if ($special && $this->timezone->isScopeDateInInterval(
                 \Magento\Store\Api\Data\WebsiteInterface::ADMIN_CODE,
@@ -912,7 +924,7 @@ class ProductBuilder
                     (float) $part->getTierPrice($selection['qty'])
                 ) * $currency['rate'], 2);
                 if ($percent < 100) {
-                    $unit = round($unit * $percent / 100, 2);
+                    $unit = round($unit * $percent / 100, $this->bundleDiscountPrecision);
                 }
                 $taxItems[] = $this->taxItems->create()
                     ->setCode($selection['code'])

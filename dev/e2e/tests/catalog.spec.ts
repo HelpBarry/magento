@@ -374,6 +374,8 @@ test.describe('bundle catalog prices', () => {
     { name: 'fixed selection quantity excludes an insufficient-stock alternative', prices: [10, 30], taxes: [0, 2], stock: [1, 1000], quantities: [2, 1], oneOption: true, tier: null, indexedMinimum: 20, expected: 36.30 },
     { name: 'a child tier price applies at the fixed selection quantity', prices: [20, 10], taxes: [2, 0], stock: [1000, 1000], quantities: [2, 1], oneOption: false, tier: 5, indexedMinimum: 50, expected: 22.10 },
     { name: 'unit-based tax rounding happens before multiplying selection quantity', prices: [0.03, 0.01], taxes: [2, 0], stock: [1000, 1000], quantities: [100, 1], oneOption: false, tier: null, indexedMinimum: 3.01, expected: 4.01 },
+    { name: 'fractional parent discounts match Magento rounding', prices: [0.03, 0.01], taxes: [2, 0], stock: [1000, 1000], quantities: [100, 1], oneOption: false, tier: null, special: 16.665, indexedMinimum: 3.01, expected: null },
+    { name: 'a parent tier of 100 percent keeps the special-price fallback', prices: [20, 10], taxes: [2, 0], stock: [1000, 1000], quantities: [2, 1], oneOption: false, tier: 5, parentTier: 100, special: 80, indexedMinimum: 50, expected: 17.68 },
   ]) {
     test(fixture.name, () => {
       const result = JSON.parse(inMagento(String.raw`
@@ -446,6 +448,16 @@ test.describe('bundle catalog prices', () => {
                     ['entity_id' => $parts[0], 'all_groups' => 0, 'customer_group_id' => 0,
                      'qty' => 2, 'value' => $fixture['tier'], 'website_id' => 0]);
             }
+            if (isset($fixture['special'])) {
+                $special = (int) $connection->fetchOne("SELECT attribute_id FROM eav_attribute WHERE entity_type_id = 4 AND attribute_code = 'special_price'");
+                $connection->insertOnDuplicate('catalog_product_entity_decimal',
+                    ['entity_id' => $bundle, 'attribute_id' => $special, 'store_id' => 0, 'value' => $fixture['special']], ['value']);
+            }
+            if (isset($fixture['parentTier'])) {
+                $connection->insert('catalog_product_entity_tier_price',
+                    ['entity_id' => $bundle, 'all_groups' => 0, 'customer_group_id' => 0, 'qty' => 1,
+                     'value' => 0, 'percentage_value' => $fixture['parentTier'], 'website_id' => 0]);
+            }
             // The bundle index is quantity-one; frontend pricing must account for fixed child quantities.
             $connection->update('catalog_product_index_price',
                 ['min_price' => $fixture['indexedMinimum'], 'max_price' => $fixture['indexedMinimum']], ['entity_id = ?' => $bundle]);
@@ -459,7 +471,7 @@ test.describe('bundle catalog prices', () => {
         }
       `, 'frontend'));
       expect(result.failed).toEqual([]);
-      expect(result.minimum, 'Magento storefront minimum').toBeCloseTo(fixture.expected, 2);
+      if (fixture.expected !== null) expect(result.minimum, 'Magento storefront minimum').toBeCloseTo(fixture.expected, 2);
       expect(result.properties.price, 'exported catalog minimum').toBeCloseTo(result.minimum, 2);
       expect(result.properties.currency).toBe('EUR');
     });
