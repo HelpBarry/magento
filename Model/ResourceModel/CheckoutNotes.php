@@ -93,7 +93,9 @@ class CheckoutNotes
     }
 
     /**
-     * The checkout became an order: bluebarry hears it, so no reminder goes out.
+     * The checkout became an order: bluebarry hears it, so no reminder goes out. A withdrawn note (no
+     * email) is completed too but stays unsent: there is nothing to send it with, unless its email
+     * turns out to have reached bluebarry after all (delivered()).
      *
      * @param int $quoteId
      * @return void
@@ -102,8 +104,13 @@ class CheckoutNotes
     {
         $this->connection()->update(
             $this->table(),
-            ['completed' => 1, 'sent_at' => null, 'noted_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
-            ['quote_id = ?' => $quoteId, 'completed = ?' => 0, 'email <> ?' => '']
+            [
+                'completed' => 1,
+                'sent_at' => new \Zend_Db_Expr("IF(email = '', sent_at, NULL)"),
+                'noted_at' => gmdate('Y-m-d H:i:s'),
+                'revision' => new \Zend_Db_Expr('revision + 1'),
+            ],
+            ['quote_id = ?' => $quoteId, 'completed = ?' => 0]
         );
     }
 
@@ -163,7 +170,8 @@ class CheckoutNotes
 
     /**
      * An email that reached bluebarry while the guest withdrew it: bluebarry has it now, so its checkout
-     * still gets its completion (complete()). Not sent again: the withdrawal marked the note sent.
+     * still gets its completion. Not sent again as a start: the withdrawal marked the note sent. If the
+     * order was placed meanwhile (complete() on the withdrawn note), the completion is due now.
      *
      * @param int $quoteId
      * @param string $email the one delivered
@@ -173,8 +181,8 @@ class CheckoutNotes
     {
         $this->connection()->update(
             $this->table(),
-            ['email' => mb_substr($email, 0, 255)],
-            ['quote_id = ?' => $quoteId, "email = ''", 'completed = ?' => 0]
+            ['email' => mb_substr($email, 0, 255), 'sent_at' => new \Zend_Db_Expr('IF(completed = 1, NULL, sent_at)')],
+            ['quote_id = ?' => $quoteId, "email = ''"]
         );
     }
 
