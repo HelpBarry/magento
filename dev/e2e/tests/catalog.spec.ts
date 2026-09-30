@@ -43,11 +43,11 @@ const property = (product: any, name: string) => product.properties.find((p: any
 const productId = (sku: string) => sql(`SELECT entity_id FROM catalog_product_entity WHERE sku = '${sku}'`);
 const queued = (id: string) => Number(sql(`SELECT COUNT(*) FROM bluebarry_product_sync WHERE product_id = ${Number(id)}`));
 
-/** Runs PHP in Magento, as the admin's mass actions and their queue consumer do. */
-function inMagento(code: string): string {
+/** Runs PHP against the same installed Magento/module code as the storefront and consumers. */
+function inMagento(code: string, area: 'adminhtml' | 'frontend' = 'adminhtml'): string {
   const script = `<?php require 'app/bootstrap.php';
     $om = \\Magento\\Framework\\App\\Bootstrap::create(BP, $_SERVER)->getObjectManager();
-    $om->get(\\Magento\\Framework\\App\\State::class)->setAreaCode('adminhtml');
+    $om->get(\\Magento\\Framework\\App\\State::class)->setAreaCode('${area}');
     ${code}`;
   return execFileSync(path.join(BIN, 'shell'), ['-c', 'cd /var/www/html && php'], { input: script, encoding: 'utf8' });
 }
@@ -366,4 +366,102 @@ test.describe('catalog sync', () => {
     await openBluebarrySettings(page);
     await expect(page.locator('#row_bluebarry_module_general_catalog')).toContainText('Up to date, last sent');
   });
+});
+
+// Each PHP process has fresh pricing caches; all fixture changes roll back on the same connection.
+test.describe('bundle catalog prices', () => {
+  for (const fixture of [
+    { name: 'fixed selection quantity excludes an insufficient-stock alternative', prices: [10, 30], taxes: [0, 2], stock: [1, 1000], quantities: [2, 1], oneOption: true, tier: null, indexedMinimum: 20, expected: 36.30 },
+    { name: 'a child tier price applies at the fixed selection quantity', prices: [20, 10], taxes: [2, 0], stock: [1000, 1000], quantities: [2, 1], oneOption: false, tier: 5, indexedMinimum: 50, expected: 22.10 },
+    { name: 'unit-based tax rounding happens before multiplying selection quantity', prices: [0.03, 0.01], taxes: [2, 0], stock: [1000, 1000], quantities: [100, 1], oneOption: false, tier: null, indexedMinimum: 3.01, expected: 4.01 },
+  ]) {
+    test(fixture.name, () => {
+      const result = JSON.parse(inMagento(String.raw`
+        $om->configure($om->get(\Magento\Framework\ObjectManager\ConfigLoaderInterface::class)->load('frontend'));
+        $stores = $om->get(\Magento\Store\Model\StoreManagerInterface::class);
+        $stores->setCurrentStore(1);
+        $store = $stores->getStore();
+        $context = $om->get(\Magento\Framework\App\Http\Context::class);
+        $context->setValue(\Magento\Customer\Model\Context::CONTEXT_GROUP, 0, 0);
+        $context->setValue(\Magento\Customer\Model\Context::CONTEXT_AUTH, false, false);
+        $context->setValue(\Magento\Framework\App\Http\Context::CONTEXT_CURRENCY, 'EUR', 'EUR');
+        $om->get(\Magento\Customer\Model\Session::class)->setCustomerGroupId(0);
+
+        // Override tax settings only in this process, without changing config or shared caches.
+        $scope = new class($om->get(\Magento\Framework\App\Config\ScopeConfigInterface::class))
+            implements \Magento\Framework\App\Config\ScopeConfigInterface {
+            private $inner;
+            public function __construct($inner) { $this->inner = $inner; }
+            public function getValue($path = null, $scopeType = 'default', $scopeCode = null) {
+                if ($path === 'tax/display/type') return 2;
+                if ($path === 'tax/calculation/algorithm') return \Magento\Tax\Api\TaxCalculationInterface::CALC_UNIT_BASE;
+                return $this->inner->getValue($path, $scopeType, $scopeCode);
+            }
+            public function isSetFlag($path, $scopeType = 'default', $scopeCode = null) {
+                return (bool) $this->getValue($path, $scopeType, $scopeCode);
+            }
+        };
+        (new \ReflectionProperty(\Magento\Tax\Model\Config::class, '_scopeConfig'))
+            ->setValue($om->get(\Magento\Tax\Model\Config::class), $scope);
+
+        $fixture = json_decode('${JSON.stringify(fixture)}', true);
+        $connection = $om->get(\Magento\Framework\App\ResourceConnection::class)->getConnection();
+        $ids = $connection->fetchPairs("SELECT sku, entity_id FROM catalog_product_entity
+            WHERE sku IN ('bb-bundle-dynamic', 'bb-part-a', 'bb-part-b')");
+        $bundle = (int) $ids['bb-bundle-dynamic'];
+        $parts = [(int) $ids['bb-part-a'], (int) $ids['bb-part-b']];
+        $attributes = $connection->fetchPairs("SELECT attribute_code, attribute_id FROM eav_attribute
+            WHERE entity_type_id = 4 AND attribute_code IN ('price', 'tax_class_id')");
+        $options = $connection->fetchPairs($connection->select()
+            ->from('catalog_product_bundle_selection', ['product_id', 'option_id'])
+            ->where('parent_product_id = ?', $bundle)->where('product_id IN (?)', $parts));
+        $connection->beginTransaction();
+        try {
+            $connection->delete('inventory_reservation', ['sku IN (?)' => ['bb-part-a', 'bb-part-b']]);
+            $connection->delete('catalog_product_entity_tier_price', ['entity_id IN (?)' => $parts]);
+            $connection->update('catalog_product_entity_int', ['value' => 0],
+                ['entity_id = ?' => $bundle, 'attribute_id = ?' => $attributes['tax_class_id'], 'store_id = ?' => 0]);
+            foreach ($parts as $i => $id) {
+                $price = $fixture['prices'][$i];
+                $qty = $fixture['stock'][$i];
+                $connection->update('catalog_product_entity_decimal', ['value' => $price],
+                    ['entity_id = ?' => $id, 'attribute_id = ?' => $attributes['price'], 'store_id = ?' => 0]);
+                $connection->update('catalog_product_entity_int', ['value' => $fixture['taxes'][$i]],
+                    ['entity_id = ?' => $id, 'attribute_id = ?' => $attributes['tax_class_id'], 'store_id = ?' => 0]);
+                $connection->update('catalog_product_index_price',
+                    ['price' => $price, 'final_price' => $price, 'min_price' => $price, 'max_price' => $price, 'tier_price' => null,
+                     'tax_class_id' => $fixture['taxes'][$i]], ['entity_id = ?' => $id]);
+                $connection->update('cataloginventory_stock_item', ['qty' => $qty, 'is_in_stock' => 1], ['product_id = ?' => $id]);
+                $connection->update('cataloginventory_stock_status', ['qty' => $qty, 'stock_status' => 1], ['product_id = ?' => $id]);
+                $connection->update('inventory_source_item', ['quantity' => $qty, 'status' => 1], ['sku = ?' => $i === 0 ? 'bb-part-a' : 'bb-part-b']);
+                $connection->update('catalog_product_bundle_selection',
+                    ['option_id' => $fixture['oneOption'] ? $options[$parts[0]] : $options[$id],
+                     'selection_qty' => $fixture['quantities'][$i], 'selection_can_change_qty' => 0],
+                    ['parent_product_id = ?' => $bundle, 'product_id = ?' => $id]);
+                $connection->update('catalog_product_bundle_option',
+                    ['required' => $fixture['oneOption'] && $i === 1 ? 0 : 1], ['option_id = ?' => $options[$id]]);
+            }
+            if ($fixture['tier'] !== null) {
+                $connection->insert('catalog_product_entity_tier_price',
+                    ['entity_id' => $parts[0], 'all_groups' => 0, 'customer_group_id' => 0,
+                     'qty' => 2, 'value' => $fixture['tier'], 'website_id' => 0]);
+            }
+            // The bundle index is quantity-one; frontend pricing must account for fixed child quantities.
+            $connection->update('catalog_product_index_price',
+                ['min_price' => $fixture['indexedMinimum'], 'max_price' => $fixture['indexedMinimum']], ['entity_id = ?' => $bundle]);
+            $export = $om->create(\Bluebarry\Bluebarry\Model\Catalog\ProductBuilder::class)->build([$bundle], $store);
+            $product = $om->get(\Magento\Catalog\Api\ProductRepositoryInterface::class)->getById($bundle, false, 1, true);
+            $minimum = $product->getPriceInfo()->getPrice('final_price')->getMinimalPrice()->getValue();
+            echo json_encode(['minimum' => $minimum, 'failed' => $export['failed'],
+                'properties' => array_column($export['products'][0]['properties'], 'value', 'propertyName')]);
+        } finally {
+            $connection->rollBack();
+        }
+      `, 'frontend'));
+      expect(result.failed).toEqual([]);
+      expect(result.minimum, 'Magento storefront minimum').toBeCloseTo(fixture.expected, 2);
+      expect(result.properties.price, 'exported catalog minimum').toBeCloseTo(result.minimum, 2);
+      expect(result.properties.currency).toBe('EUR');
+    });
+  }
 });
