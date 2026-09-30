@@ -533,11 +533,13 @@ class Sync
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {
-                $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
                 if ($response->isSuccess()) {
                     // bluebarry has this email now: the checkout keeps its completion, whatever the guest withdraws.
+                    // Recorded before the note is marked sent, so an interruption in between sends it again
+                    // rather than losing it.
                     $this->checkouts->delivered((int) $note['quote_id'], (string) $note['email']);
                 }
+                $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
                 if ($response->isSuccess()) {
                     $this->forgetFailures($websiteId);
                     $sent++;
