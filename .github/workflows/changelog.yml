@@ -54,6 +54,8 @@ jobs:
                   if line.startswith('### '):
                       heading = line[4:].strip() in ('Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security')
                       bullet = False
+                  elif line.strip() == '-':
+                      bullet = False
                   elif heading and line.startswith('- '):
                       entry = ' '.join(line[2:].split())
                       bullet = bool(entry)
