@@ -20,7 +20,9 @@ if ($tenantId != null && $tenantId != "") {
     // from the full page cache is right for everyone.
     window.barry.trackPageViews = true;
     window.barry.pageContext = Object.assign(<?= /* @noEscape */ json_encode($block->getPageContext(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>, window.barry.pageContext);
-    window.barry.chat = Object.assign({}, window.barry.chat, <?= /* @noEscape */ json_encode($block->getChatConfig(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>);
+    if (window.barry.chat !== false) {
+        window.barry.chat = Object.assign({}, window.barry.chat, <?= /* @noEscape */ json_encode($block->getChatConfig(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>);
+    }
 <?php $consentWebsite = $block->getCookieConsentWebsite(); ?>
 <?php if ($consentWebsite !== null): ?>
     // Magento's cookie restriction mode: nothing is tracked until the shopper allowed cookies.
