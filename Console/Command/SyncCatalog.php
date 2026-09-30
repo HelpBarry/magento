@@ -61,8 +61,9 @@ class SyncCatalog extends Command
             $output->writeln('<error>No website is connected to bluebarry: enter a Tenant ID and API key first.</error>');
             return 1;
         }
-        if ($input->getOption('all')) {
-            $this->sync->queueAll();
+        if ($input->getOption('all') && !$this->sync->queueAll()) {
+            $output->writeln('<error>The cron is sending the catalog right now; run --all again once it is done.</error>');
+            return 1;
         }
         $result = $this->sync->run();
         if (!empty($result['busy'])) {
