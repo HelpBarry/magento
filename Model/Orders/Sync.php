@@ -533,9 +533,9 @@ class Sync
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {
-                $current = $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
-                if ($response->isSuccess() && !$current && !$completed) {
-                    // Withdrawn while on its way: bluebarry has this email, so the checkout keeps its completion.
+                $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
+                if ($response->isSuccess()) {
+                    // bluebarry has this email now: the checkout keeps its completion, whatever the guest withdraws.
                     $this->checkouts->delivered((int) $note['quote_id'], (string) $note['email']);
                 }
                 if ($response->isSuccess()) {

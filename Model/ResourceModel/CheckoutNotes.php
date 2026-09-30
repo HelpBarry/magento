@@ -94,8 +94,8 @@ class CheckoutNotes
 
     /**
      * The checkout became an order: bluebarry hears it, so no reminder goes out. A withdrawn note (no
-     * email) is completed too but stays unsent: there is nothing to send it with, unless its email
-     * turns out to have reached bluebarry after all (delivered()).
+     * email) completes with the email bluebarry last received for it; with none, it is completed but
+     * stays unsent, unless an email turns out to have reached bluebarry after all (delivered()).
      *
      * @param int $quoteId
      * @return void
@@ -105,8 +105,10 @@ class CheckoutNotes
         $this->connection()->update(
             $this->table(),
             [
+                // In this order: MySQL evaluates each assignment with the ones before it applied.
+                'sent_at' => new \Zend_Db_Expr("IF(email = '' AND delivered_email IS NULL, sent_at, NULL)"),
+                'email' => new \Zend_Db_Expr("IF(email = '', COALESCE(delivered_email, ''), email)"),
                 'completed' => 1,
-                'sent_at' => new \Zend_Db_Expr("IF(email = '', sent_at, NULL)"),
                 'noted_at' => gmdate('Y-m-d H:i:s'),
                 'revision' => new \Zend_Db_Expr('revision + 1'),
             ],
@@ -169,9 +171,9 @@ class CheckoutNotes
     }
 
     /**
-     * An email that reached bluebarry while the guest withdrew it: bluebarry has it now, so its checkout
-     * still gets its completion. Not sent again as a start: the withdrawal marked the note sent. If the
-     * order was placed meanwhile (complete() on the withdrawn note), the completion is due now.
+     * An email reached bluebarry: its checkout gets its completion with it, also once the guest withdrew
+     * a later one (complete()). If the guest withdrew this one while it was on its way, the note gets it
+     * back, still marked sent; if the order was placed meanwhile, the completion is due now.
      *
      * @param int $quoteId
      * @param string $email the one delivered
@@ -179,10 +181,17 @@ class CheckoutNotes
      */
     public function delivered(int $quoteId, string $email): void
     {
-        $this->connection()->update(
+        $email = mb_substr($email, 0, 255);
+        $connection = $this->connection();
+        $connection->update(
             $this->table(),
-            ['email' => mb_substr($email, 0, 255), 'sent_at' => new \Zend_Db_Expr('IF(completed = 1, NULL, sent_at)')],
-            ['quote_id = ?' => $quoteId, "email = ''"]
+            [
+                // In this order: MySQL evaluates each assignment with the ones before it applied.
+                'sent_at' => new \Zend_Db_Expr("IF(email = '' AND completed = 1, NULL, sent_at)"),
+                'email' => new \Zend_Db_Expr($connection->quoteInto("IF(email = '', ?, email)", $email)),
+                'delivered_email' => $email,
+            ],
+            ['quote_id = ?' => $quoteId]
         );
     }
 
