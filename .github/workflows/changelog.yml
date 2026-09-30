@@ -1,0 +1,72 @@
+name: Changelog
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: Changelog entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require release notes for module changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True)
+
+          head = os.environ['HEAD_SHA']
+          base = git('merge-base', os.environ['BASE_SHA'], head).strip()
+          paths = git('diff', '--name-only', '--no-renames', '-z', base, head).split('\0')[:-1]
+          tooling = ('dev/', 'Test/', '.github/', 'scripts/')
+          module = [path for path in paths if not (
+              path.startswith(tooling) or path.endswith(('.md', '.pdf'))
+              or path in ('.gitattributes', '.gitignore')
+          )]
+          if not module:
+              print('Documentation, tests or tooling only: no release note required.')
+              sys.exit(0)
+
+          def entries(ref):
+              text = git('show', f'{ref}:CHANGELOG.md')
+              section = re.search(r'^## \[Unreleased\][ \t]*$(.*?)(?=^## |\Z)', text, re.M | re.S)
+              result = []
+              heading = False
+              bullet = False
+              for line in section.group(1).splitlines() if section else []:
+                  if line.startswith('### '):
+                      heading = line[4:].strip() in ('Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security')
+                      bullet = False
+                  elif heading and line.startswith('- '):
+                      entry = ' '.join(line[2:].split())
+                      bullet = bool(entry)
+                      if bullet:
+                          result.append(entry)
+                  elif bullet and line.strip():
+                      result[-1] += ' ' + ' '.join(line.split())
+              return set(result)
+
+          if not entries(head) - entries(base):
+              print('::error file=CHANGELOG.md::Module changes require a new or updated bullet under '
+                    '## [Unreleased] and ### Added, Changed, Deprecated, Removed, Fixed or Security.')
+              print('Module files changed:\n' + '\n'.join(module))
+              sys.exit(1)
+          print('Module changes include an Unreleased changelog entry.')
+          PY
