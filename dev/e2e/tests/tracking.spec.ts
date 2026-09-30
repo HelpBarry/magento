@@ -52,6 +52,17 @@ test.describe('page tracking', () => {
     expect(await page.evaluate(() => (window as any).barry.trackPageViews)).toBe(true);
   });
 
+  test('an explicit chat opt-out keeps product chat disabled while the advisor SDK loads', async ({ page }) => {
+    await page.addInitScript(() => { (window as any).barry = { chat: false }; });
+    await stubAdvisor(page, null, { visitor: false });
+    await page.goto('/bb-configurable.html');
+
+    expect(await page.evaluate(() => (window as any).barry.chat)).toBe(false);
+    await expect.poll(() => page.evaluate(() => (window as any).__bbAdvisorLoaded)).toBe(true);
+    expect(await pageContext(page)).toMatchObject({ type: 'product', productId: productId('bb-configurable') });
+    expect(await page.evaluate(() => (window as any).barry.trackPageViews)).toBe(true);
+  });
+
   test('a category page names the category', async ({ page }) => {
     await stubAdvisor(page, null, { visitor: false });
     await page.goto('/bb-tracking.html');
