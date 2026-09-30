@@ -416,14 +416,7 @@ class ProductBuilder
                 $regular * $factor
             );
         }
-        [$stockStatus, $quantity] = self::stockOf(
-            $stock,
-            // In the store's scope, as Magento's stock configuration reads them.
-            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
-            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
-            in_array($type, self::COUNTED_TYPES, true),
-            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, (int) $store->getId())
-        );
+        [$stockStatus, $quantity] = $this->stockIn($stock, $type, $store);
         if ($parentOutOfStock) {
             // Bought through its configurable product, which is not for sale.
             [$stockStatus, $quantity] = ['outofstock', null];
@@ -792,11 +785,20 @@ class ProductBuilder
         if (!$rows) {
             return [];
         }
-        $partPrices = $this->prices(array_values(array_unique(array_map('intval', array_column($rows, 'product_id')))), (int) $store->getWebsiteId(), (int) $store->getId());
+        $partIds = array_values(array_unique(array_map('intval', array_column($rows, 'product_id'))));
+        $partPrices = $this->prices($partIds, (int) $store->getWebsiteId(), (int) $store->getId());
+        // Magento leaves a part that is not for sale out of a dynamically priced bundle's lowest price.
+        $partItems = [];
+        $collection = $this->products->create();
+        foreach ($collection->setStoreId((int) $store->getId())->addIdFilter($partIds) as $part) {
+            $partItems[(int) $part->getId()] = $part;
+        }
+        $partStock = $this->stock($partIds, $partItems, $store);
         $parts = [];
         foreach ($rows as $row) {
             $bundleId = $idByLink[(int) $row['parent_product_id']] ?? null;
-            if ($bundleId === null) {
+            $part = $partItems[(int) $row['product_id']] ?? null;
+            if ($bundleId === null || $part === null) {
                 continue;
             }
             $price = $partPrices[(int) $row['product_id']]['final_price'] ?? null;
@@ -805,50 +807,82 @@ class ProductBuilder
                 'required' => (bool) (int) $row['required'],
                 // Not priced for guests (disabled, not in this website): no part of the lowest price.
                 'amount' => $price === null ? null : (float) $price * ((float) $row['selection_qty'] ?: 1),
-                'class' => (int) $row['tax_class'],
+                'available' => $this->stockIn($partStock[(int) $row['product_id']] ?? null, (string) $part->getTypeId(), $store)[0] !== 'outofstock',
+                'factor' => $this->taxFactor($store, (int) $row['tax_class']),
             ];
         }
         $factors = [];
         foreach ($parts as $bundleId => $selections) {
-            $factors[$bundleId] = $this->bundleTaxFactor($selections, $store);
+            $factors[$bundleId] = self::bundleTaxFactorOf($selections);
         }
         return $factors;
     }
 
     /**
-     * @param array<int, array{option: int, required: bool, amount: float|null, class: int}> $selections
-     *        in the order the bundle lists them
-     * @param Store $store
+     * What turns a dynamically priced bundle's indexed lowest price into the one Magento shows. Its
+     * parts for sale are compared by their own price, the cheapest of each option (as Magento's
+     * selection price list orders them). With required options, the cheapest of each required option
+     * make up the price, each taxed by its own class. With none, the price index keeps the cheapest of
+     * those, and Magento shows the one that is cheapest with its tax: they can be different parts.
+     *
+     * @param array<int, array{option: int, required: bool, amount: float|null, available: bool, factor: float}> $selections
+     *        in the order the bundle lists them; factor: the part's own price factor (taxFactor())
      * @return float
      */
-    private function bundleTaxFactor(array $selections, Store $store): float
+    public static function bundleTaxFactorOf(array $selections): float
     {
-        $priced = array_filter($selections, function (array $selection) {
-            return $selection['amount'] !== null;
-        });
-        // The cheapest part of each required option; with none required, the cheapest part.
-        $chosen = [];
-        $required = array_filter($priced, function (array $selection) {
-            return $selection['required'];
-        });
-        foreach ($required ?: $priced as $selection) {
-            $key = $required ? $selection['option'] : 0;
-            if (!isset($chosen[$key]) || $selection['amount'] < $chosen[$key]['amount']) {
-                $chosen[$key] = $selection;
+        $cheapest = [];
+        foreach ($selections as $selection) {
+            if ($selection['amount'] === null || !$selection['available']) {
+                continue;
+            }
+            $option = $selection['option'];
+            if (!isset($cheapest[$option]) || $selection['amount'] < $cheapest[$option]['amount']) {
+                $cheapest[$option] = $selection;
             }
         }
-        $net = 0.0;
+        $required = array_filter($cheapest, function (array $selection) {
+            return $selection['required'];
+        });
+        $indexed = 0.0;
         $shown = 0.0;
-        foreach ($chosen as $selection) {
-            $net += $selection['amount'];
-            $shown += $selection['amount'] * $this->taxFactor($store, $selection['class']);
+        if ($required) {
+            foreach ($required as $selection) {
+                $indexed += $selection['amount'];
+                $shown += $selection['amount'] * $selection['factor'];
+            }
+        } elseif ($cheapest) {
+            $indexed = min(array_column($cheapest, 'amount'));
+            $shown = min(array_map(function (array $selection) {
+                return $selection['amount'] * $selection['factor'];
+            }, $cheapest));
         }
-        if ($net > 0) {
-            return $shown / $net;
+        if ($indexed > 0) {
+            return $shown / $indexed;
         }
-        // Free parts, or none priced: the first part's class, as the bundle lists them.
-        $first = $chosen ? reset($chosen) : $selections[0];
-        return $this->taxFactor($store, $first['class']);
+        // Free parts, or none for sale and priced: the first part's, as the bundle lists them.
+        $first = $required ? reset($required) : ($cheapest ? reset($cheapest) : $selections[0]);
+        return (float) $first['factor'];
+    }
+
+    /**
+     * A product's stock status and quantity for sale in a store (stockOf()), with the store's stock settings.
+     *
+     * @param array|null $stock from stock()
+     * @param string $type
+     * @param Store $store
+     * @return array{0: string, 1: int|float|null}
+     */
+    private function stockIn(?array $stock, string $type, Store $store): array
+    {
+        return self::stockOf(
+            $stock,
+            // In the store's scope, as Magento's stock configuration reads them.
+            $this->scopeConfig->isSetFlag('cataloginventory/item_options/manage_stock', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
+            (bool) (int) $this->scopeConfig->getValue('cataloginventory/item_options/backorders', ScopeInterface::SCOPE_STORE, (int) $store->getId()),
+            in_array($type, self::COUNTED_TYPES, true),
+            (float) $this->scopeConfig->getValue('cataloginventory/item_options/min_qty', ScopeInterface::SCOPE_STORE, (int) $store->getId())
+        );
     }
 
     /**

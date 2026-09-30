@@ -98,6 +98,17 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
     public function execute()
     {
         $result = $this->json->create();
+        if ($this->request->getParam('withdraw')) {
+            // A guest removed their email, or is correcting it: the one noted is not sent. Always, also
+            // once the store is disconnected or the shopper took back their cookie consent. A signed-in
+            // shopper's account email is theirs whatever the field says. Answered either way, so the
+            // page stops asking.
+            $quote = $this->checkoutSession->getQuote();
+            if ($quote->getId() && !$quote->getCustomerId()) {
+                $this->notes->withdraw((int) $quote->getId());
+            }
+            return $result->setData(['noted' => false, 'withdrawn' => true]);
+        }
         $store = $this->storeManager->getStore();
         // Nothing before the shopper allowed cookies (Magento's cookie restriction mode), like all tracking.
         if ($this->config->getTenantId($store->getId()) === null || !$this->config->hasWebsiteApiKey($store->getWebsiteId())
@@ -105,19 +116,7 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
             return $result->setData(['noted' => false]);
         }
         $quote = $this->checkoutSession->getQuote();
-        if (!$quote->getId()) {
-            return $result->setData(['noted' => false]);
-        }
-        if ($this->request->getParam('withdraw')) {
-            // A guest removed their email, or is correcting it: the one noted is not sent. A signed-in
-            // shopper's account email is theirs whatever the field says.
-            $guest = !$quote->getCustomerId();
-            if ($guest) {
-                $this->notes->withdraw((int) $quote->getId());
-            }
-            return $result->setData(['noted' => false, 'withdrawn' => $guest]);
-        }
-        if (!$quote->getItemsCount()) {
+        if (!$quote->getId() || !$quote->getItemsCount()) {
             return $result->setData(['noted' => false]);
         }
         $email = trim((string) $this->request->getParam('email'));

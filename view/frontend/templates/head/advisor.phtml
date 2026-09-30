@@ -80,8 +80,9 @@ if ($tenantId != null && $tenantId != "") {
                 headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
                 body: new URLSearchParams(fields).toString()
             }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
-                // Only a noted email (or withdrawal) is not sent again; after a failure retry() sends it again.
-                if (result && (result.noted || result.withdrawn)) last = email;
+                // Only a noted email, or a withdrawal the module answered, is not sent again; after a
+                // failure retry() sends it again.
+                if (result && (result.noted || (email === WITHDRAW && result.withdrawn))) last = email;
             }).catch(function () {}).then(function () {
                 sending = false;
                 if (next !== null) { var queued = next; next = null; send(queued); }
@@ -97,15 +98,18 @@ if ($tenantId != null && $tenantId != "") {
                 var email = String(field.value || '').trim();
                 // An email the shopper removed or is still correcting is not sent: the one noted before,
                 // on this page or an earlier one, is withdrawn (once, until another email is given).
-                if (EMAIL.test(email)) { wanted = email; send(email); retry(); } else { wanted = ''; send(WITHDRAW); }
+                wanted = EMAIL.test(email) ? email : WITHDRAW;
+                send(wanted);
+                retry();
             }, 800);
         }
         document.addEventListener('input', typed, true);
         document.addEventListener('change', typed, true);
         // Signed in, there is no email field: the account's email, on load. Again a few times while the email wanted is not noted yet (the shopper allowing cookies, a
-        // request that failed): the account's, or the one a guest typed, counted afresh for each new one.
-        // The checkout may have filled the field in itself (a returning guest's, without a keystroke):
-        // that one counts as typed. A guest with nothing in the field yet is left to it.
+        // request that failed): the account's, the one a guest typed, or the withdrawal of one a guest
+        // removed, counted afresh for each new one. The checkout may have filled the field in itself (a
+        // returning guest's, without a keystroke): that one counts as typed. A guest with nothing in the
+        // field yet is left to it.
         var retrying = null, tries = 0;
         function retry() {
             tries = 0;

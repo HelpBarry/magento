@@ -152,6 +152,11 @@ class Sync
                 }
                 continue;
             }
+            if ($tenantId !== null && $apiKey === null && $this->config->hasWebsiteApiKey($website->getId())) {
+                // A stored key that decrypts to nothing (another crypt key): waiting, like an unreadable one.
+                $unreadable[strtolower($tenantId)] = true;
+                continue;
+            }
             if ($tenantId === null || $apiKey === null || isset($targets[strtolower($tenantId)])) {
                 continue;
             }
