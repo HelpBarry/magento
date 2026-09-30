@@ -807,7 +807,9 @@ class ProductBuilder
                 'required' => (bool) (int) $row['required'],
                 // Not priced for guests (disabled, not in this website): no part of the lowest price.
                 'amount' => $price === null ? null : (float) $price * ((float) $row['selection_qty'] ?: 1),
-                'available' => $this->stockIn($partStock[(int) $row['product_id']] ?? null, (string) $part->getTypeId(), $store)[0] !== 'outofstock',
+                // Nor does it offer a part with required options of its own (addFilterByRequiredOptions()).
+                'available' => !(int) $part->getData('required_options')
+                    && $this->stockIn($partStock[(int) $row['product_id']] ?? null, (string) $part->getTypeId(), $store)[0] !== 'outofstock',
                 'factor' => $this->taxFactor($store, (int) $row['tax_class']),
             ];
         }
