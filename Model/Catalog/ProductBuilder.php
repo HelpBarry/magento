@@ -9,6 +9,7 @@ use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\Attribute\CollectionFactory as AttributeCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
+use Magento\CatalogInventory\Api\StockConfigurationInterface;
 use Magento\Customer\Api\GroupRepositoryInterface;
 use Magento\Customer\Model\Group;
 use Magento\Framework\App\Config\ScopeConfigInterface;
@@ -21,6 +22,11 @@ use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\Store;
 use Magento\Tax\Model\Calculation as TaxCalculation;
 use Magento\Tax\Model\Config as TaxConfig;
+use Magento\Tax\Api\Data\QuoteDetailsInterfaceFactory;
+use Magento\Tax\Api\Data\QuoteDetailsItemInterfaceFactory;
+use Magento\Tax\Api\Data\TaxClassKeyInterface;
+use Magento\Tax\Api\Data\TaxClassKeyInterfaceFactory;
+use Magento\Tax\Api\TaxCalculationInterface;
 
 /**
  * Reads a batch of products the way one website's default store view shows them, in the shape
@@ -108,6 +114,21 @@ class ProductBuilder
      */
     private $customerGroups;
 
+    /** @var TaxCalculationInterface */
+    private $taxService;
+
+    /** @var QuoteDetailsInterfaceFactory */
+    private $taxQuotes;
+
+    /** @var QuoteDetailsItemInterfaceFactory */
+    private $taxItems;
+
+    /** @var TaxClassKeyInterfaceFactory */
+    private $taxClasses;
+
+    /** @var StockConfigurationInterface */
+    private $stockConfig;
+
     /** @var array<int, array<int, float>> store => product tax class => price factor */
     private $taxFactors = [];
 
@@ -120,8 +141,8 @@ class ProductBuilder
     /** @var array<int, array<int, string>> store => category => name */
     private $categoryNames = [];
 
-    /** @var array<int, float> dynamically priced bundle => the price factor of its parts' tax, for the current build */
-    private $bundleTaxFactors = [];
+    /** @var array<int, float> dynamically priced bundle => its shown minimum, for the current build */
+    private $bundlePrices = [];
 
     /**
      * @param ProductCollectionFactory $products
@@ -135,6 +156,11 @@ class ProductBuilder
      * @param TaxCalculation $taxCalculation
      * @param TaxConfig $taxConfig
      * @param GroupRepositoryInterface $customerGroups
+     * @param TaxCalculationInterface $taxService
+     * @param QuoteDetailsInterfaceFactory $taxQuotes
+     * @param QuoteDetailsItemInterfaceFactory $taxItems
+     * @param TaxClassKeyInterfaceFactory $taxClasses
+     * @param StockConfigurationInterface $stockConfig
      */
     public function __construct(
         ProductCollectionFactory $products,
@@ -147,7 +173,12 @@ class ProductBuilder
         TimezoneInterface $timezone,
         TaxCalculation $taxCalculation,
         TaxConfig $taxConfig,
-        GroupRepositoryInterface $customerGroups
+        GroupRepositoryInterface $customerGroups,
+        TaxCalculationInterface $taxService,
+        QuoteDetailsInterfaceFactory $taxQuotes,
+        QuoteDetailsItemInterfaceFactory $taxItems,
+        TaxClassKeyInterfaceFactory $taxClasses,
+        StockConfigurationInterface $stockConfig
     ) {
         $this->products = $products;
         $this->categories = $categories;
@@ -160,6 +191,11 @@ class ProductBuilder
         $this->taxCalculation = $taxCalculation;
         $this->taxConfig = $taxConfig;
         $this->customerGroups = $customerGroups;
+        $this->taxService = $taxService;
+        $this->taxQuotes = $taxQuotes;
+        $this->taxItems = $taxItems;
+        $this->taxClasses = $taxClasses;
+        $this->stockConfig = $stockConfig;
     }
 
     /**
@@ -253,7 +289,7 @@ class ProductBuilder
         $stock = $this->stock(array_values(array_unique(array_merge($all, $parentIds))), $items, $store);
         $categoryIds = $this->productCategories(array_keys($items));
         $currency = $this->currency($store);
-        $this->bundleTaxFactors = $this->dynamicBundleTaxFactors($items, $store);
+        $this->bundlePrices = $this->dynamicBundlePrices($items, $store, $currency);
 
         $products = [];
         $failed = [];
@@ -396,11 +432,14 @@ class ProductBuilder
 
         // As shown: in the store view's currency, with or without tax as its catalog displays prices.
         // A dynamically priced bundle is taxed through its parts, not by a class of its own.
-        $factor = $currency['rate'] * ($this->bundleTaxFactors[$id] ?? $this->taxFactor($store, (int) $product->getData('tax_class_id')));
+        $factor = $currency['rate'] * $this->taxFactor($store, (int) $product->getData('tax_class_id'));
         if ($price !== null) {
             // A bundle's own final price is its fixed part; "as low as" is what shoppers see.
             $final = $type === 'bundle' ? (float) $price['min_price'] : (float) $price['final_price'];
-            [$final, $regular] = self::pricesOf($final * $factor, $type === 'bundle' ? null : (float) $price['price'] * $factor);
+            [$final, $regular] = self::pricesOf(
+                $this->bundlePrices[$id] ?? $final * $factor,
+                $type === 'bundle' ? null : (float) $price['price'] * $factor
+            );
         } elseif ($type === 'bundle') {
             // A bundle's price comes from its parts, through the index: none rather than a wrong one.
             [$final, $regular] = [null, null];
@@ -611,7 +650,9 @@ class ProductBuilder
         $rows = $connection->fetchAll($connection->select()
             ->from($this->resource->getTableName('cataloginventory_stock_item'), [
                 'product_id', 'qty', 'is_in_stock', 'use_config_manage_stock', 'manage_stock', 'use_config_backorders', 'backorders',
+                'legacy_qty' => 'qty',
                 'use_config_min_qty', 'min_qty',
+                'use_config_min_sale_qty', 'min_sale_qty',
             ])
             ->where('product_id IN (?)', $ids)
             ->where('stock_id = ?', 1));
@@ -733,16 +774,15 @@ class ProductBuilder
     }
 
     /**
-     * What turns a dynamically priced bundle's "as low as" price into the price guests see: Magento
-     * taxes each part by its own class, so the parts that make up that price (the cheapest of each
-     * required option, or the cheapest part when no option is required) weigh in by their price. A
-     * fixed-price bundle has a tax class of its own.
+     * A dynamic bundle's guest minimum from its configured parts, including quantity tiers, parent
+     * discounts and each part's tax. Loading stays batched and no store or session context changes.
      *
      * @param array<int, Product> $items
      * @param Store $store
-     * @return array<int, float> bundle id => price factor
+     * @param array{code: string, rate: float} $currency
+     * @return array<int, float> bundle id => shown price
      */
-    private function dynamicBundleTaxFactors(array $items, Store $store): array
+    private function dynamicBundlePrices(array $items, Store $store, array $currency): array
     {
         $bundles = array_filter($items, function (Product $product) {
             return $product->getTypeId() === 'bundle';
@@ -774,8 +814,16 @@ class ProductBuilder
         if (!$dynamic) {
             return [];
         }
+        $dynamicIds = array_map(function ($link) use ($idByLink) {
+            return $idByLink[(int) $link];
+        }, $dynamic);
+        // Required options remain required even when none of their selections can be bought.
+        $hasRequired = array_fill_keys($connection->fetchCol($connection->select()
+            ->from($this->resource->getTableName('catalog_product_bundle_option'), ['parent_id'])
+            ->where('parent_id IN (?)', $dynamic)
+            ->where('required = ?', 1)), true);
         $select = $connection->select()
-            ->from(['selection' => $this->resource->getTableName('catalog_product_bundle_selection')], ['parent_product_id', 'option_id', 'product_id', 'selection_qty'])
+            ->from(['selection' => $this->resource->getTableName('catalog_product_bundle_selection')], ['parent_product_id', 'option_id', 'product_id', 'selection_qty', 'selection_can_change_qty'])
             ->join(['bundle_option' => $this->resource->getTableName('catalog_product_bundle_option')], 'bundle_option.option_id = selection.option_id', ['required'])
             ->join(['part' => $this->resource->getTableName('catalog_product_entity')], 'part.entity_id = selection.product_id', [])
             ->joinLeft(['tax' => $int], "tax.$linkField = part.$linkField AND tax.store_id = 0 AND tax.attribute_id = " . (int) $taxClass->getId(), ['tax_class' => 'value'])
@@ -783,55 +831,136 @@ class ProductBuilder
         $this->liveVersion($select, 'part');
         $rows = $connection->fetchAll($select->order(['selection.is_default DESC', 'selection.position', 'selection.selection_id']));
         if (!$rows) {
-            return [];
+            return array_fill_keys($dynamicIds, 0.0);
         }
         $partIds = array_values(array_unique(array_map('intval', array_column($rows, 'product_id'))));
         $partPrices = $this->prices($partIds, (int) $store->getWebsiteId(), (int) $store->getId());
-        // Magento leaves a part that is not for sale out of a dynamically priced bundle's lowest price.
+        // One collection and tier query for all parts and parents. Tier normalization needs their
+        // regular price and website, and an explicit group keeps it independent of the cron's session.
         $partItems = [];
         $collection = $this->products->create();
-        foreach ($collection->setStoreId((int) $store->getId())->addIdFilter($partIds) as $part) {
+        $collection->setStoreId((int) $store->getId())
+            ->addIdFilter(array_unique(array_merge($partIds, $dynamicIds)))
+            ->addAttributeToSelect('price');
+        $collection->addTierPriceDataByGroupId(Group::NOT_LOGGED_IN_ID);
+        foreach ($collection as $part) {
+            $part->setCustomerGroupId(Group::NOT_LOGGED_IN_ID);
             $partItems[(int) $part->getId()] = $part;
         }
         $partStock = $this->stock($partIds, $partItems, $store);
-        $parts = [];
+        $minSaleQty = $this->stockConfig->getMinSaleQty((int) $store->getId(), Group::NOT_LOGGED_IN_ID);
+        $parts = array_fill_keys($dynamicIds, []);
+        $taxItems = [];
+        $enteredTax = $this->taxConfig->priceIncludesTax($store);
         foreach ($rows as $row) {
             $bundleId = $idByLink[(int) $row['parent_product_id']] ?? null;
             $part = $partItems[(int) $row['product_id']] ?? null;
             if ($bundleId === null || $part === null) {
                 continue;
             }
-            $price = $partPrices[(int) $row['product_id']]['final_price'] ?? null;
-            $parts[$bundleId][] = [
-                'option' => (int) $row['option_id'],
+            if (!(int) $row['required'] && isset($hasRequired[(int) $row['parent_product_id']])) {
+                continue;
+            }
+            $price = $partPrices[(int) $row['product_id']] ?? null;
+            if ($price === null || (int) $part->getData('required_options')) {
+                continue;
+            }
+            $qty = (float) $row['selection_qty'] ?: 1;
+            $stock = $partStock[(int) $row['product_id']] ?? null;
+            [$status, $availableQty] = $this->stockIn($stock, (string) $part->getTypeId(), $store);
+            $requestedQty = (int) $row['selection_can_change_qty']
+                ? ((int) ($stock['use_config_min_sale_qty'] ?? 1) ? (float) $minSaleQty : (float) ($stock['min_sale_qty'] ?? 1))
+                : $qty;
+            // Default stock compares the raw legacy quantity; custom MSI stock checks salability
+            // alone (AdaptAddQuantityFilterPlugin), which stockIn() already supplies.
+            if ($status === 'outofstock' || (!isset($stock['quantity_decides']) && $availableQty !== null
+                && (float) $stock['legacy_qty'] < $requestedQty)) {
+                continue;
+            }
+            $option = (int) $row['option_id'];
+            $sortingPrice = min((float) $price['minimal_price'], (float) $price['final_price']) * $qty;
+            if (isset($parts[$bundleId][$option]) && $sortingPrice >= $parts[$bundleId][$option]['amount']) {
+                continue;
+            }
+            $parts[$bundleId][$option] = [
+                'option' => $option,
                 'required' => (bool) (int) $row['required'],
-                // Not priced for guests (disabled, not in this website): no part of the lowest price.
-                'amount' => $price === null ? null : (float) $price * ((float) $row['selection_qty'] ?: 1),
-                // Nor does it offer a part with required options of its own (addFilterByRequiredOptions()).
-                'available' => !(int) $part->getData('required_options')
-                    && $this->stockIn($partStock[(int) $row['product_id']] ?? null, (string) $part->getTypeId(), $store)[0] !== 'outofstock',
-                'factor' => $this->taxFactor($store, (int) $row['tax_class']),
+                // Sorting uses the index minimum, before quantity tiers, discounts and tax.
+                'amount' => $sortingPrice,
+                'available' => true,
+                'product' => $part,
+                'tax_class' => (int) $row['tax_class'],
+                'code' => (string) $option,
+                'qty' => $qty,
             ];
         }
-        $factors = [];
         foreach ($parts as $bundleId => $selections) {
-            $factors[$bundleId] = self::bundleTaxFactorOf($selections);
+            $bundle = $bundles[$bundleId];
+            $percent = 100 - (float) $partItems[$bundleId]->getTierPrice(1);
+            $special = $bundle->getData('special_price');
+            if ($special && $this->timezone->isScopeDateInInterval(
+                \Magento\Store\Api\Data\WebsiteInterface::ADMIN_CODE,
+                $bundle->getData('special_from_date'),
+                $bundle->getData('special_to_date')
+            )) {
+                $percent = min($percent, (float) $special);
+            }
+            foreach ($selections as $selection) {
+                $part = $selection['product'];
+                $unit = round(min(
+                    (float) $partPrices[(int) $part->getId()]['final_price'],
+                    (float) $part->getTierPrice($selection['qty'])
+                ) * $currency['rate'], 2);
+                if ($percent < 100) {
+                    $unit = round($unit * $percent / 100, 2);
+                }
+                $taxItems[] = $this->taxItems->create()
+                    ->setCode($selection['code'])
+                    ->setType('product')
+                    ->setQuantity(1)
+                    ->setUnitPrice(round($unit, 4))
+                    ->setIsTaxIncluded($enteredTax)
+                    ->setTaxClassKey($this->taxClasses->create()->setType(TaxClassKeyInterface::TYPE_ID)->setValue((string) $selection['tax_class']));
+            }
         }
-        return $factors;
+        if (!$taxItems) {
+            return array_fill_keys(array_keys($parts), 0.0);
+        }
+        $quote = $this->taxQuotes->create()
+            ->setCustomerTaxClassKey($this->taxClasses->create()->setType(TaxClassKeyInterface::TYPE_ID)
+                ->setValue((string) $this->customerGroups->getById(Group::NOT_LOGGED_IN_ID)->getTaxClassId()));
+        // No customer ID or addresses: Magento uses this store's default guest tax destination.
+        $tax = [];
+        foreach ($taxItems as $item) {
+            // Separate calculations also preserve Magento's total-based rounding initialization.
+            // Rate lookups are cached, so this adds no query per selection.
+            $tax += $this->taxService->calculateTax($quote->setItems([$item]), (int) $store->getId(), false)->getItems();
+        }
+        $includeTax = (int) $this->taxConfig->getPriceDisplayType($store) !== TaxConfig::DISPLAY_TYPE_EXCLUDING_TAX;
+        $roundUnit = $this->taxConfig->getAlgorithm((int) $store->getId()) !== TaxCalculationInterface::CALC_TOTAL_BASE;
+        $prices = [];
+        foreach ($parts as $bundleId => $selections) {
+            $shown = [];
+            foreach ($selections as $selection) {
+                $amount = $tax[$selection['code']];
+                $selection['unit'] = (float) ($includeTax ? $amount->getPriceInclTax() : $amount->getPrice());
+                $shown[] = $selection;
+            }
+            $prices[$bundleId] = self::bundlePriceOf($shown, $roundUnit);
+        }
+        return $prices;
     }
 
     /**
-     * What turns a dynamically priced bundle's indexed lowest price into the one Magento shows. Its
-     * parts for sale are compared by their own price, the cheapest of each option (as Magento's
-     * selection price list orders them). With required options, the cheapest of each required option
-     * make up the price, each taxed by its own class. With none, the price index keeps the cheapest of
-     * those, and Magento shows the one that is cheapest with its tax: they can be different parts.
+     * The shown minimum after Magento's raw-price ordering picks one part per option. Required
+     * options are summed; otherwise the cheapest shown option is used. Unit and row tax methods
+     * round each shown unit before multiplying, while total-based tax keeps its precision.
      *
-     * @param array<int, array{option: int, required: bool, amount: float|null, available: bool, factor: float}> $selections
-     *        in the order the bundle lists them; factor: the part's own price factor (taxFactor())
+     * @param array<int, array{option: int, required: bool, amount: float|null, available: bool, unit: float, qty: float}> $selections
+     * @param bool $roundUnit
      * @return float
      */
-    public static function bundleTaxFactorOf(array $selections): float
+    public static function bundlePriceOf(array $selections, bool $roundUnit): float
     {
         $cheapest = [];
         foreach ($selections as $selection) {
@@ -846,25 +975,20 @@ class ProductBuilder
         $required = array_filter($cheapest, function (array $selection) {
             return $selection['required'];
         });
-        $indexed = 0.0;
+        if (!$cheapest) {
+            return 0.0;
+        }
+        if (!$required) {
+            uasort($cheapest, function (array $left, array $right) {
+                return $left['unit'] * $left['qty'] <=> $right['unit'] * $right['qty'];
+            });
+            $required = [reset($cheapest)];
+        }
         $shown = 0.0;
-        if ($required) {
-            foreach ($required as $selection) {
-                $indexed += $selection['amount'];
-                $shown += $selection['amount'] * $selection['factor'];
-            }
-        } elseif ($cheapest) {
-            $indexed = min(array_column($cheapest, 'amount'));
-            $shown = min(array_map(function (array $selection) {
-                return $selection['amount'] * $selection['factor'];
-            }, $cheapest));
+        foreach ($required as $selection) {
+            $shown += ($roundUnit ? round($selection['unit'], 2) : $selection['unit']) * $selection['qty'];
         }
-        if ($indexed > 0) {
-            return $shown / $indexed;
-        }
-        // Free parts, or none for sale and priced: the first part's, as the bundle lists them.
-        $first = $required ? reset($required) : ($cheapest ? reset($cheapest) : $selections[0]);
-        return (float) $first['factor'];
+        return $shown;
     }
 
     /**
