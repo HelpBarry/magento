@@ -1,10 +1,6 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Cron:etc/crontab.xsd">
     <group id="default">
-        <!-- Retries, and paid orders no queue consumer picked up. One indexed query when idle. -->
-        <job name="bluebarry_send_due_conversions" instance="Bluebarry\Bluebarry\Cron\SendDueConversions" method="execute">
-            <schedule>* * * * *</schedule>
-        </job>
         <!-- Daily heartbeat per website (and right after an upgrade). Reads one flag when nothing is due. -->
         <job name="bluebarry_send_heartbeat" instance="Bluebarry\Bluebarry\Cron\SendHeartbeat" method="execute">
             <schedule>*/10 * * * *</schedule>
@@ -24,6 +20,11 @@
     <group id="bluebarry_orders">
         <!-- Orders, the history import and checkouts, at most 50 seconds a run. A few indexed queries when idle. -->
         <job name="bluebarry_sync_orders" instance="Bluebarry\Bluebarry\Cron\SyncOrders" method="execute">
+            <schedule>* * * * *</schedule>
+        </job>
+        <!-- Retries, and paid orders no queue consumer picked up, at most 40 seconds a run: in this group,
+             so a slow bluebarry never holds up Magento's default jobs. One indexed query when idle. -->
+        <job name="bluebarry_send_due_conversions" instance="Bluebarry\Bluebarry\Cron\SendDueConversions" method="execute">
             <schedule>* * * * *</schedule>
         </job>
     </group>

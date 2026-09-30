@@ -67,6 +67,19 @@ test.describe('add to cart from bluebarry', () => {
     expect(items.map((i: any) => i.product_sku).sort()).toEqual(['bb-bundle-fixed-bb-part-a-bb-part-b', 'bb-simple']);
   });
 
+  test("a bundle's required option with a single part takes that part, default or not", async ({ page }) => {
+    // The product page submits the only part of a required option without a choice; so does the module.
+    const bundle = productId('bb-bundle-fixed');
+    sql(`UPDATE catalog_product_bundle_selection SET is_default = 0 WHERE parent_product_id = ${bundle}`);
+    try {
+      expect((await add(page, [{ reference: bundle, quantity: 1 }])).body).toEqual({ success: true, skipped: [] });
+      const { items } = await cart(page);
+      expect(items.map((i: any) => i.product_sku)).toEqual(['bb-bundle-fixed-bb-part-a-bb-part-b']);
+    } finally {
+      sql(`UPDATE catalog_product_bundle_selection SET is_default = 1 WHERE parent_product_id = ${bundle}`);
+    }
+  });
+
   test('lines beyond the limits are reported as not added, not dropped', async ({ page }) => {
     const simple = productId('bb-simple');
     const lines = [{ reference: productId('bb-configurable-red'), quantity: 1000 }, ...Array.from({ length: 20 }, () => ({ reference: simple, quantity: 1 }))];

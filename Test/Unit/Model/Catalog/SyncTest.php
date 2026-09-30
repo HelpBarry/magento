@@ -273,6 +273,43 @@ class SyncTest extends TestCase
         $this->assertSame('', $this->queued[9]);
     }
 
+    public function testADeletionStaysQueuedForACompanyWhoseKeyCannotBeRead(): void
+    {
+        $sync = $this->sync([200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->brokenKey = 1;
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->queued = [5 => '', 9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([9], array_keys($this->queued)); // 5 went; 9's switch-off still has to reach a
+
+        // a's key is saved again: the whole catalog, and 9's switch-off with it.
+        $this->brokenKey = null;
+        $this->calls = [];
+        $sync->run();
+
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertSame(['key-1', 'key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([], array_keys($this->queued));
+    }
+
+    public function testAnUnreadableKeyOfACompanyAnotherWebsiteReachesKeepsNoDeletion(): void
+    {
+        // Websites 1 and 2 share company a; 2's key cannot be read, 1 still reaches a.
+        $sync = $this->sync([200], tenants: [1 => 'a', 2 => 'a']);
+        $this->brokenKey = 2;
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
+        $this->queued = [9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame([], array_keys($this->queued));
+    }
+
     public function testAnUnreadableVariantIsTriedOncePerRun(): void
     {
         // Configurable product 5's variant 9 cannot be read: it gets a row of its own, after 5.

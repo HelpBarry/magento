@@ -47,6 +47,19 @@ class ProductBuilderTest extends TestCase
         $this->assertSame(['outofstock', null], ProductBuilder::stockOf($this->row(['is_in_stock' => '0']), true, false, true));
     }
 
+    public function testInAMultiSourceStockTheQuantityLeftAfterReservationsDecides(): void
+    {
+        // The last unit was reserved, then its order cancelled: 1 left, before Magento's consumer set
+        // the stock's salable flag again.
+        $this->assertSame(['instock', 1], ProductBuilder::stockOf($this->row(['qty' => '1', 'is_in_stock' => '0', 'quantity_decides' => 1]), true, false, true));
+        // The last unit reserved, flag not cleared yet.
+        $this->assertSame(['outofstock', 0], ProductBuilder::stockOf($this->row(['qty' => '0', 'is_in_stock' => '1', 'quantity_decides' => 1]), true, false, true));
+        // With backorders the flag is the sources' status, not a quantity.
+        $this->assertSame(['outofstock', null], ProductBuilder::stockOf($this->row(['qty' => '3', 'is_in_stock' => '0', 'quantity_decides' => 1]), true, true, true));
+        // A bundle's status is its parts'.
+        $this->assertSame(['outofstock', null], ProductBuilder::stockOf($this->row(['qty' => '3', 'is_in_stock' => '0', 'quantity_decides' => 1]), true, false, false));
+    }
+
     public function testAProductThatCanAlwaysBeBoughtHasNoQuantity(): void
     {
         // Stock not managed (store-wide, then per product).

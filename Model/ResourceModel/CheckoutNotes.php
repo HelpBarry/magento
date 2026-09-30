@@ -55,6 +55,23 @@ class CheckoutNotes
     }
 
     /**
+     * A guest removed their email before it was sent: that email is not sent, and the next one noted
+     * counts as a change, the same one again included. A note bluebarry has already is left as it is.
+     *
+     * @param int $quoteId
+     * @return void
+     */
+    public function withdraw(int $quoteId): void
+    {
+        $this->connection()->update(
+            $this->table(),
+            // Nothing left to send: an empty email is never sent, nor completed (complete()).
+            ['email' => '', 'sent_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
+            ['quote_id = ?' => $quoteId, 'completed = ?' => 0, 'sent_at IS NULL']
+        );
+    }
+
+    /**
      * A cart's lines as bluebarry gets them: the catalog's reference (the variant for a configurable
      * product) and the quantity in whole units.
      *
@@ -85,7 +102,7 @@ class CheckoutNotes
         $this->connection()->update(
             $this->table(),
             ['completed' => 1, 'sent_at' => null, 'noted_at' => gmdate('Y-m-d H:i:s'), 'revision' => new \Zend_Db_Expr('revision + 1')],
-            ['quote_id = ?' => $quoteId, 'completed = ?' => 0]
+            ['quote_id = ?' => $quoteId, 'completed = ?' => 0, 'email <> ?' => '']
         );
     }
 
