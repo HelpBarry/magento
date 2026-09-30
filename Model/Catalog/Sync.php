@@ -121,12 +121,24 @@ class Sync
      */
     public function targets(): array
     {
+        return $this->companies()['targets'];
+    }
+
+    /**
+     * The targets, and the companies a website is connected to whose API key cannot be read: they are
+     * sent nothing until the key is saved again, so deletions wait for them (see drain()).
+     *
+     * @return array{targets: array<int, array{store: Store, tenantId: string, apiKey: string}>, unreadable: string[]}
+     */
+    private function companies(): array
+    {
         $websites = $this->storeManager->getWebsites();
         $default = (int) $this->storeManager->getDefaultStoreView()->getWebsiteId();
         uasort($websites, function ($a, $b) use ($default) {
             return [(int) $a->getId() !== $default, (int) $a->getId()] <=> [(int) $b->getId() !== $default, (int) $b->getId()];
         });
         $targets = [];
+        $unreadable = [];
         foreach ($websites as $website) {
             $tenantId = $this->config->getWebsiteTenantId($website->getId());
             try {
@@ -135,6 +147,14 @@ class Sync
                 // An undecryptable key (a database restored under another crypt key): this website waits
                 // until its key is saved again, the others still sync. The Connection status shows it.
                 $this->logger->warning('bluebarry: skipping the catalog of a website whose API key cannot be read: ' . $e->getMessage(), ['website' => $website->getId()]);
+                if ($tenantId !== null) {
+                    $unreadable[strtolower($tenantId)] = true;
+                }
+                continue;
+            }
+            if ($tenantId !== null && $apiKey === null && $this->config->hasWebsiteApiKey($website->getId())) {
+                // A stored key that decrypts to nothing (another crypt key): waiting, like an unreadable one.
+                $unreadable[strtolower($tenantId)] = true;
                 continue;
             }
             if ($tenantId === null || $apiKey === null || isset($targets[strtolower($tenantId)])) {
@@ -145,7 +165,11 @@ class Sync
             $store = $this->storeManager->getStore($group->getDefaultStoreId());
             $targets[strtolower($tenantId)] = ['store' => $store, 'tenantId' => $tenantId, 'apiKey' => $apiKey];
         }
-        return array_values($targets);
+        return [
+            'targets' => array_values($targets),
+            // A company another website of it still reaches is no company missed.
+            'unreadable' => array_map('strval', array_keys(array_diff_key($unreadable, $targets))),
+        ];
     }
 
     /**
@@ -161,12 +185,13 @@ class Sync
             return ['sent' => 0, 'queued' => $this->queue->count(), 'busy' => true];
         }
         try {
-            $targets = $this->targets();
+            ['targets' => $targets, 'unreadable' => $unreadable] = $this->companies();
             $this->queueCatalogIfDue($targets);
+            $this->requeueDeletions($targets, $unreadable);
             if (!$targets) {
                 return ['sent' => 0, 'queued' => $this->queue->count()];
             }
-            $sent = $this->drain($targets, $seconds);
+            $sent = $this->drain($targets, $seconds, $unreadable);
             return ['sent' => $sent, 'queued' => $this->queue->count()];
         } finally {
             $this->locks->unlock(self::LOCK);
@@ -175,13 +200,23 @@ class Sync
 
     /**
      * Queues every product, and sends after a failure right away (bin/magento bluebarry:catalog:sync --all).
+     * Holds the sync, like run(): a run writing its state meanwhile (a deletion it keeps for a company)
+     * would otherwise be overwritten.
      *
-     * @return void
+     * @return bool false when another run holds the sync: nothing was queued
      */
-    public function queueAll(): void
+    public function queueAll(): bool
     {
-        $this->queue->enqueueAll();
-        $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+        if (!$this->locks->lock(self::LOCK, 0)) {
+            return false;
+        }
+        try {
+            $this->queue->enqueueAll();
+            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+            return true;
+        } finally {
+            $this->locks->unlock(self::LOCK);
+        }
     }
 
     /**
@@ -211,9 +246,10 @@ class Sync
      *
      * @param array $targets
      * @param int $seconds
+     * @param string[] $unreadable companies left out of the targets because their API key cannot be read
      * @return int products sent
      */
-    private function drain(array $targets, int $seconds): int
+    private function drain(array $targets, int $seconds, array $unreadable = []): int
     {
         $active = [];
         foreach ($targets as $target) {
@@ -319,8 +355,14 @@ class Sync
                 $this->logger->error('bluebarry: gave up syncing products that could not be read', ['product_ids' => $dropped]);
             }
             // A deleted product is only switched off by its own row (the whole catalog a company gets
-            // back holds products that exist): kept until every company received it.
-            $keep = count($delivered) < count($targets) ? array_values(array_unique($deleted)) : [];
+            // back holds products that exist): kept until every company received it. One whose API key
+            // cannot be read right now gets it once its key is back (requeueDeletions()), so the queue
+            // does not send it to the others again every run meanwhile.
+            $deleted = array_values(array_unique($deleted));
+            $keep = count($delivered) < count($targets) ? $deleted : [];
+            if (!$keep && $deleted && $unreadable) {
+                $this->rememberDeletions($unreadable, $deleted);
+            }
             $this->queue->release($keep, $claim);
             $this->queue->remove(array_values(array_diff($ids, $failed, $keep)), $claim);
             $sent += count(array_diff($ids, $failed));
@@ -444,7 +486,8 @@ class Sync
         $failures = array_intersect_key($state['targets'] ?? [], $sources) ?: null;
         if ($changed || $nightly) {
             $this->queue->enqueueAll();
-            $this->saveState(['tenants' => $sources, 'full_at' => time(), 'targets' => $failures]);
+            // The same clock the nightly check reads.
+            $this->saveState(['tenants' => $sources, 'full_at' => $now->getTimestamp(), 'targets' => $failures]);
         } elseif ($sources != $saved) {
             $this->saveState(['tenants' => $sources, 'targets' => $failures]);
         }
@@ -474,6 +517,52 @@ class Sync
             $sources[strtolower($target['tenantId'])] = (int) $target['store']->getId();
         }
         return $sources;
+    }
+
+    /**
+     * Deleted products the companies with an unreadable API key still have to hear about.
+     *
+     * @param string[] $tenants
+     * @param int[] $productIds
+     * @return void
+     */
+    private function rememberDeletions(array $tenants, array $productIds): void
+    {
+        $pending = $this->state()['deletions'] ?? [];
+        foreach ($tenants as $tenant) {
+            $pending[$tenant] = array_values(array_unique(array_merge($pending[$tenant] ?? [], array_map('intval', $productIds))));
+        }
+        $this->saveState(['deletions' => $pending]);
+    }
+
+    /**
+     * Queues the deletions a company missed while its API key could not be read, once it is a target
+     * again. A company no website connects to any more is forgotten.
+     *
+     * @param array $targets
+     * @param string[] $unreadable
+     * @return void
+     */
+    private function requeueDeletions(array $targets, array $unreadable): void
+    {
+        $pending = $this->state()['deletions'] ?? [];
+        if (!$pending) {
+            return;
+        }
+        $sources = self::sources($targets);
+        $ids = [];
+        foreach ($pending as $tenant => $productIds) {
+            if (isset($sources[$tenant])) {
+                $ids = array_merge($ids, $productIds);
+                unset($pending[$tenant]);
+            } elseif (!in_array((string) $tenant, $unreadable, true)) {
+                unset($pending[$tenant]);
+            }
+        }
+        if ($ids) {
+            $this->queue->enqueue(array_values(array_unique($ids)));
+        }
+        $this->saveState(['deletions' => $pending ?: null]);
     }
 
     /**

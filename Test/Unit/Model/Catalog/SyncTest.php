@@ -35,6 +35,8 @@ class SyncTest extends TestCase
     private array $expanded = [];
     private bool $locked = false;
     private ?int $brokenKey = null;
+    /** A website whose stored key decrypts to nothing. */
+    private ?int $emptyKey = null;
     private string $now = '2026-09-29 14:00:00 UTC';
     /** @var callable|null */
     private $onPost;
@@ -273,6 +275,72 @@ class SyncTest extends TestCase
         $this->assertSame('', $this->queued[9]);
     }
 
+    public function testADeletionStaysQueuedForACompanyWhoseKeyCannotBeRead(): void
+    {
+        $sync = $this->sync([200, 200, 200], tenants: [1 => 'a', 3 => 'b']);
+        $this->brokenKey = 1;
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->queued = [5 => '', 9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        // 5 and 9 went to b; 9's switch-off is kept for a, out of the queue, so b is not sent it every run.
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertSame(['a' => [9]], $this->flag['deletions']);
+
+        // a's key is saved again: the whole catalog, and 9's switch-off with it.
+        $this->brokenKey = null;
+        $this->calls = [];
+        $sync->run();
+
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertSame(['key-1', 'key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([[9, 'store-1'], [9, 'store-3']], array_column($this->calls, 'built'));
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertArrayNotHasKey('deletions', $this->flag);
+    }
+
+    public function testADeletionKeptForADisconnectedCompanyIsForgotten(): void
+    {
+        $this->flag = ['tenants' => ['b' => 3], 'full_at' => time(), 'deletions' => ['a' => [9]]];
+
+        $this->sync([], tenants: [3 => 'b'])->run(); // a's website is no longer connected at all
+
+        $this->assertArrayNotHasKey('deletions', $this->flag);
+        $this->assertSame([], array_keys($this->queued));
+    }
+
+    public function testADeletionStaysQueuedForACompanyWhoseKeyDecryptsToNothing(): void
+    {
+        $sync = $this->sync([200], tenants: [1 => 'a', 3 => 'b']);
+        $this->emptyKey = 1;
+        $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time()];
+        $this->queued = [5 => '', 9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame(['key-3'], array_column($this->calls, 'key'));
+        $this->assertSame([], array_keys($this->queued));
+        $this->assertSame(['a' => [9]], $this->flag['deletions']);
+    }
+
+    public function testAnUnreadableKeyOfACompanyAnotherWebsiteReachesKeepsNoDeletion(): void
+    {
+        // Websites 1 and 2 share company a; 2's key cannot be read, 1 still reaches a.
+        $sync = $this->sync([200], tenants: [1 => 'a', 2 => 'a']);
+        $this->brokenKey = 2;
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
+        $this->queued = [9 => ''];
+        $this->gone = [9];
+
+        $sync->run();
+
+        $this->assertSame([], array_keys($this->queued));
+    }
+
     public function testAnUnreadableVariantIsTriedOncePerRun(): void
     {
         // Configurable product 5's variant 9 cannot be read: it gets a row of its own, after 5.
@@ -342,6 +410,23 @@ class SyncTest extends TestCase
         $this->assertSame(['20', '40'], $requests[3]['reconcileGroupIds']);
     }
 
+    public function testTheWholeCatalogIsNotQueuedWhileARunHoldsTheSync(): void
+    {
+        // A run keeping a deletion for a company whose key cannot be read: --all must not overwrite it.
+        $sync = $this->sync([], tenants: [1 => 'a']);
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => 1, 'deletions' => ['b' => [9]]];
+        $this->locked = true;
+
+        $this->assertFalse($sync->queueAll());
+        $this->assertSame(0, $this->catalogQueued);
+        $this->assertSame(['tenants' => ['a' => 1], 'full_at' => 1, 'deletions' => ['b' => [9]]], $this->flag);
+
+        $this->locked = false;
+        $this->assertTrue($sync->queueAll());
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertSame(['b' => [9]], $this->flag['deletions']);
+    }
+
     public function testOneRunAtATime(): void
     {
         $sync = $this->sync([200]);
@@ -368,8 +453,9 @@ class SyncTest extends TestCase
             if ((int) $id === $this->brokenKey) {
                 throw new \Exception('Unable to decrypt the key.');
             }
-            return isset($tenants[(int) $id]) ? "key-$id" : null;
+            return isset($tenants[(int) $id]) && (int) $id !== $this->emptyKey ? "key-$id" : null;
         });
+        $config->method('hasWebsiteApiKey')->willReturnCallback(fn ($id) => isset($tenants[(int) $id]));
 
         $storeManager = $this->createStub(StoreManagerInterface::class);
         $storeManager->method('getWebsites')->willReturn(array_reverse($websites, true));
@@ -420,6 +506,11 @@ class SyncTest extends TestCase
         $queue = $this->createStub(ProductSyncQueue::class);
         $queue->method('enqueueAll')->willReturnCallback(function () {
             $this->catalogQueued++;
+        });
+        $queue->method('enqueue')->willReturnCallback(function ($ids) {
+            foreach ($ids as $id) {
+                $this->queued[$id] = '';
+            }
         });
         $queue->method('claimNext')->willReturnCallback(function ($limit, $after, $claim) {
             ksort($this->queued);

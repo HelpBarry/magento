@@ -254,7 +254,8 @@ class Adder
     }
 
     /**
-     * A bundle's default selections, as its product page preselects them.
+     * A bundle's default selections, as its product page preselects them: a required option with a
+     * single selection on sale takes that one, default or not (the page submits it without a choice).
      *
      * @param Product $bundle
      * @return array
@@ -265,17 +266,27 @@ class Adder
         $type = $bundle->getTypeInstance();
         $options = [];
         $quantities = [];
+        $available = [];
         $selections = $type->getSelectionsCollection($type->getOptionsIds($bundle), $bundle);
         foreach ($selections as $selection) {
+            $optionId = (int) $selection->getOptionId();
+            // The selections the product page lists (see appendSelections() of Magento's bundle options).
+            if ($selection->isSalable() && !$selection->getRequiredOptions()) {
+                $available[$optionId][] = $selection;
+            }
             if (!$selection->getIsDefault()) {
                 continue;
             }
-            $optionId = (int) $selection->getOptionId();
             $options[$optionId][] = (int) $selection->getSelectionId();
             $quantities[$optionId][(int) $selection->getSelectionId()] = (float) $selection->getSelectionQty() ?: 1;
         }
         foreach ($type->getOptionsCollection($bundle) as $option) {
             $optionId = (int) $option->getId();
+            if ($option->getRequired() && count($available[$optionId] ?? []) === 1) {
+                $single = $available[$optionId][0];
+                $options[$optionId] = [(int) $single->getSelectionId()];
+                $quantities[$optionId] = [(int) $single->getSelectionId() => (float) $single->getSelectionQty() ?: 1];
+            }
             if (!isset($options[$optionId])) {
                 continue;
             }

@@ -188,6 +188,20 @@ test.describe('catalog sync', () => {
       expect(property((await sent(id))[0], 'price')).toBe(121);
       const minPrice = Number(sql(`SELECT min_price FROM catalog_product_index_price WHERE entity_id = ${bundle} AND customer_group_id = 0 AND website_id = 1`));
       expect(property((await sent(bundle))[0], 'price')).toBeCloseTo(Math.round(minPrice * 121) / 100, 2);
+
+      // Parts taxed differently: each part by its own rate, as Magento shows the bundle.
+      const partB = productId('bb-part-b');
+      const partPrice = (part: string) =>
+        Number(sql(`SELECT final_price FROM catalog_product_index_price WHERE entity_id = ${part} AND customer_group_id = 0 AND website_id = 1`));
+      sql(`UPDATE catalog_product_entity_int SET value = 0 WHERE entity_id = ${partB} AND attribute_id = ${taxClass} AND store_id = 0`);
+      try {
+        await mockApi.reset();
+        syncCatalog('--all');
+        const expected = Math.round(partPrice(productId('bb-part-a')) * 121 + partPrice(partB) * 100) / 100;
+        expect(property((await sent(bundle))[0], 'price')).toBeCloseTo(expected, 2);
+      } finally {
+        sql(`UPDATE catalog_product_entity_int SET value = 2 WHERE entity_id = ${partB} AND attribute_id = ${taxClass} AND store_id = 0`);
+      }
     } finally {
       sql(`UPDATE catalog_product_entity_int SET value = 2 WHERE entity_id = ${bundle} AND attribute_id = ${taxClass} AND store_id = 0`);
       sql("DELETE FROM core_config_data WHERE path = 'tax/display/type'");
