@@ -65,19 +65,23 @@ if ($tenantId != null && $tenantId != "") {
             return match ? decodeURIComponent(match[1]) : '';
         }
         var sending = false, next = null, wanted = '', EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        // Sent in place of an email when a guest removed theirs: the one noted is not sent.
+        var WITHDRAW = {};
         function send(email) {
-            // One at a time, the latest last: an older answer never overwrites a newer email.
+            // One at a time, the latest last: an older answer never overwrites a newer email (or its
+            // withdrawal).
             if (sending) { next = email; return; }
             if (email === last) return;
             sending = true;
+            var fields = email === WITHDRAW ? {form_key: formKey(), email: '', withdraw: '1'} : {form_key: formKey(), email: email};
             fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-                body: new URLSearchParams({form_key: formKey(), email: email}).toString()
+                body: new URLSearchParams(fields).toString()
             }).then(function (response) { return response.ok ? response.json() : null; }).then(function (result) {
-                // Only a noted email is not sent again; after a failure retry() sends it again.
-                if (result && result.noted) last = email;
+                // Only a noted email (or withdrawal) is not sent again; after a failure retry() sends it again.
+                if (result && (result.noted || result.withdrawn)) last = email;
             }).catch(function () {}).then(function () {
                 sending = false;
                 if (next !== null) { var queued = next; next = null; send(queued); }
@@ -91,8 +95,9 @@ if ($tenantId != null && $tenantId != "") {
             clearTimeout(timer);
             timer = setTimeout(function () {
                 var email = String(field.value || '').trim();
-                // An email the shopper removed or is still correcting is not sent again.
-                if (EMAIL.test(email)) { wanted = email; send(email); retry(); } else { wanted = ''; next = null; }
+                // An email the shopper removed or is still correcting is not sent: the one noted before,
+                // on this page or an earlier one, is withdrawn (once, until another email is given).
+                if (EMAIL.test(email)) { wanted = email; send(email); retry(); } else { wanted = ''; send(WITHDRAW); }
             }, 800);
         }
         document.addEventListener('input', typed, true);

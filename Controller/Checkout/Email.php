@@ -17,8 +17,8 @@ use Magento\Store\Model\StoreManagerInterface;
 /**
  * POST bluebarry/checkout/email: the checkout page tells the module the email the shopper gave (or,
  * signed in, their account's), for bluebarry's abandoned checkout flow. One row on the module's own
- * table; the cron sends it once the shopper stopped typing (Model\Orders\Sync). Only for the shopper's
- * own cart, with the form key.
+ * table; the cron sends it once the shopper stopped typing (Model\Orders\Sync). With withdraw=1, a
+ * guest removed the email: it is not sent. Only for the shopper's own cart, with the form key.
  */
 class Email implements HttpPostActionInterface, CsrfAwareActionInterface
 {
@@ -105,7 +105,19 @@ class Email implements HttpPostActionInterface, CsrfAwareActionInterface
             return $result->setData(['noted' => false]);
         }
         $quote = $this->checkoutSession->getQuote();
-        if (!$quote->getId() || !$quote->getItemsCount()) {
+        if (!$quote->getId()) {
+            return $result->setData(['noted' => false]);
+        }
+        if ($this->request->getParam('withdraw')) {
+            // A guest removed their email, or is correcting it: the one noted is not sent. A signed-in
+            // shopper's account email is theirs whatever the field says.
+            $guest = !$quote->getCustomerId();
+            if ($guest) {
+                $this->notes->withdraw((int) $quote->getId());
+            }
+            return $result->setData(['noted' => false, 'withdrawn' => $guest]);
+        }
+        if (!$quote->getItemsCount()) {
             return $result->setData(['noted' => false]);
         }
         $email = trim((string) $this->request->getParam('email'));

@@ -191,6 +191,28 @@ test.describe('orders', () => {
     expect((await sentOrders()).length).toBeGreaterThan(0);
   });
 
+  test('an email a guest removed before it was sent is not sent', async ({ page }) => {
+    await stubAdvisor(page, null, { visitor: false });
+    await addToCart(page, 'bb-simple');
+    await page.goto('/checkout/');
+    const email = page.locator('#customer-email');
+    await expect(email).toBeVisible({ timeout: 60_000 });
+    await email.fill('wrong-recipient@example.com');
+    await expect.poll(() => sql("SELECT COUNT(*) FROM bluebarry_checkout WHERE email = 'wrong-recipient@example.com'"), { timeout: 10_000 }).toBe('1');
+    const quoteId = sql("SELECT quote_id FROM bluebarry_checkout WHERE email = 'wrong-recipient@example.com'");
+
+    await email.fill('');
+    await expect.poll(() => sql(`SELECT email FROM bluebarry_checkout WHERE quote_id = ${quoteId}`), { timeout: 10_000 }).toBe('');
+    sql(`UPDATE bluebarry_checkout SET noted_at = UTC_TIMESTAMP() - INTERVAL 2 MINUTE WHERE quote_id = ${quoteId}`);
+    syncOrders();
+    expect(await sent('/data/magento/checkout-started')).toEqual([]);
+
+    // Given again, it is a change that goes once settled.
+    await email.fill('wrong-recipient@example.com');
+    await expect.poll(() => sql(`SELECT CONCAT(email, ':', sent_at IS NULL) FROM bluebarry_checkout WHERE quote_id = ${quoteId}`), { timeout: 10_000 })
+      .toBe('wrong-recipient@example.com:1');
+  });
+
   test("without the shopper's cookie consent the checkout's email is not kept", async ({ page }) => {
     magento('config:set', 'web/cookie/cookie_restriction', '1');
     magento('cache:flush');
