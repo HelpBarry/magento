@@ -200,13 +200,23 @@ class Sync
 
     /**
      * Queues every product, and sends after a failure right away (bin/magento bluebarry:catalog:sync --all).
+     * Holds the sync, like run(): a run writing its state meanwhile (a deletion it keeps for a company)
+     * would otherwise be overwritten.
      *
-     * @return void
+     * @return bool false when another run holds the sync: nothing was queued
      */
-    public function queueAll(): void
+    public function queueAll(): bool
     {
-        $this->queue->enqueueAll();
-        $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+        if (!$this->locks->lock(self::LOCK, 0)) {
+            return false;
+        }
+        try {
+            $this->queue->enqueueAll();
+            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+            return true;
+        } finally {
+            $this->locks->unlock(self::LOCK);
+        }
     }
 
     /**

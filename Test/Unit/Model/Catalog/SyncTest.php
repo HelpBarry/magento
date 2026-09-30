@@ -410,6 +410,23 @@ class SyncTest extends TestCase
         $this->assertSame(['20', '40'], $requests[3]['reconcileGroupIds']);
     }
 
+    public function testTheWholeCatalogIsNotQueuedWhileARunHoldsTheSync(): void
+    {
+        // A run keeping a deletion for a company whose key cannot be read: --all must not overwrite it.
+        $sync = $this->sync([], tenants: [1 => 'a']);
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => 1, 'deletions' => ['b' => [9]]];
+        $this->locked = true;
+
+        $this->assertFalse($sync->queueAll());
+        $this->assertSame(0, $this->catalogQueued);
+        $this->assertSame(['tenants' => ['a' => 1], 'full_at' => 1, 'deletions' => ['b' => [9]]], $this->flag);
+
+        $this->locked = false;
+        $this->assertTrue($sync->queueAll());
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertSame(['b' => [9]], $this->flag['deletions']);
+    }
+
     public function testOneRunAtATime(): void
     {
         $sync = $this->sync([200]);
