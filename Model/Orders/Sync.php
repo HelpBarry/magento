@@ -520,8 +520,8 @@ class Sync
             } catch (\Exception $e) {
                 // The cart is gone: the email still goes, without products.
             }
-            // Still this revision, and from now on on its way: a guest who withdrew the email meanwhile wins.
-            if (!$this->checkouts->claim((int) $note['quote_id'], (int) $note['revision'])) {
+            // Still this revision: a guest who withdrew the email meanwhile wins.
+            if (!$this->checkouts->isCurrent((int) $note['quote_id'], (int) $note['revision'])) {
                 continue;
             }
             $response = $this->client->post('/data/magento/checkout-started', [
@@ -533,13 +533,12 @@ class Sync
                 'lines' => $lines,
             ], $target['tenantId'], $target['apiKey'], 15);
             if ($response->isSuccess() || !$this->isOutage($response)) {
-                // Claimed: marked sent already.
+                $this->checkouts->markSent((int) $note['quote_id'], (int) $note['revision']);
                 if ($response->isSuccess()) {
                     $this->forgetFailures($websiteId);
                     $sent++;
                 }
             } else {
-                $this->checkouts->release((int) $note['quote_id'], (int) $note['revision']);
                 $waiting[$websiteId] = true;
                 $this->noteOutage($websiteId, $response);
             }
