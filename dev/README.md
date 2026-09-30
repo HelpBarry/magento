@@ -87,6 +87,9 @@ a real staging shop before a release.
 
 1. In each PR that changes the module, add a line under `## [Unreleased]` in `CHANGELOG.md`, grouped
    under `### Added`, `### Changed` or `### Fixed`.
+   The **Changelog entry** PR check requires a new or updated Unreleased bullet for module changes.
+   Describe all customer-visible changes in the PR. Documentation, test and CI/build-tool changes
+   alone do not require a release note.
 2. Run **Actions → Release → Run workflow** on `main` and pick patch, minor or major. The workflow:
    - bumps `composer.json` and `etc/module.xml`
    - moves the Unreleased entries into a dated version section, and adds the Marketplace-style
