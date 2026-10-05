@@ -341,13 +341,17 @@ class Cart
             return ['retry', ''];
         }
         try {
-            $this->coupons->ensure($spec + ['requiredProductIds' => $required], $website, DiscountRules::KIND_OFFER);
+            $made = $this->coupons->ensure($spec + ['requiredProductIds' => $required], $website, DiscountRules::KIND_OFFER);
         } catch (RefusedException $e) {
             $this->logger->info('bluebarry: an offer gives nothing here: ' . $e->getMessage());
             return ['invalid', ''];
         } catch (\Exception $e) {
             $this->logger->warning('bluebarry: could not make the code for an offer: ' . $e->getMessage());
             return ['retry', ''];
+        }
+        if (empty($made['exists']) || (int) $made['usageCount'] > 0 || ($made['status'] ?? '') !== 'publish') {
+            // The offer's one code was spent already (on an earlier order), or has ended: it gives nothing more.
+            return ['invalid', ''];
         }
         $code = (string) ($spec['code'] ?? '');
         // The cart as it is now, not as it was before bluebarry was asked: the shopper may have changed

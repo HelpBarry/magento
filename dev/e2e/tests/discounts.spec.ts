@@ -411,6 +411,26 @@ test.describe('discounts from bluebarry', () => {
     expect(await quote(page)).toMatchObject({ discount: 10 });
   });
 
+  test('a customer group the merchant makes later gets bluebarry\'s codes too', async ({ request }) => {
+    const code = unique('GROUPS');
+    expect((await command(request, 'coupon.create', { code, discountType: 'percent', amount: 10, productIds: [] })).status).toBe(200);
+    const headers = { Authorization: `Bearer ${await adminToken(request)}` };
+    const created = await request.post('/rest/V1/customerGroups', { headers, data: { group: { code: `Wholesale ${randomUUID().slice(0, 8)}`, tax_class_id: 3 } } });
+    expect(created.status(), await created.text()).toBe(200);
+    const groupId = (await created.json()).id;
+    try {
+      // A cart price rule holds for the customer groups it has: the new one is not among them yet.
+      const holds = () => sql(`SELECT COUNT(*) FROM salesrule_customer_group WHERE rule_id = ${rule(code)!.id} AND customer_group_id = ${groupId}`);
+      expect(holds()).toBe('0');
+      magento('bluebarry:discounts:clean');
+      expect(holds()).toBe('1');
+      // The merchant's own rule is left as they made it.
+      expect(sql(`SELECT COUNT(*) FROM salesrule_customer_group WHERE rule_id = ${ownRuleId} AND customer_group_id = ${groupId}`)).toBe('0');
+    } finally {
+      await request.delete(`/rest/V1/customerGroups/${groupId}`, { headers });
+    }
+  });
+
   test('a code ends by being removed once its last moment has passed', async ({ request }) => {
     const ended = unique('ENDED');
     const lasting = unique('LASTS');
@@ -480,5 +500,20 @@ test.describe('the rewards panel on a store with customer accounts', () => {
     expect(vouched).toHaveLength(1);
     expect(vouched[0].headers.authorization).toBe(KEY);
     expect(vouched[0].body).toEqual({ email, referralCode: 'FRIEND1' });
+
+    // A store view given another Tenant ID shows another bluebarry account's rewards panel. The
+    // website's key is not that account's: its pages name no session address, and nobody is vouched for.
+    await mockApi.reset();
+    try {
+      magento('config:set', '--scope=stores', '--scope-code=default', 'bluebarry_module/general/tenantid', randomUUID());
+      magento('cache:flush');
+      await page.goto('/bb-simple.html');
+      expect(await page.evaluate(() => (window as any).barry.loyaltySessionUrl)).toBeUndefined();
+      expect(await ask('', true)).toMatchObject({ status: 200, body: { customerId: null } });
+      expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/loyalty/customer-session')).toHaveLength(0);
+    } finally {
+      sql("DELETE FROM core_config_data WHERE path = 'bluebarry_module/general/tenantid' AND scope = 'stores'");
+      magento('cache:flush');
+    }
   });
 });

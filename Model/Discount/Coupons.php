@@ -186,6 +186,10 @@ class Coupons
             throw new \RuntimeException('Another discount code is being made; try again.');
         }
         try {
+            // The same request delivered twice at once: the other one made the code while this one waited.
+            if ($this->rules->coupon($code, $tenantId) !== null) {
+                return $this->state($code, $website);
+            }
             $ruleId = $this->ruleFor($terms, $kind, $tenantId);
             $coupon = $this->couponFactory->create();
             $coupon->setRuleId($ruleId)
@@ -319,12 +323,14 @@ class Coupons
     /**
      * From the cron, every few minutes: codes whose last moment has passed are removed, which is what
      * ends them (and keeps a busy store from holding one per person forever); then offer rules that
-     * hold no code any more, then the notes of rules the merchant deleted. A batch a run.
+     * hold no code any more, then the notes of rules the merchant deleted. A batch a run. And the rules
+     * are opened to customer groups the merchant made since: a rule only holds for the groups it has.
      *
      * @return array{codes: int, rules: int}
      */
     public function cleanUp(): array
     {
+        $this->rules->openToNewCustomerGroups();
         $codes = $this->rules->deleteExpiredCodes(gmdate('Y-m-d H:i:s'), 2000);
         $rules = 0;
         $empty = $this->rules->emptyOfferRules(gmdate('Y-m-d H:i:s', time() - 86400), 50);
