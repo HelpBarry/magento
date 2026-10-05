@@ -90,11 +90,14 @@ class Session implements HttpGetActionInterface
         $result->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0', true);
         $none = ['customerId' => null];
 
-        $websiteId = $this->storeManager->getStore()->getWebsiteId();
+        $store = $this->storeManager->getStore();
+        $websiteId = $store->getWebsiteId();
         $tenantId = $this->config->getWebsiteTenantId($websiteId);
         $apiKey = $this->config->getWebsiteApiKey($websiteId);
         $email = $this->customerSession->isLoggedIn() ? trim((string) $this->customerSession->getCustomer()->getEmail()) : '';
-        if ($tenantId === null || $apiKey === null || $email === '') {
+        // Only for the account the website's key is for: a store view given another Tenant ID shows
+        // another account's rewards panel, and that account gets no customer of this website's.
+        if ($tenantId === null || $apiKey === null || $email === '' || strcasecmp($tenantId, (string) $this->config->getTenantId($store->getId())) !== 0) {
             return $result->setData($none);
         }
         $customerId = (string) $this->customerSession->getCustomerId();

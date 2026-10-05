@@ -6,6 +6,7 @@ use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\DB\Adapter\AdapterInterface;
 use Magento\Framework\EntityManager\MetadataPool;
+use Magento\SalesRule\Api\Data\RuleInterface;
 
 /**
  * The bluebarry_discount_rule table: which cart price rules are bluebarry's, by the hash of their
@@ -316,6 +317,29 @@ class DiscountRules
                 ->limit($limit)
         );
         return $ids ? (int) $connection->delete($this->table(), ['rule_id IN (?)' => $ids]) : 0;
+    }
+
+    /**
+     * Opens bluebarry's rules to customer groups made after them. A cart price rule holds for the groups
+     * it was saved with, so a code would give nothing to a customer in a group the merchant added
+     * later. One statement, which adds nothing when no group is missing.
+     *
+     * @return int how many rules and groups were paired
+     */
+    public function openToNewCustomerGroups(): int
+    {
+        $connection = $this->resource->getConnection();
+        $linkField = $this->metadataPool->getMetadata(RuleInterface::class)->getLinkField();
+        $links = $this->resource->getTableName('salesrule_customer_group');
+        $select = $connection->select()
+            ->from(['ours' => $this->table()], [])
+            ->join(['rule' => $this->resource->getTableName('salesrule')], 'rule.rule_id = ours.rule_id', [$linkField])
+            ->joinCross(['customers' => $this->resource->getTableName('customer_group')], ['customer_group_id'])
+            ->joinLeft(['link' => $links], "link.$linkField = rule.$linkField AND link.customer_group_id = customers.customer_group_id", [])
+            ->where('link.customer_group_id IS NULL');
+        return (int) $connection->query(
+            $connection->insertFromSelect($select, $links, [$linkField, 'customer_group_id'], AdapterInterface::INSERT_IGNORE)
+        )->rowCount();
     }
 
     /**

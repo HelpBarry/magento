@@ -40,6 +40,8 @@ class CouponsTest extends TestCase
     private array $orders = [];
     /** @var string[] the locks taken */
     private array $lockNames = [];
+    private ?\Closure $whileWaitingForTheLock = null;
+    private int $openedToGroups = 0;
     /** @var array<string, string[]> product id => the configurable products it is a variant of */
     private array $parents = ['17' => ['mug'], '18' => ['mug', 'mug-gift-set']];
     private bool $endFails = false;
@@ -232,6 +234,27 @@ class CouponsTest extends TestCase
         $this->assertSame(['exists' => true, 'id' => 3, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0002', $this->website(1)));
     }
 
+    public function testTheSameRequestDeliveredTwiceAtOnceMakesOneCode(): void
+    {
+        $coupons = $this->coupons();
+        // The other delivery makes the code while this one waits for the lock.
+        $this->whileWaitingForTheLock = function () {
+            $this->coupons['CODE-0001'] = ['coupon_id' => '7', 'rule_id' => '101', 'times_used' => '0', 'created_at' => null, 'expires_at' => null, 'is_active' => '1', 'ours' => true, 'tenant' => 'tenant'];
+        };
+
+        $state = $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+
+        $this->assertSame(['exists' => true, 'id' => 7, 'status' => 'publish', 'usageCount' => 0], $state);
+        $this->assertSame([], $this->posted);
+    }
+
+    public function testTheCleanUpOpensTheRulesToCustomerGroupsMadeSince(): void
+    {
+        $this->coupons()->cleanUp();
+
+        $this->assertSame(1, $this->openedToGroups);
+    }
+
     public function testACodeThatCannotBeLockedIsNotTakenBack(): void
     {
         $coupons = $this->coupons();
@@ -360,6 +383,7 @@ class CouponsTest extends TestCase
             }
             return false;
         });
+        $rules->method('openToNewCustomerGroups')->willReturnCallback(fn () => ++$this->openedToGroups);
         $rules->method('emptyOfferRules')->willReturn($emptyOfferRules);
         $rules->method('hasCodes')->willReturnCallback(fn ($ruleId) => in_array($ruleId, $withCodes, true));
         $rules->method('forget')->willReturnCallback(function ($ruleId) use (&$removed) {
@@ -430,6 +454,10 @@ class CouponsTest extends TestCase
         $locks = $this->createStub(LockManagerInterface::class);
         $locks->method('lock')->willReturnCallback(function ($name) {
             $this->lockNames[] = $name;
+            if ($this->whileWaitingForTheLock) {
+                ($this->whileWaitingForTheLock)();
+                $this->whileWaitingForTheLock = null;
+            }
             return !$this->locked;
         });
 

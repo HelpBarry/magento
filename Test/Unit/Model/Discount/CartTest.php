@@ -38,6 +38,8 @@ class CartTest extends TestCase
     /** @var array<int, array> the codes made for offers */
     private array $made = [];
     private ?\Exception $makingFails = null;
+    /** @var array what the store says of an offer's code, where it differs from a fresh, usable one */
+    private array $codeState = [];
     /** @var array<string, string> the store's cache */
     private array $cache = [];
     /** The cart as the database has it once bluebarry answered, when the shopper changed it meanwhile. */
@@ -197,6 +199,14 @@ class CartTest extends TestCase
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-X', 'discountType' => 'percent', 'amount' => 10]))];
         $this->makingFails = new RefusedException('None of the products exist in this store.');
         $this->assertSame([$grant], $this->cart()->redeemOffers([$grant])['drop']);
+        // Its one code was spent on an earlier order, or has ended: it gives nothing more, and is not asked about again.
+        foreach ([['usageCount' => 1], ['status' => 'disabled'], ['exists' => false]] as $state) {
+            $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-X', 'discountType' => 'percent', 'amount' => 10]))];
+            $this->codeState = $state;
+            $this->assertSame([$grant], $this->cart()->redeemOffers([$grant])['drop']);
+            $this->assertSame('', $this->quote->coupon);
+        }
+        $this->codeState = [];
         // The store could not make it right now: tried again after the next cart change.
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-X', 'discountType' => 'percent', 'amount' => 10]))];
         $this->makingFails = new \RuntimeException('deadlock');
@@ -309,7 +319,7 @@ class CartTest extends TestCase
             }
             $this->made[] = ['spec' => $spec, 'kind' => $kind];
             $this->ours[] = strtoupper($spec['code']);
-            return ['exists' => true, 'id' => 1, 'status' => 'publish', 'usageCount' => 0];
+            return $this->codeState + ['exists' => true, 'id' => 1, 'status' => 'publish', 'usageCount' => 0];
         });
         $client = $this->createStub(Client::class);
         $client->method('post')->willReturnCallback(function ($path, $body) {
