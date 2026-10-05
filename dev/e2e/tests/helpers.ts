@@ -6,6 +6,8 @@ import path from 'node:path';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin');
+/** The storefront under test, as Magento's own base URL names it (HTTP_PORT picks another port locally). */
+export const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
 export const MOCK_API = process.env.MOCK_API_URL ?? 'http://localhost:8099';
 export const WAF_URL = process.env.WAF_URL ?? 'http://localhost:8081';
 

@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import { addToCart, adminToken, magento, newAdvisorIds, sql, stubAdvisor } from './helpers';
+import { addToCart, adminToken, BASE_URL, magento, newAdvisorIds, sql, stubAdvisor } from './helpers';
 
 // The page as bluebarry's SDK tracks it (magento-internal#10): what each page says about itself (only
 // what its address decides, so the full page cache is safe), and every add to the cart noted for the
@@ -179,7 +179,7 @@ test.describe('page tracking', () => {
     expect(await noted(page)).toEqual([]);
 
     // The shopper allows cookies (Magento's own notice sets this).
-    await page.context().addCookies([{ name: 'user_allowed_save_cookie', value: encodeURIComponent('{"1":1}'), url: 'http://localhost:8080' }]);
+    await page.context().addCookies([{ name: 'user_allowed_save_cookie', value: encodeURIComponent('{"1":1}'), url: BASE_URL }]);
     expect(await page.evaluate(() => (window as any).barry.analyticsAllowed())).toBe(true);
     await addToCart(page, 'bb-simple');
     expect(await noted(page)).toHaveLength(1);

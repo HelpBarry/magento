@@ -6,6 +6,7 @@ import {
   addToCart,
   adminLogin,
   adminToken,
+  BASE_URL,
   checkoutAsGuest,
   magento,
   mockApi,
@@ -112,7 +113,7 @@ test.describe('catalog sync', () => {
     const [product] = await sent(productId(SKU));
     expect(product).toMatchObject({
       name: 'Bluebarry Catalog Product',
-      url: `http://localhost:8080/${SKU}.html`,
+      url: `${BASE_URL}/${SKU}.html`,
       inactive: false,
     });
     expect(product.imageUrl).toMatch(/\/media\/catalog\/product\/.*bb-front.*\.png$/);
@@ -127,7 +128,7 @@ test.describe('catalog sync', () => {
     // A configurable product's children are the products, grouped under it; it has none of its own.
     const parent = productId('bb-configurable');
     const [red] = await sent(productId('bb-configurable-red'));
-    expect(red).toMatchObject({ groupId: parent, name: 'Bluebarry Configurable Product', url: 'http://localhost:8080/bb-configurable.html' });
+    expect(red).toMatchObject({ groupId: parent, name: 'Bluebarry Configurable Product', url: `${BASE_URL}/bb-configurable.html` });
     expect(property(red, 'attr_color')).toBe('BB Red');
     expect(await sent(parent)).toEqual([]);
     expect(requests.flatMap((r) => r.body.reconcileGroupIds)).toContain(parent);
