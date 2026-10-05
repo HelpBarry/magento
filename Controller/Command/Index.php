@@ -140,9 +140,9 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
                     return $result->setHttpResponseCode(422)->setData(['ok' => false, 'error' => $e->getMessage()]);
                 }
             case 'coupon.get':
-                return $result->setData($this->coupons->state((string) ($decoded['payload']['code'] ?? '')));
+                return $result->setData($this->coupons->state((string) ($decoded['payload']['code'] ?? ''), $website));
             case 'coupon.revoke':
-                return $result->setData($this->coupons->revoke((string) ($decoded['payload']['code'] ?? '')));
+                return $result->setData($this->coupons->revoke((string) ($decoded['payload']['code'] ?? ''), $website));
             default:
                 return $result->setHttpResponseCode(404)->setData(['ok' => false, 'error' => 'Unknown command.']);
         }

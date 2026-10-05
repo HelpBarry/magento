@@ -9,9 +9,10 @@ use Magento\Store\Model\StoreManagerInterface;
 
 /**
  * What is in the cart, as the catalog sync names it (the variant for a configurable product), added
- * to the shopper's own cart data: recommendation blocks leave it out and recommend from it. It
- * travels with the cart section Magento already loads after the cart changed, so no page and no
- * request is added for it, and pages from the full page cache never hold it.
+ * to the shopper's own cart data: recommendation blocks leave it out and recommend from it, and
+ * bluebarry's discounts that wait in the browser know by it when the cart changed. It travels with the
+ * cart section Magento already loads after the cart changed, so no page and no request is added for
+ * it, and pages from the full page cache never hold it.
  */
 class CartReferences
 {

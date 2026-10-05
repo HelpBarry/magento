@@ -47,40 +47,44 @@ class CartTest extends TestCase
     {
         $this->quote->lines = [new QuoteItemDouble(10)];
 
-        $this->assertSame(['applied' => true, 'waiting' => false], $this->cart()->applyCode(' QUIZ10 '));
+        $this->assertSame('applied', $this->cart()->applyCode(' QUIZ10 '));
 
         $this->assertSame('QUIZ10', $this->quote->coupon);
         // The merchant's own coupon, put there by this module: it may give way to a newer bluebarry code.
         $this->assertTrue($this->cart()->isOurs('quiz10'));
     }
 
-    public function testACodeThisStoreDoesNotHaveIsNotKeptWaiting(): void
-    {
-        $this->quote->lines = [new QuoteItemDouble(10)];
-
-        $this->assertSame(['applied' => false, 'waiting' => false, 'reason' => 'unknown'], $this->cart()->applyCode('NO-SUCH'));
-        $this->assertSame([], $this->session->data);
-        $this->assertSame([], $this->quote->collected);
-    }
-
-    public function testAnEmptyCartKeepsTheCodeWaiting(): void
-    {
-        $this->assertSame(['applied' => false, 'waiting' => true], $this->cart()->applyCode('QUIZ10'));
-
-        $this->assertSame(['code' => 'QUIZ10', 'tries' => 0], $this->session->data[Cart::SESSION_WAITING]);
-        $this->assertSame('', $this->quote->coupon);
-    }
-
-    public function testTheShoppersOwnCodeIsNeverPushedOut(): void
+    public function testACodeTheShopperEnteredThemselvesStaysTheirs_AlsoWhenAPopupOffersTheSameOne(): void
     {
         $this->quote->lines = [new QuoteItemDouble(10)];
         $this->quote->coupon = 'MERCHANT5';
 
-        $this->assertSame(['applied' => false, 'waiting' => false, 'reason' => 'other_code'], $this->cart()->applyCode('BB-NEWER'));
+        // The popup's code is the very code on the cart: given, and nothing changes hands.
+        $this->assertSame('applied', $this->cart()->applyCode('merchant5'));
+        $this->assertFalse($this->cart()->isOurs('MERCHANT5'));
 
+        // So a later bluebarry code still does not push it out.
+        $this->assertSame('other_code', $this->cart()->applyCode('BB-NEWER'));
         $this->assertSame('MERCHANT5', $this->quote->coupon);
         $this->assertSame([], $this->quote->collected);
-        $this->assertArrayNotHasKey(Cart::SESSION_WAITING, $this->session->data);
+    }
+
+    public function testACodeThisStoreDoesNotHaveIsUnknown(): void
+    {
+        $this->quote->lines = [new QuoteItemDouble(10)];
+
+        $this->assertSame('unknown', $this->cart()->applyCode('NO-SUCH'));
+        $this->assertSame('unknown', $this->cart()->applyCode(''));
+        $this->assertSame([], $this->quote->collected);
+    }
+
+    public function testAnEmptyCartCannotTakeACodeYet_AndNothingOfItIsKeptHere(): void
+    {
+        $this->assertSame('waiting', $this->cart()->applyCode('QUIZ10'));
+
+        $this->assertSame('', $this->quote->coupon);
+        // The browser holds what waits: a session can lose it to another request of the same shopper.
+        $this->assertSame([], $this->session->data);
     }
 
     public function testANewerBluebarryCodeReplacesAnOlderOne_AndOneTheCartRefusesLeavesTheOlderOneOn(): void
@@ -88,15 +92,19 @@ class CartTest extends TestCase
         $this->quote->lines = [new QuoteItemDouble(10)];
         $this->quote->coupon = 'BB-OLDER';
 
-        $this->assertTrue($this->cart()->applyCode('BB-NEWER')['applied']);
+        $this->assertSame('applied', $this->cart()->applyCode('BB-NEWER'));
         $this->assertSame('BB-NEWER', $this->quote->coupon);
 
-        // Below its minimum: the cart drops it, the code it had goes back on, and this one waits.
+        // Below its minimum: the cart drops it, and the code it had goes back on.
         $this->quote->coupon = 'BB-OLDER';
         $this->quote->accepts = fn (string $code) => $code !== 'BB-NEWER';
-        $this->assertSame(['applied' => false, 'waiting' => true], $this->cart()->applyCode('BB-NEWER'));
+        $this->assertSame('waiting', $this->cart()->applyCode('BB-NEWER'));
         $this->assertSame('BB-OLDER', $this->quote->coupon);
-        $this->assertSame('BB-NEWER', $this->session->data[Cart::SESSION_WAITING]['code']);
+
+        // Asked again once the cart can take it: it takes over.
+        $this->quote->accepts = fn () => true;
+        $this->assertSame('applied', $this->cart()->applyCode('BB-NEWER'));
+        $this->assertSame('BB-NEWER', $this->quote->coupon);
     }
 
     public function testAnOfferWaitsForItsProducts_ThenBecomesACodeOnTheCart(): void
@@ -105,14 +113,15 @@ class CartTest extends TestCase
         $grant = self::offer(['variantIds' => ['17', '18'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
         $this->quote->lines = [new QuoteItemDouble(10)];
 
-        // Nothing of it in the cart: bluebarry is not asked.
-        $this->assertSame(['applied' => false, 'waiting' => false, 'offers' => 1], $cart->keepOffers([$grant, 'not-an-offer', '']));
+        // Nothing of it in the cart: bluebarry is not asked, and the browser keeps it. What is no
+        // offer at all is forgotten.
+        $this->assertSame(['applied' => false, 'drop' => ['', 'not-an-offer']], $cart->redeemOffers(['not-an-offer', $grant, '']));
         $this->assertSame([], $this->asked);
 
         // The variant of a configurable product counts, not the product the line shows.
         $this->quote->lines[] = new QuoteItemDouble(16, 17);
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-OFFER', 'discountType' => 'percent', 'amount' => 10, 'productIds' => ['17', '18']]))];
-        $this->assertSame(['applied' => true, 'waiting' => false, 'offers' => 0], $cart->redeemOffers());
+        $this->assertSame(['applied' => true, 'drop' => [$grant]], $cart->redeemOffers([$grant]));
 
         // The shopper is the one the browser's cookie names; part of the set is in the cart.
         $this->assertSame([['grant' => $grant, 'userId' => self::UID, 'wholeSet' => false]], $this->asked);
@@ -128,12 +137,12 @@ class CartTest extends TestCase
         $this->quote->lines = [new QuoteItemDouble(10), new QuoteItemDouble(16, 17)];
 
         // A bundle-only offer waits for the whole set.
-        $this->assertSame(1, $this->cart()->keepOffers([$grant])['offers']);
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
         $this->assertSame([], $this->asked);
 
         $this->quote->lines[] = new QuoteItemDouble(16, 18);
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-KIT', 'discountType' => 'percent', 'amount' => 15, 'productIds' => ['17', '18']]))];
-        $this->assertTrue($this->cart()->redeemOffers()['applied']);
+        $this->assertTrue($this->cart()->redeemOffers([$grant])['applied']);
 
         $this->assertTrue($this->asked[0]['wholeSet']);
         // What it was built around and the set itself: with one of them gone, the code gives nothing.
@@ -145,32 +154,40 @@ class CartTest extends TestCase
         $grant = self::offer(['variantIds' => ['17'], 'requiredVariantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 5]]]);
         $this->quote->lines = [new QuoteItemDouble(16, 17)];
 
-        $this->assertSame(['applied' => false, 'waiting' => false, 'offers' => 1], $this->cart()->keepOffers([$grant]));
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
         $this->assertSame([], $this->asked);
     }
 
-    public function testARefusedOfferIsDropped_OneBluebarryCouldNotCheckStays(): void
+    public function testARefusedOfferIsForgotten_OneBluebarryCouldNotCheckWaitsOn(): void
     {
         $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
         $this->quote->lines = [new QuoteItemDouble(10)];
 
         $this->answers = [new Response(0, ''), new Response(503, ''), new Response(429, ''), new Response(400, 'Invalid or expired offer.')];
-        $this->assertSame(1, $this->cart()->keepOffers([$grant])['offers']); // no answer
-        $this->assertSame(1, $this->cart()->redeemOffers()['offers']);       // bluebarry is down
-        $this->assertSame(1, $this->cart()->redeemOffers()['offers']);       // asked too often
-        $this->assertSame(0, $this->cart()->redeemOffers()['offers']);       // not an offer
+        $again = function () use ($grant) {
+            unset($this->session->data[Cart::SESSION_OFFERS_AFTER]); // two minutes later
+            return $this->cart()->redeemOffers([$grant])['drop'];
+        };
+        $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']); // no answer
+        // A bluebarry that did not answer is not asked again with the very next change of the cart.
+        $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']);
+        $this->assertCount(1, $this->asked);
+        $this->assertSame([], $again());       // bluebarry is down
+        $this->assertSame([], $again());       // asked too often
+        $this->assertSame([$grant], $again()); // not an offer
         $this->assertSame('', $this->quote->coupon);
+        unset($this->session->data[Cart::SESSION_OFFERS_AFTER]);
 
         // An offer for nothing this store sells, and one whose code cannot be made here.
         $this->answers = [new Response(204, '')];
-        $this->assertSame(0, $this->cart()->keepOffers([$grant])['offers']);
+        $this->assertSame([$grant], $this->cart()->redeemOffers([$grant])['drop']);
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-X', 'discountType' => 'percent', 'amount' => 10]))];
         $this->makingFails = new RefusedException('None of the products exist in this store.');
-        $this->assertSame(0, $this->cart()->keepOffers([$grant])['offers']);
+        $this->assertSame([$grant], $this->cart()->redeemOffers([$grant])['drop']);
         // The store could not make it right now: tried again after the next cart change.
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-X', 'discountType' => 'percent', 'amount' => 10]))];
         $this->makingFails = new \RuntimeException('deadlock');
-        $this->assertSame(1, $this->cart()->keepOffers([$grant])['offers']);
+        $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']);
     }
 
     public function testWithTheShoppersOwnCodeOnTheCart_AnOfferWaitsAndBluebarryIsNotAsked(): void
@@ -179,35 +196,49 @@ class CartTest extends TestCase
         $this->quote->lines = [new QuoteItemDouble(10)];
         $this->quote->coupon = 'MERCHANT5';
 
-        $this->assertSame(['applied' => false, 'waiting' => false, 'offers' => 1, 'reason' => 'other_code'], $this->cart()->keepOffers([$grant]));
+        $this->assertSame(['applied' => false, 'drop' => [], 'reason' => 'other_code'], $this->cart()->redeemOffers([$grant]));
         $this->assertSame([], $this->asked);
         $this->assertSame('MERCHANT5', $this->quote->coupon);
     }
 
-    public function testTheNewestOfferTheCartCoversIsRedeemed_OneAtATime_AndTheSameOfferIsKeptOnce(): void
+    public function testTheNewestOfferTheCartCoversIsRedeemed_AndOlderOnesNeverTakeItsPlace(): void
     {
         $older = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 5]], 'nonce' => 'a']);
         $newer = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]], 'nonce' => 'b']);
+        $newest = self::offer(['variantIds' => ['77'], 'rules' => [['scope' => 'Single', 'value' => 20]], 'nonce' => 'c']);
         $this->quote->lines = [new QuoteItemDouble(10)];
-        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-NEWEST', 'discountType' => 'percent', 'amount' => 10]))];
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
 
-        $result = $this->cart()->keepOffers([$older, $newer, $older, $newer]);
+        // The browser's offers, the newest last. The newest waits for its product, which is not in the cart.
+        $result = $this->cart()->redeemOffers([$older, $newer, $newest]);
 
-        $this->assertSame(['applied' => true, 'waiting' => false, 'offers' => 1], $result);
+        // The newest the cart covers is on it; the older one is passed over for good, so the next
+        // change of the cart cannot put it in the newer one's place. The newest waits on.
+        $this->assertSame(['applied' => true, 'drop' => [$newer, $older]], $result);
         $this->assertSame($newer, $this->asked[0]['grant']);
-        $this->assertCount(1, $this->asked);
+        $this->assertSame('BB-TEN', $this->quote->coupon);
+
+        // The newest offer's product is added: that one may take over.
+        $this->quote->lines[] = new QuoteItemDouble(77);
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TWENTY', 'discountType' => 'percent', 'amount' => 20]))];
+        $this->assertSame(['applied' => true, 'drop' => [$newest]], $this->cart()->redeemOffers([$newest]));
+        $this->assertSame('BB-TWENTY', $this->quote->coupon);
     }
 
-    public function testASessionCannotBeMadeToHoldMoreThanTwentyOffers(): void
+    public function testOneRequestCannotMakeTheStoreLookAtMoreThanTwentyOffers(): void
     {
         $grants = [];
         for ($i = 0; $i < 30; $i++) {
             $grants[] = self::offer(['variantIds' => ['99'], 'rules' => [['scope' => 'Single', 'value' => 5]], 'nonce' => (string) $i]);
         }
+        // The oldest covers the cart, but is beyond the twenty newest.
+        array_unshift($grants, self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 5]]]));
+        $grants[] = str_repeat('a', 5000) . '.sig';
         $this->quote->lines = [new QuoteItemDouble(10)];
 
-        $this->assertSame(20, $this->cart()->keepOffers($grants)['offers']);
-        $this->assertSame(0, $this->cart()->keepOffers([str_repeat('a', 5000) . '.sig'])['offers'] - 20);
+        // The oversized one is no offer; the others wait on in the browser.
+        $this->assertSame([str_repeat('a', 5000) . '.sig'], $this->cart()->redeemOffers($grants)['drop']);
+        $this->assertSame([], $this->asked);
     }
 
     private static function offer(array $payload): string

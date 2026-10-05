@@ -93,6 +93,7 @@
     <table name="bluebarry_discount_rule" resource="default" engine="innodb" comment="bluebarry cart price rules">
         <column xsi:type="int" name="rule_id" unsigned="true" nullable="false" comment="Cart price rule ID"/>
         <column xsi:type="varchar" name="terms_hash" length="64" nullable="false" comment="Hash of the rule's terms"/>
+        <column xsi:type="varchar" name="tenant_id" length="64" nullable="false" comment="The bluebarry account the rule's codes are for"/>
         <column xsi:type="varchar" name="kind" length="16" nullable="false" comment="code (rewards, popup and quiz codes) or offer (quiz and recommendation offers)"/>
         <column xsi:type="timestamp" name="created_at" on_update="false" nullable="false" default="CURRENT_TIMESTAMP" comment="Created at"/>
         <constraint xsi:type="primary" referenceId="PRIMARY">

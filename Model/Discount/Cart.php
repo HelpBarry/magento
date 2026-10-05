@@ -20,29 +20,34 @@ use Psr\Log\LoggerInterface;
  *
  * A Magento cart takes one coupon code. A code the shopper entered themselves is never pushed out: the
  * bluebarry code then waits (and is shown to the shopper, who can choose it). A newer bluebarry code
- * does replace an older bluebarry code. A code the cart cannot take yet (it is empty, or below the
- * code's minimum) waits in the shopper's session and goes on once it can (Observer\ApplyWaitingCode).
+ * does replace an older bluebarry code.
  *
- * Nothing here runs on a page a shopper waits for: the SDK asks from the browser (Controller\Cart\
- * Discount), after the page and the add to cart are done.
+ * What the cart cannot take yet (a code for an empty cart or one below the code's minimum, an offer
+ * whose products are not in it) waits in the shopper's browser, not here: the SDK holds it and asks
+ * again when the cart changed. Nothing of it is kept in the session, where a store without session
+ * locking can lose it to another request of the same shopper.
+ *
+ * Nothing here runs on a page a shopper waits for, nor with Magento's own totals: the SDK asks from
+ * the browser (Controller\Cart\Discount), after the page and the add to cart are done.
  */
 class Cart
 {
     /** Codes this module put on this shopper's cart: only these, and bluebarry's own, give way to a newer one. */
     public const SESSION_APPLIED = 'bluebarry_applied_codes';
 
-    /** The code waiting for the cart to be able to take it: ['code' => string, 'tries' => int]. */
-    public const SESSION_WAITING = 'bluebarry_waiting_code';
-
-    /** Signed offers waiting for the products they cover: [['grant' => string, 'uid' => string], ...]. */
-    public const SESSION_OFFERS = 'bluebarry_offers';
-
-    /** A real offer is a few hundred characters; the caps bound what a session can be made to hold. */
+    /** A real offer is a few hundred characters; the caps bound what one request can be made to look at. */
     private const MAX_GRANT = 4096;
     private const MAX_OFFERS = 20;
 
-    /** Seconds bluebarry gets to check an offer. The shopper is not waiting on a page, but their session is held. */
-    private const OFFER_TIMEOUT = 4;
+    /** When bluebarry did not answer an offer: no offer of this shopper is asked about again before this time. */
+    public const SESSION_OFFERS_AFTER = 'bluebarry_offers_after';
+
+    /**
+     * Seconds bluebarry gets to check an offer. No page waits on it, but the shopper's session is held
+     * meanwhile, which can make their next request wait: so not long, and after a miss not again for a while.
+     */
+    private const OFFER_TIMEOUT = 2;
+    private const OFFER_BACK_OFF = 120;
 
     /**
      * @var Session
@@ -126,78 +131,61 @@ class Cart
      * Puts a coupon code on the shopper's cart.
      *
      * @param string $code
-     * @return array{applied: bool, waiting: bool, reason?: string}
-     *     applied: the cart has the code now. waiting: it goes on once the cart can take it.
-     *     reason, when neither: "unknown" (no such code in this store) or "other_code" (the shopper's
-     *     own code stays).
+     * @return string applied (the cart has the code now), waiting (it cannot take it yet: an empty
+     *     cart, or one below the code's minimum), other_code (the shopper's own code stays) or
+     *     unknown (no such code in this store)
      */
-    public function applyCode(string $code): array
+    public function applyCode(string $code): string
     {
         $code = trim($code);
         if ($code === '' || strlen($code) > 255 || !$this->rules->codeExists($code)) {
-            return ['applied' => false, 'waiting' => false, 'reason' => 'unknown'];
+            return 'unknown';
         }
         $quote = $this->checkoutSession->getQuote();
         $current = (string) $quote->getCouponCode();
         if ($current !== '' && strcasecmp($current, $code) === 0) {
-            $this->remember($code);
-            return ['applied' => true, 'waiting' => false];
+            // Already there, whoever put it there: a code the shopper entered themselves stays theirs,
+            // also when a popup happens to offer the same one.
+            return 'applied';
         }
         if ($current !== '' && !$this->isOurs($current)) {
-            return ['applied' => false, 'waiting' => false, 'reason' => 'other_code'];
+            return 'other_code';
         }
         if ($quote->getItemsCount() && $this->put($quote, $code)) {
             $this->remember($code);
-            $this->checkoutSession->unsetData(self::SESSION_WAITING);
-            return ['applied' => true, 'waiting' => false];
+            return 'applied';
         }
         if ($current !== '' && $quote->getItemsCount()) {
             // The cart cannot take the new code yet: the bluebarry code it had stays meanwhile.
             $this->put($quote, $current);
         }
-        $this->checkoutSession->setData(self::SESSION_WAITING, ['code' => $code, 'tries' => 0]);
-        return ['applied' => false, 'waiting' => true];
+        return 'waiting';
     }
 
     /**
-     * Keeps signed offers for this shopper, the last one newest, and redeems what the cart already covers.
+     * Redeems the newest of the shopper's offers that the cart now covers: bluebarry checks it and
+     * describes its one-time code, which is made and put on the cart. The whole set in the cart gets
+     * the bundle rule, part of it the per-product rule (or nothing, and the offer waits, when it has
+     * none). One offer at a time: the cart takes one code.
      *
-     * @param string[] $grants
-     * @return array{applied: bool, waiting: bool, offers: int, reason?: string}
+     * @param string[] $grants the offers the browser holds, the newest last
+     * @return array{applied: bool, drop: string[], reason?: string} drop: the offers the browser can
+     *     forget (redeemed, passed over for a newer one, or never giving anything); the others wait on
      */
-    public function keepOffers(array $grants): array
+    public function redeemOffers(array $grants): array
     {
-        // The visitor is the one this browser's bluebarry cookie names, never what the request says:
-        // an offer made for one shopper must not be redeemable by someone who copied it.
-        $uid = (string) $this->cookies->getCookie('bb_uid');
-        $uid = Visitor::isUuid($uid) ? $uid : '';
-        $offers = $this->offers();
-        foreach (array_slice($grants, -self::MAX_OFFERS) as $grant) {
-            if (!is_string($grant) || $grant === '' || strlen($grant) > self::MAX_GRANT || self::grantPayload($grant) === null) {
-                continue;
+        $result = ['applied' => false, 'drop' => []];
+        // The newest first. What is no offer at all is forgotten right away.
+        $offers = [];
+        foreach (array_reverse(array_slice(array_values($grants), -self::MAX_OFFERS)) as $grant) {
+            $payload = is_string($grant) && $grant !== '' && strlen($grant) <= self::MAX_GRANT ? self::grantPayload($grant) : null;
+            $covered = $payload ? array_map('strval', (array) ($payload['variantIds'] ?? [])) : [];
+            if ($covered) {
+                $offers[] = ['grant' => $grant, 'payload' => $payload, 'covered' => $covered];
+            } elseif (is_string($grant)) {
+                $result['drop'][] = $grant;
             }
-            $offers = array_values(array_filter($offers, function ($offer) use ($grant) {
-                return $offer['grant'] !== $grant;
-            }));
-            array_unshift($offers, ['grant' => $grant, 'uid' => $uid]);
         }
-        // Offers gather across the product pages of a visit; the cap only bounds the session.
-        $this->checkoutSession->setData(self::SESSION_OFFERS, array_slice($offers, 0, self::MAX_OFFERS));
-        return $this->redeemOffers();
-    }
-
-    /**
-     * Redeems the newest offer the cart now covers: bluebarry checks it and describes its one-time
-     * code, which is made and put on the cart. The whole set in the cart gets the bundle rule, part of
-     * it the per-product rule (or nothing, and the offer waits, when it has none). One offer at a
-     * time: the cart takes one code.
-     *
-     * @return array{applied: bool, waiting: bool, offers: int, reason?: string}
-     */
-    public function redeemOffers(): array
-    {
-        $offers = $this->offers();
-        $result = ['applied' => false, 'waiting' => false, 'offers' => count($offers)];
         if (!$offers) {
             return $result;
         }
@@ -211,16 +199,18 @@ class Cart
         $apiKey = $this->config->getWebsiteApiKey($website->getId());
         $tenantId = $this->config->getWebsiteTenantId($website->getId());
         $inCart = array_flip($this->references($quote));
-        if ($apiKey === null || $tenantId === null || !$inCart) {
+        // bluebarry did not answer a moment ago: it is not asked again right away, so a slow bluebarry
+        // holds this shopper's session once, not with every change of their cart.
+        if ($apiKey === null || $tenantId === null || !$inCart || (int) $this->checkoutSession->getData(self::SESSION_OFFERS_AFTER) > time()) {
             return $result;
         }
+        // The visitor is the one this browser's bluebarry cookie names, never what the request says:
+        // an offer made for one shopper must not be redeemable by someone who copied it.
+        $uid = (string) $this->cookies->getCookie('bb_uid');
+        $uid = Visitor::isUuid($uid) ? $uid : '';
         foreach ($offers as $index => $offer) {
-            $payload = self::grantPayload($offer['grant']);
-            $covered = $payload ? array_map('strval', (array) ($payload['variantIds'] ?? [])) : [];
-            if (!$covered) {
-                unset($offers[$index]);
-                continue;
-            }
+            $payload = $offer['payload'];
+            $covered = $offer['covered'];
             if (!array_intersect_key(array_flip($covered), $inCart)) {
                 continue; // nothing of it in the cart yet
             }
@@ -235,27 +225,18 @@ class Cart
             }
             // A whole-set discount needs the whole set to stay in the cart, not only what it was built around.
             $keep = $wholeSet && self::hasRule($payload, 'kit') ? array_values(array_unique(array_merge($required, $covered))) : $required;
-            $outcome = $this->redeem($quote, $website, $offer, $wholeSet, $keep, $apiKey, $tenantId);
-            if ($outcome !== 'retry') {
-                unset($offers[$index]);
+            $outcome = $this->redeem($quote, $website, ['grant' => $offer['grant'], 'uid' => $uid], $wholeSet, $keep, $apiKey, $tenantId);
+            if ($outcome === 'applied') {
+                // The newest offer the cart covers is on it. The older ones are passed over for good:
+                // kept, the next change of the cart would put one of them in its place.
+                $result['drop'] = array_merge($result['drop'], array_column(array_slice($offers, $index), 'grant'));
+            } elseif ($outcome !== 'retry') {
+                $result['drop'][] = $offer['grant'];
             }
             $result['applied'] = $outcome === 'applied';
             break; // one offer at a time: the newest the cart covers
         }
-        $offers = array_values($offers);
-        $this->checkoutSession->setData(self::SESSION_OFFERS, $offers);
-        $result['offers'] = count($offers);
         return $result;
-    }
-
-    /**
-     * How many offers still wait for their products (the SDK asks again after the cart changes).
-     *
-     * @return int
-     */
-    public function waitingOffers(): int
-    {
-        return count($this->offers());
     }
 
     /**
@@ -330,6 +311,7 @@ class Cart
         }
         $spec = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($spec)) {
+            $this->checkoutSession->setData(self::SESSION_OFFERS_AFTER, time() + self::OFFER_BACK_OFF);
             return 'retry';
         }
         try {
@@ -382,20 +364,6 @@ class Cart
             $applied[] = $code;
             $this->checkoutSession->setData(self::SESSION_APPLIED, array_slice($applied, -10));
         }
-    }
-
-    /**
-     * @return array<int, array{grant: string, uid: string}>
-     */
-    private function offers(): array
-    {
-        $offers = [];
-        foreach ((array) $this->checkoutSession->getData(self::SESSION_OFFERS) as $offer) {
-            if (is_array($offer) && is_string($offer['grant'] ?? null)) {
-                $offers[] = ['grant' => $offer['grant'], 'uid' => is_string($offer['uid'] ?? null) ? $offer['uid'] : ''];
-            }
-        }
-        return $offers;
     }
 
     /**

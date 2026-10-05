@@ -47,12 +47,14 @@ const offer = (payload: object) => `${Buffer.from(JSON.stringify(payload)).toStr
 async function quote(page: Page) {
   const cart = (await (await page.request.get('/customer/section/load/?sections=cart&force_new_section_timestamp=true')).json()).cart;
   const quoteId = sql(`SELECT quote_id FROM quote_item WHERE item_id = ${Number(cart.items?.[0]?.item_id ?? 0)}`);
-  if (!quoteId) return { coupon: '', discount: 0, lines: {} as Record<string, number> };
+  if (!quoteId) return { coupon: '', discount: 0, lines: {} as Record<string, number>, allLines: 0 };
   // The code last: an empty first column would be trimmed away.
   const [subtotal, withDiscount, coupon = ''] = sql(`SELECT base_subtotal, base_subtotal_with_discount, IFNULL(coupon_code, '') FROM quote WHERE entity_id = ${quoteId}`).split('\t');
   const lines = Object.fromEntries(sql(`SELECT sku, base_discount_amount FROM quote_item WHERE quote_id = ${quoteId} AND parent_item_id IS NULL`)
     .split('\n').filter(Boolean).map((row) => { const [sku, amount] = row.split('\t'); return [sku, Number(amount)]; }));
-  return { coupon, discount: Math.round((Number(subtotal) - Number(withDiscount)) * 100) / 100, lines };
+  // Every line, parts of a bundle included: nothing may come off a line that is not looked at above.
+  const allLines = Number(sql(`SELECT IFNULL(SUM(base_discount_amount), 0) FROM quote_item WHERE quote_id = ${quoteId}`));
+  return { coupon, discount: Math.round((Number(subtotal) - Number(withDiscount)) * 100) / 100, lines, allLines };
 }
 
 const rule = (code: string) => {
@@ -68,6 +70,9 @@ async function shopper(page: Page) {
   await stubAdvisor(page, null);
   await page.goto('/bb-simple.html');
   await expect.poll(() => page.evaluate(() => (window as any).barry?.magento?.discountUrl)).toContain('/bluebarry/cart/discount');
+  // The theme's own script makes the form key once it has loaded; a shopper acts after that (and
+  // bluebarry's SDK makes it the same way when it is first).
+  await expect.poll(async () => (await page.context().cookies()).some((cookie) => cookie.name === 'form_key')).toBe(true);
 }
 
 test.describe('discounts from bluebarry', () => {
@@ -141,6 +146,8 @@ test.describe('discounts from bluebarry', () => {
     // Unused, it is removed, so it cannot be spent; asking again changes nothing.
     expect((await command(request, 'coupon.revoke', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
     expect((await command(request, 'coupon.revoke', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
+    // The rule is this bluebarry account's.
+    expect(sql(`SELECT tenant_id FROM bluebarry_discount_rule WHERE rule_id = ${rule(second)!.id}`)).not.toBe('');
     expect(rule(first)).toBeNull();
     expect(rule(second)).not.toBeNull();
   });
@@ -166,15 +173,19 @@ test.describe('discounts from bluebarry', () => {
     expect((await command(request, 'coupon.create', { code, discountType: 'percent', amount: 10, productIds: [] })).status).toBe(200);
     await shopper(page);
 
-    // An empty cart cannot hold a code in Magento: it waits in the shopper's session.
-    expect((await discount(page, { code })).body).toMatchObject({ applied: false, waiting: true });
+    // An empty cart cannot hold a code in Magento. The module keeps nothing: the SDK holds the code
+    // and gives it again once the cart changed.
+    expect((await discount(page, { code })).body).toEqual({ applied: false, code: 'waiting', drop: [] });
+    // The add to the cart itself is Magento's own, untouched.
     await addToCart(page, 'bb-simple');
+    expect(await quote(page)).toMatchObject({ coupon: '' });
+    expect((await discount(page, { code })).body).toEqual({ applied: true, code: 'applied', drop: [] });
     expect(await quote(page)).toMatchObject({ coupon: code, discount: 10 });
 
     // Asked again with the code on the cart: nothing changes.
-    expect((await discount(page, { code })).body).toMatchObject({ applied: true, waiting: false });
-    // A code this store does not have is not kept waiting.
-    expect((await discount(page, { code: 'NO-SUCH-CODE' })).body).toMatchObject({ applied: false, waiting: false, reason: 'unknown' });
+    expect((await discount(page, { code })).body).toMatchObject({ applied: true, code: 'applied' });
+    // A code this store does not have.
+    expect((await discount(page, { code: 'NO-SUCH-CODE' })).body).toMatchObject({ applied: false, code: 'unknown' });
     // Without the form key nothing happens.
     expect((await discount(page, { code }, false)).status).toBe(403);
   });
@@ -187,8 +198,8 @@ test.describe('discounts from bluebarry', () => {
     await shopper(page);
     await addToCart(page, 'bb-simple');
 
-    expect((await discount(page, { code: older })).body).toMatchObject({ applied: true });
-    expect((await discount(page, { code: newer })).body).toMatchObject({ applied: true });
+    expect((await discount(page, { code: older })).body).toMatchObject({ applied: true, code: 'applied' });
+    expect((await discount(page, { code: newer })).body).toMatchObject({ applied: true, code: 'applied' });
     expect(await quote(page)).toMatchObject({ coupon: newer, discount: 20 });
 
     // The shopper enters their own code in the cart, as the cart page's coupon field does.
@@ -203,7 +214,7 @@ test.describe('discounts from bluebarry', () => {
     expect(await quote(page)).toMatchObject({ coupon: own, discount: 5 });
 
     await page.goto('/bb-simple.html');
-    expect((await discount(page, { code: older })).body).toMatchObject({ applied: false, waiting: false, reason: 'other_code' });
+    expect((await discount(page, { code: older })).body).toMatchObject({ applied: false, code: 'other_code' });
     expect(await quote(page)).toMatchObject({ coupon: own, discount: 5 });
   });
 
@@ -216,22 +227,59 @@ test.describe('discounts from bluebarry', () => {
     await addToCart(page, 'bb-simple');
     expect((await discount(page, { code: small })).body).toMatchObject({ applied: true });
 
-    expect((await discount(page, { code: big })).body).toMatchObject({ applied: false, waiting: true });
+    expect((await discount(page, { code: big })).body).toMatchObject({ applied: false, code: 'waiting' });
     expect(await quote(page)).toMatchObject({ coupon: small, discount: 10 });
+    // The cart changes and still cannot take it: the older code stays on.
+    expect((await discount(page, { code: big })).body).toMatchObject({ applied: false, code: 'waiting' });
+    expect(await quote(page)).toMatchObject({ coupon: small, discount: 10 });
+  });
+
+  test('a code for a product does not come off a bundle that only holds it as a part', async ({ page }) => {
+    await shopper(page);
+    const part = productId('bb-part-a');
+    const grant = offer({ variantIds: [part], rules: [{ scope: 'Single', type: 'Percentage', value: 50 }], nonce: randomUUID() });
+    // The part is sold on its own too (30.00), and is a part of both bundles.
+    sql(`UPDATE catalog_product_entity_int SET value = 4 WHERE entity_id = ${part} AND attribute_id = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'visibility' AND entity_type_id = 4)`);
+    try {
+      await addToCart(page, 'bb-bundle-fixed', { bundle: true });
+      await addToCart(page, 'bb-bundle-dynamic', { bundle: true });
+      // Only the bundles hold it: the offer covers nothing in this cart, and waits in the browser.
+      expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: false, drop: [] });
+
+      const added = await page.evaluate(async (reference) => {
+        const formKey = decodeURIComponent(document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '');
+        const response = await fetch((window as any).barry.magento.addToCartUrl, {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+          body: new URLSearchParams({ form_key: formKey, items: JSON.stringify([{ reference, quantity: 1 }]) }).toString(),
+        });
+        return response.json();
+      }, part);
+      expect(added).toMatchObject({ success: true });
+      expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: true, drop: [grant] });
+
+      const cart = await quote(page);
+      // Half of the product bought as itself, and nothing off either bundle or their parts.
+      expect(cart.lines['bb-part-a']).toBe(15);
+      expect(cart.allLines).toBe(15);
+    } finally {
+      sql(`UPDATE catalog_product_entity_int SET value = 1 WHERE entity_id = ${part} AND attribute_id = (SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'visibility' AND entity_type_id = 4)`);
+    }
   });
 
   test('an offer becomes a one-time code once the cart holds what it covers, off those products only', async ({ page }) => {
     await shopper(page);
     const grant = offer({ variantIds: [red], rules: [{ scope: 'Single', type: 'Percentage', value: 25 }], nonce: randomUUID() });
 
-    // Nothing of the offer in the cart yet: it waits, and bluebarry is not asked.
+    // Nothing of the offer in the cart yet: it waits in the browser, and bluebarry is not asked.
     await addToCart(page, 'bb-simple');
-    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toMatchObject({ applied: false, offers: 1 });
+    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: false, drop: [] });
     expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(0);
 
-    // The shopper adds the offered product; the SDK asks again after the cart changed.
+    // The shopper adds the offered product; the SDK gives its offers again after the cart changed.
+    // An older offer for the same product is passed over for good.
+    const older = offer({ variantIds: [red], rules: [{ scope: 'Single', type: 'Percentage', value: 5 }], nonce: randomUUID() });
     await addToCart(page, 'bb-configurable', { color: 'BB Red' });
-    expect((await discount(page, {})).body).toMatchObject({ applied: true, offers: 0 });
+    expect((await discount(page, { grants: JSON.stringify([older, grant]) })).body).toEqual({ applied: true, drop: [grant, older] });
     const asked = (await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon');
     expect(asked).toHaveLength(1);
     expect(asked[0].headers.authorization).toBe(KEY);
@@ -246,8 +294,7 @@ test.describe('discounts from bluebarry', () => {
     expect(rule(cart.coupon)).toMatchObject({ name: 'bluebarry: 25% off, 1 product', action: 'by_percent', usageLimit: 1 });
     expect(sql(`SELECT kind FROM bluebarry_discount_rule WHERE rule_id = ${rule(cart.coupon)!.id}`)).toBe('offer');
 
-    // Nothing waits any more: later cart changes ask bluebarry nothing.
-    expect((await discount(page, {})).body).toMatchObject({ applied: false, offers: 0 });
+    // Nothing was left to ask bluebarry about.
     expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(1);
   });
 
@@ -257,10 +304,10 @@ test.describe('discounts from bluebarry', () => {
     const grant = offer({ variantIds: [simple], requiredVariantIds: [red], rules: [{ scope: 'Single', type: 'FixedAmount', value: 5 }], nonce: randomUUID() });
     await addToCart(page, 'bb-simple');
     await addToCart(page, 'bb-simple'); // two of it
-    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toMatchObject({ applied: false, offers: 1 });
+    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: false, drop: [] });
 
     await addToCart(page, 'bb-configurable', { color: 'BB Red' });
-    expect((await discount(page, {})).body).toMatchObject({ applied: true, offers: 0 });
+    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: true, drop: [grant] });
     const cart = await quote(page);
     // Once for the product, whatever its quantity.
     expect(cart.lines).toEqual({ 'bb-simple': 5, 'bb-configurable-red': 0 });
@@ -271,11 +318,11 @@ test.describe('discounts from bluebarry', () => {
     await shopper(page);
     await addToCart(page, 'bb-simple');
     const expired = offer({ variantIds: [simple], expired: true, rules: [{ scope: 'Single', type: 'Percentage', value: 10 }], nonce: randomUUID() });
-    expect((await discount(page, { grants: JSON.stringify([expired, 'not-an-offer']) })).body).toMatchObject({ applied: false, offers: 0 });
+    expect((await discount(page, { grants: JSON.stringify([expired, 'not-an-offer']) })).body).toEqual({ applied: false, drop: ['not-an-offer', expired] });
 
     const good = offer({ variantIds: [simple], rules: [{ scope: 'Single', type: 'Percentage', value: 10 }], nonce: randomUUID() });
     await mockApi.respondWith({ status: 503 });
-    expect((await discount(page, { grants: JSON.stringify([good]) })).body).toMatchObject({ applied: false, offers: 1 });
+    expect((await discount(page, { grants: JSON.stringify([good]) })).body).toEqual({ applied: false, drop: [] });
     await mockApi.reset();
 
     // The shopper's own code is on the cart: the offer waits, and bluebarry is not asked.
@@ -288,7 +335,7 @@ test.describe('discounts from bluebarry', () => {
       });
     }, own);
     await page.goto('/bb-simple.html');
-    expect((await discount(page, {})).body).toMatchObject({ applied: false, offers: 1, reason: 'other_code' });
+    expect((await discount(page, { grants: JSON.stringify([good]) })).body).toEqual({ applied: false, drop: [] });
     expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(0);
     expect(await quote(page)).toMatchObject({ coupon: own });
   });

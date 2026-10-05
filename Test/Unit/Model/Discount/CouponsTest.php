@@ -9,6 +9,7 @@ use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Magento\Customer\Model\ResourceModel\Group\Collection as GroupCollection;
 use Magento\Customer\Model\ResourceModel\Group\CollectionFactory as GroupCollectionFactory;
 use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\DB\Adapter\AdapterInterface;
 use Magento\Framework\Lock\LockManagerInterface;
 use Magento\SalesRule\Model\Coupon;
 use Magento\SalesRule\Model\CouponFactory;
@@ -34,6 +35,15 @@ class CouponsTest extends TestCase
     /** @var array<int, string> coupon id => when it ends */
     private array $ends = [];
     private int $cartSubtotalDisplay = 1;
+    /** @var array<string, int> code => orders that carry it */
+    private array $orders = [];
+    /** @var array<string, string[]> product id => the configurable products it is a variant of */
+    private array $parents = ['17' => ['mug'], '18' => ['mug', 'mug-gift-set']];
+    private bool $endFails = false;
+    private bool $locked = false;
+    private int $transactions = 0;
+    private array $snapshot = [];
+    private int $rollbacks = 0;
 
     public function testAPercentageCodeIsASingleUseCodeUnderARuleForItsTerms(): void
     {
@@ -52,6 +62,48 @@ class CouponsTest extends TestCase
         $this->assertCount(1, $rule['conditions']);
         $this->assertCount(1, $rule['actions']);
         $this->assertSame([2 => '2030-01-15 12:00:00'], $this->ends);
+        // The rule is this account's.
+        $this->assertSame('tenant', $this->rules['tenant']);
+    }
+
+    public function testACodeAndItsEndAreMadeTogether_AndAnEndThatWasNeverNotedIsNotedWhenAskedAgain(): void
+    {
+        $spec = ['code' => 'WELCOME-7KQ2', 'discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'];
+        $this->endFails = true;
+        try {
+            $this->coupons()->ensure($spec, $this->website(1));
+            $this->fail('made without its end');
+        } catch (\RuntimeException $e) {
+            // The code went with it: one that could never end must not be left behind.
+            $this->assertSame([1, 1], [$this->transactions, $this->rollbacks]);
+        }
+
+        // A code from before this was one transaction, or whose note was lost: noted when asked again.
+        $this->endFails = false;
+        $this->coupons['WELCOME-7KQ2'] = ['coupon_id' => '9', 'rule_id' => '101', 'times_used' => '0', 'created_at' => null, 'expires_at' => null, 'is_active' => '1', 'ours' => true, 'tenant' => 'tenant'];
+        $this->coupons()->ensure($spec, $this->website(1));
+        $this->assertSame([9 => '2030-01-15 12:00:00'], $this->ends);
+    }
+
+    public function testAnotherAccountOnTheSameMagentoNeitherSeesNorEndsThisAccountsCodes(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+
+        // Website 2 reports to another bluebarry account.
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('CODE-0001', $this->website(2)));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('CODE-0001', $this->website(2)));
+        $this->assertArrayHasKey('CODE-0001', $this->coupons);
+        // Nor does it get that code as its own when it asks for the same one.
+        $this->expectException(RefusedException::class);
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(2));
+    }
+
+    public function testAnotherRequestMakingACodeIsWaitedFor_NotRunInto(): void
+    {
+        $this->locked = true;
+        $this->expectException(\RuntimeException::class);
+        $this->coupons()->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
     }
 
     public function testCodesWithTheSameTermsShareOneRule_OtherTermsGetTheirOwn(): void
@@ -107,12 +159,22 @@ class CouponsTest extends TestCase
         $this->assertSame('bluebarry: 5 off per product, 2 products', $rule['name']);
         // An amount off each product comes off one unit of it.
         $this->assertSame([Rule::BY_FIXED_ACTION, 1], [$rule['simple_action'], $rule['discount_qty']]);
-        // One condition per SKU (a SKU may hold a comma), any of them.
+        $sku = fn (string $scope, string $value) => ['type' => ProductCondition::class, 'attribute' => 'sku', 'attribute_scope' => $scope, 'operator' => '==', 'value' => $value];
+        // Any of the products, each as a line of its own or as the variant of a configurable product it
+        // belongs to: never as a part of a bundle. One condition per SKU (a SKU may hold a comma).
         $this->assertSame('any', $rule['actions']['1']['aggregator']);
-        $this->assertSame(['type' => ProductCondition::class, 'attribute' => 'sku', 'operator' => '==', 'value' => 'mug, blue'], $rule['actions']['1--1']);
-        $this->assertSame('mug-red', $rule['actions']['1--2']['value']);
-        $this->assertSame(ProductFound::class, $rule['conditions']['1--1']['type']);
-        $this->assertSame('espresso', $rule['conditions']['1--1--1']['value']);
+        $this->assertSame($sku('parent', 'mug, blue'), $rule['actions']['1--1']);
+        $this->assertSame('all', $rule['actions']['1--2']['aggregator']);
+        $this->assertSame($sku('children', 'mug, blue'), $rule['actions']['1--2--1']);
+        $this->assertSame('any', $rule['actions']['1--2--2']['aggregator']);
+        $this->assertSame($sku('parent', 'mug'), $rule['actions']['1--2--2--1']);
+        $this->assertSame($sku('parent', 'mug-gift-set'), $rule['actions']['1--2--2--2']);
+        $this->assertSame($sku('parent', 'mug-red'), $rule['actions']['1--3']);
+        $this->assertSame($sku('children', 'mug-red'), $rule['actions']['1--4--1']);
+        // What the offer was built around must be in the cart, as a line of its own.
+        $this->assertSame([ProductFound::class, 'any'], [$rule['conditions']['1--1']['type'], $rule['conditions']['1--1']['aggregator']]);
+        $this->assertSame($sku('parent', 'espresso'), $rule['conditions']['1--1--1']);
+        $this->assertArrayNotHasKey('1--1--2', $rule['conditions']);
         $this->assertSame(DiscountRules::KIND_OFFER, $this->rules['kind']);
     }
 
@@ -147,17 +209,45 @@ class CouponsTest extends TestCase
     public function testAMerchantsCodeIsNeverLookedAtOrRemoved_AnUnusedBluebarryCodeIs(): void
     {
         $coupons = $this->coupons();
-        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('MERCHANT5'));
-        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('MERCHANT5'));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('MERCHANT5', $this->website(1)));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('MERCHANT5', $this->website(1)));
         $this->assertArrayHasKey('MERCHANT5', $this->coupons);
 
         $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
         $coupons->ensure(['code' => 'CODE-0002', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
         $this->coupons['CODE-0002']['times_used'] = '1';
 
-        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('CODE-0001'));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('CODE-0001', $this->website(1)));
         // Spent: it stays as it is.
-        $this->assertSame(['exists' => true, 'id' => 3, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0002'));
+        $this->assertSame(['exists' => true, 'id' => 3, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0002', $this->website(1)));
+    }
+
+    public function testACodeAnOrderCarriesIsSpent_AlsoBeforeMagentoCountedIt_AndAfterItWasRemoved(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+        // Magento counts a coupon's use from a queue: the order is there first.
+        $this->orders['CODE-0001'] = 1;
+
+        $this->assertSame(1, $coupons->state('CODE-0001', $this->website(1))['usageCount']);
+        $this->assertSame(['exists' => true, 'id' => 2, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0001', $this->website(1)));
+        $this->assertArrayHasKey('CODE-0001', $this->coupons);
+
+        // Removed once it ended: the order still says it was spent.
+        unset($this->coupons['CODE-0001']);
+        $this->assertSame(['exists' => false, 'usageCount' => 1], $coupons->state('CODE-0001', $this->website(1)));
+    }
+
+    public function testACheckoutThatCountsItsUseWhileTheCodeIsBeingRevokedKeepsItsCoupon(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+        // Read as unused, then counted by a checkout before the removal: the removal finds it used.
+        $this->coupons['CODE-0001']['countedMeanwhile'] = true;
+
+        $state = $coupons->revoke('CODE-0001', $this->website(1));
+
+        $this->assertSame(['exists' => true, 'id' => 2, 'status' => 'publish', 'usageCount' => 1], $state);
     }
 
     public function testACodePastItsLastMomentIsNoLongerUsable_NorOneWhoseRuleWasSwitchedOff(): void
@@ -165,12 +255,28 @@ class CouponsTest extends TestCase
         $coupons = $this->coupons();
         $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
         $this->coupons['CODE-0001']['expires_at'] = gmdate('Y-m-d H:i:s', time() - 60);
-        $this->assertSame('disabled', $coupons->state('CODE-0001')['status']);
+        $this->assertSame('disabled', $coupons->state('CODE-0001', $this->website(1))['status']);
 
         $this->coupons['CODE-0001']['expires_at'] = gmdate('Y-m-d H:i:s', time() + 60);
-        $this->assertSame('publish', $coupons->state('CODE-0001')['status']);
+        $this->assertSame('publish', $coupons->state('CODE-0001', $this->website(1))['status']);
         $this->coupons['CODE-0001']['is_active'] = '0';
-        $this->assertSame('disabled', $coupons->state('CODE-0001')['status']);
+        $this->assertSame('disabled', $coupons->state('CODE-0001', $this->website(1))['status']);
+    }
+
+    public function testAnOfferRuleIsOnlyRemovedWhileItStillHoldsNoCode(): void
+    {
+        $removed = [];
+        $coupons = $this->coupons(emptyOfferRules: [101, 102], withCodes: [102], removed: $removed);
+
+        $this->assertSame(['codes' => 0, 'rules' => 1], $coupons->cleanUp());
+        // 102 got a code between being found empty and being removed: it stays.
+        $this->assertSame([101], $removed);
+
+        // A code is being made right now: no rule is removed from under it.
+        $removed = [];
+        $this->locked = true;
+        $this->assertSame(['codes' => 0, 'rules' => 0], $coupons->cleanUp());
+        $this->assertSame([], $removed);
     }
 
     private function website(int $id): Website
@@ -180,21 +286,60 @@ class CouponsTest extends TestCase
         return $website;
     }
 
-    private function coupons(): Coupons
+    private function coupons(array $emptyOfferRules = [], array $withCodes = [], array &$removed = []): Coupons
     {
-        $this->coupons += ['MERCHANT5' => ['coupon_id' => '1', 'rule_id' => '900', 'times_used' => '0', 'expires_at' => null, 'is_active' => '1', 'ours' => false]];
+        $this->coupons += ['MERCHANT5' => ['coupon_id' => '1', 'rule_id' => '900', 'times_used' => '0', 'created_at' => null, 'expires_at' => null, 'is_active' => '1', 'ours' => false, 'tenant' => '']];
+        $connection = $this->createStub(AdapterInterface::class);
+        $connection->method('beginTransaction')->willReturnCallback(function () use ($connection) {
+            $this->transactions++;
+            $this->snapshot = $this->coupons;
+            return $connection;
+        });
+        $connection->method('rollBack')->willReturnCallback(function () use ($connection) {
+            $this->rollbacks++;
+            $this->coupons = $this->snapshot;
+            return $connection;
+        });
         $rules = $this->createStub(DiscountRules::class);
-        $rules->method('coupon')->willReturnCallback(fn ($code) => ($this->coupons[$code]['ours'] ?? false) ? $this->coupons[$code] : null);
+        $rules->method('connection')->willReturn($connection);
+        $rules->method('coupon')->willReturnCallback(function ($code, $tenant = null) {
+            $row = $this->coupons[$code] ?? null;
+            return $row && $row['ours'] && ($tenant === null || $row['tenant'] === $tenant) ? $row : null;
+        });
         $rules->method('codeExists')->willReturnCallback(fn ($code) => isset($this->coupons[$code]));
         $rules->method('ruleFor')->willReturnCallback(fn ($hash) => $this->rules[$hash] ?? null);
-        $rules->method('record')->willReturnCallback(function ($ruleId, $hash, $kind) {
+        $rules->method('record')->willReturnCallback(function ($ruleId, $hash, $kind, $tenant) {
             $this->rules[$hash] = $ruleId;
             $this->rules['kind'] = $kind;
+            $this->rules['tenant'] = $tenant;
         });
         $rules->method('endsAt')->willReturnCallback(function ($couponId, $at) {
+            if ($this->endFails) {
+                throw new \RuntimeException('the database went away');
+            }
             $this->ends[$couponId] = $at;
         });
         $rules->method('skus')->willReturnCallback(fn ($ids) => array_intersect_key(['10' => 'espresso', '17' => 'mug-red', '18' => 'mug, blue'], array_flip($ids)));
+        $rules->method('configurableParents')->willReturnCallback(fn ($ids) => array_intersect_key($this->parents, array_flip($ids)));
+        $rules->method('ordersWith')->willReturnCallback(fn ($code) => $this->orders[$code] ?? 0);
+        $rules->method('deleteUnused')->willReturnCallback(function ($couponId) {
+            foreach ($this->coupons as $code => $row) {
+                if ((int) $row['coupon_id'] === (int) $couponId) {
+                    if (!empty($row['countedMeanwhile'])) {
+                        $this->coupons[$code]['times_used'] = '1';
+                        return false;
+                    }
+                    unset($this->coupons[$code]);
+                    return true;
+                }
+            }
+            return false;
+        });
+        $rules->method('emptyOfferRules')->willReturn($emptyOfferRules);
+        $rules->method('hasCodes')->willReturnCallback(fn ($ruleId) => in_array($ruleId, $withCodes, true));
+        $rules->method('forget')->willReturnCallback(function ($ruleId) use (&$removed) {
+            $removed[] = $ruleId;
+        });
 
         $ruleFactory = $this->createStub(RuleFactory::class);
         $ruleFactory->method('create')->willReturnCallback(function () {
@@ -233,15 +378,8 @@ class CouponsTest extends TestCase
             $this->assertSame([1, 1, 1], [$data['usage_limit'], $data['usage_per_customer'], $data['type']]);
             $id = count($this->coupons) + 1;
             $coupon->setData('id', $id);
-            $this->coupons[$data['code']] = ['coupon_id' => (string) $id, 'rule_id' => (string) $data['rule_id'], 'times_used' => '0', 'expires_at' => null, 'is_active' => '1', 'ours' => true];
-            return $couponResource;
-        });
-        $couponResource->method('load')->willReturnCallback(function ($coupon, $id) use ($couponResource) {
-            $coupon->setData('id', $id);
-            return $couponResource;
-        });
-        $couponResource->method('delete')->willReturnCallback(function ($coupon) use ($couponResource) {
-            $this->coupons = array_filter($this->coupons, fn ($row) => (int) $row['coupon_id'] !== (int) $coupon->getId());
+            $this->coupons[$data['code']] = ['coupon_id' => (string) $id, 'rule_id' => (string) $data['rule_id'], 'times_used' => '0',
+                'created_at' => $data['created_at'], 'expires_at' => null, 'is_active' => '1', 'ours' => true, 'tenant' => $this->rules['tenant'] ?? 'tenant'];
             return $couponResource;
         });
 
@@ -258,7 +396,7 @@ class CouponsTest extends TestCase
         $scopeConfig = $this->createStub(ScopeConfigInterface::class);
         $scopeConfig->method('getValue')->willReturnCallback(fn () => (string) $this->cartSubtotalDisplay);
         $locks = $this->createStub(LockManagerInterface::class);
-        $locks->method('lock')->willReturn(true);
+        $locks->method('lock')->willReturnCallback(fn () => !$this->locked);
 
         return new Coupons($rules, $ruleFactory, $this->createStub(RuleResource::class), $couponFactory, $couponResource, $groupFactory, $stores, $config, $scopeConfig, $locks);
     }

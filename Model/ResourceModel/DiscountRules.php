@@ -2,7 +2,10 @@
 
 namespace Bluebarry\Bluebarry\Model\ResourceModel;
 
+use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\Framework\App\ResourceConnection;
+use Magento\Framework\DB\Adapter\AdapterInterface;
+use Magento\Framework\EntityManager\MetadataPool;
 
 /**
  * The bluebarry_discount_rule table: which cart price rules are bluebarry's, by the hash of their
@@ -24,11 +27,28 @@ class DiscountRules
     private $resource;
 
     /**
-     * @param ResourceConnection $resource
+     * @var MetadataPool
      */
-    public function __construct(ResourceConnection $resource)
+    private $metadataPool;
+
+    /**
+     * @param ResourceConnection $resource
+     * @param MetadataPool $metadataPool
+     */
+    public function __construct(ResourceConnection $resource, MetadataPool $metadataPool)
     {
         $this->resource = $resource;
+        $this->metadataPool = $metadataPool;
+    }
+
+    /**
+     * The connection every write of a code goes through, for the caller's transaction.
+     *
+     * @return AdapterInterface
+     */
+    public function connection(): AdapterInterface
+    {
+        return $this->resource->getConnection();
     }
 
     /**
@@ -55,14 +75,15 @@ class DiscountRules
      * @param int $ruleId
      * @param string $termsHash
      * @param string $kind
+     * @param string $tenantId the bluebarry account its codes are for
      * @return void
      */
-    public function record(int $ruleId, string $termsHash, string $kind): void
+    public function record(int $ruleId, string $termsHash, string $kind, string $tenantId): void
     {
         $this->resource->getConnection()->insertOnDuplicate(
             $this->table(),
-            ['rule_id' => $ruleId, 'terms_hash' => $termsHash, 'kind' => $kind],
-            ['rule_id', 'kind']
+            ['rule_id' => $ruleId, 'terms_hash' => $termsHash, 'kind' => $kind, 'tenant_id' => $tenantId],
+            ['rule_id', 'kind', 'tenant_id']
         );
     }
 
@@ -81,20 +102,100 @@ class DiscountRules
      * One of bluebarry's coupon codes with its rule's state, or null for any other code.
      *
      * @param string $code
-     * @return array{coupon_id: string, rule_id: string, times_used: string, expires_at: string|null, is_active: string}|null
+     * @param string|null $tenantId only a code of this bluebarry account: two accounts can share one
+     *                              Magento, and neither may read or end the other's codes
+     * @return array{coupon_id: string, rule_id: string, times_used: string, created_at: string|null, expires_at: string|null, is_active: string}|null
      */
-    public function coupon(string $code): ?array
+    public function coupon(string $code, ?string $tenantId = null): ?array
     {
         $connection = $this->resource->getConnection();
         $select = $connection->select()
-            ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'rule_id', 'times_used'])
+            ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'rule_id', 'times_used', 'created_at'])
             ->join(['ours' => $this->table()], 'ours.rule_id = coupon.rule_id', [])
             ->join(['rule' => $this->resource->getTableName('salesrule')], 'rule.rule_id = coupon.rule_id', ['is_active'])
             ->joinLeft(['ends' => $this->resource->getTableName(self::CODES_TABLE)], 'ends.coupon_id = coupon.coupon_id', ['expires_at'])
             ->where('coupon.code = ?', $code)
             ->limit(1);
+        if ($tenantId !== null) {
+            $select->where('ours.tenant_id = ?', $tenantId);
+        }
         $row = $connection->fetchRow($select);
         return $row ?: null;
+    }
+
+    /**
+     * How many orders that were not cancelled carry a code. Magento counts a coupon's uses from a queue,
+     * after the order: an order placed a moment ago may not be in the coupon's own count yet.
+     *
+     * @param string $code
+     * @param string|null $since the code's creation (UTC), which bounds the orders looked at by their date index
+     * @return int
+     */
+    public function ordersWith(string $code, ?string $since): int
+    {
+        $connection = $this->resource->getConnection();
+        $select = $connection->select()
+            ->from($this->resource->getTableName('sales_order'), ['orders' => new \Zend_Db_Expr('COUNT(*)')])
+            ->where('coupon_code = ?', $code)
+            ->where('state <> ?', 'canceled');
+        if ($since !== null && $since !== '') {
+            $select->where('created_at >= ?', $since);
+        }
+        return (int) $connection->fetchOne($select);
+    }
+
+    /**
+     * Removes a coupon only while Magento counts no use of it: one statement, so a checkout that just
+     * counted its use is not undone.
+     *
+     * @param int $couponId
+     * @return bool whether it was removed
+     */
+    public function deleteUnused(int $couponId): bool
+    {
+        return $this->resource->getConnection()->delete(
+            $this->resource->getTableName('salesrule_coupon'),
+            ['coupon_id = ?' => $couponId, 'times_used = ?' => 0]
+        ) > 0;
+    }
+
+    /**
+     * @param int $ruleId
+     * @return bool whether any code lives under the rule
+     */
+    public function hasCodes(int $ruleId): bool
+    {
+        $connection = $this->resource->getConnection();
+        return (bool) $connection->fetchOne(
+            $connection->select()->from($this->resource->getTableName('salesrule_coupon'), ['coupon_id'])->where('rule_id = ?', $ruleId)->limit(1)
+        );
+    }
+
+    /**
+     * The SKUs of the configurable products each product is a variant of, by product id.
+     *
+     * @param string[] $productIds
+     * @return array<string, string[]>
+     */
+    public function configurableParents(array $productIds): array
+    {
+        $ids = array_values(array_filter($productIds, 'ctype_digit'));
+        if (!$ids) {
+            return [];
+        }
+        $connection = $this->resource->getConnection();
+        $linkField = $this->metadataPool->getMetadata(ProductInterface::class)->getLinkField();
+        $rows = $connection->fetchAll(
+            $connection->select()->distinct()
+                ->from(['link' => $this->resource->getTableName('catalog_product_super_link')], ['child' => 'product_id'])
+                ->join(['parent' => $this->resource->getTableName('catalog_product_entity')], "parent.$linkField = link.parent_id", ['sku'])
+                ->where('link.product_id IN (?)', $ids)
+        );
+        $parents = [];
+        foreach ($rows as $row) {
+            $parents[(string) $row['child']][] = (string) $row['sku'];
+        }
+        return $parents;
     }
 
     /**

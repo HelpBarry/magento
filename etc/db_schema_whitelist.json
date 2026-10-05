@@ -78,7 +78,8 @@
             "rule_id": true,
             "terms_hash": true,
             "kind": true,
-            "created_at": true
+            "created_at": true,
+            "tenant_id": true
         },
         "constraint": {
             "PRIMARY": true,

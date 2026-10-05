@@ -4,12 +4,4 @@
     <event name="sales_quote_product_add_after">
         <observer name="bluebarry_note_add_to_cart" instance="Bluebarry\Bluebarry\Observer\NoteAddToCart" />
     </event>
-    <!-- A bluebarry code waiting for the cart to be able to take it (it was empty, or below the code's
-         minimum) goes on with the totals Magento collects anyway. One session read for everyone else. -->
-    <event name="sales_quote_collect_totals_before">
-        <observer name="bluebarry_apply_waiting_code" instance="Bluebarry\Bluebarry\Observer\ApplyWaitingCode" />
-    </event>
-    <event name="sales_quote_collect_totals_after">
-        <observer name="bluebarry_apply_waiting_code" instance="Bluebarry\Bluebarry\Observer\ApplyWaitingCode" />
-    </event>
 </config>

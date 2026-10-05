@@ -8,11 +8,4 @@
     <type name="Magento\Checkout\CustomerData\Cart">
         <plugin name="bluebarry_cart_references" type="Bluebarry\Bluebarry\Plugin\Checkout\CartReferences" />
     </type>
-    <!-- Asked on every totals collection of the storefront: the discount code is only built for a shopper
-         who has a bluebarry code waiting. -->
-    <type name="Bluebarry\Bluebarry\Observer\ApplyWaitingCode">
-        <arguments>
-            <argument name="cart" xsi:type="object">Bluebarry\Bluebarry\Model\Discount\Cart\Proxy</argument>
-        </arguments>
-    </type>
 </config>

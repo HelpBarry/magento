@@ -59,15 +59,18 @@ class Uninstall implements UninstallInterface
             // Never block the uninstall.
         }
 
+        $keep = [];
         try {
             // bluebarry's cart price rules and their codes: nothing would end the codes any more.
             $this->coupons->deleteAll();
         } catch (\Exception $e) {
-            // Never block the uninstall.
+            // Never block the uninstall. What says which rules and codes are bluebarry's, and when the
+            // codes end, stays: without it the rules that are left could not be found again.
+            $keep = [DiscountRules::TABLE, DiscountRules::CODES_TABLE];
         }
 
         $connection = $setup->getConnection();
-        foreach (self::TABLES as $table) {
+        foreach (array_diff(self::TABLES, $keep) as $table) {
             $connection->dropTable($setup->getTable($table));
         }
         $connection->delete($setup->getTable('flag'), ['flag_code LIKE ?' => 'bluebarry\_%']);

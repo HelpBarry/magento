@@ -105,6 +105,9 @@ class Session implements HttpGetActionInterface
             return $result->setHttpResponseCode(403)->setData($none);
         }
         $referral = $this->request->getParam('ref');
+        // Nothing of the session is needed from here on: it is let go before bluebarry is asked, so the
+        // shopper's next request never waits behind this one.
+        $this->customerSession->writeClose();
         $response = $this->client->post('/data/magento/loyalty/customer-session', [
             'email' => $email,
             'referralCode' => is_string($referral) && $referral !== '' ? substr($referral, 0, 64) : null,
