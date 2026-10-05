@@ -239,7 +239,15 @@ class Categories
         if ($hash === $known) {
             return $hash;
         }
-        $response = $this->client->post('/data/magento/categories', ['categories' => $categories], $target['tenantId'], $target['apiKey'], 60);
+        // The company is named, as the catalog sync names it: a key from another company would
+        // otherwise put this store's categories in the place of that company's.
+        $response = $this->client->post(
+            '/data/magento/categories',
+            ['tenantId' => $target['tenantId'], 'categories' => $categories],
+            $target['tenantId'],
+            $target['apiKey'],
+            60
+        );
         if (!$response->isSuccess()) {
             // A bluebarry from before categories answers 404: nothing to retry until it is updated.
             if ($response->getStatus() !== 404) {

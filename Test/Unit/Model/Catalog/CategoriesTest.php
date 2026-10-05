@@ -28,7 +28,8 @@ class CategoriesTest extends TestCase
     public function testACompanyThatHasNoneYetIsSentItsCategories_AndNotAgainWhileNothingChanged(): void
     {
         $this->assertSame(['sent' => 1, 'failed' => 0], $this->categories()->run());
-        $this->assertSame([['tenant' => 'tenant-a', 'key' => 'key-tenant-a', 'body' => ['categories' => $this->stores['tenant-a']]]], $this->posted);
+        // The company is named in the request, like the catalog sync's: a key from another company is refused by it.
+        $this->assertSame([['tenant' => 'tenant-a', 'key' => 'key-tenant-a', 'body' => ['tenantId' => 'tenant-a', 'categories' => $this->stores['tenant-a']]]], $this->posted);
 
         // The cron's next runs: one flag read, nothing built, nothing sent.
         $this->stores['tenant-a'] = null; // would fail if it were read

@@ -266,8 +266,8 @@ const routes = {
   // The full set of a website's categories, kept as collections.
   '/data/magento/categories': {
     schema: {
-      disallowUnknown: true, required: ['categories'],
-      fields: { categories: (v) => Array.isArray(v) && v.every((c) => c && typeof c.id === 'string' && /^\d+$/.test(c.id) && typeof c.name === 'string'
+      disallowUnknown: true, required: ['tenantId', 'categories'],
+      fields: { tenantId: types.nullableString(64), categories: (v) => Array.isArray(v) && v.every((c) => c && typeof c.id === 'string' && /^\d+$/.test(c.id) && typeof c.name === 'string'
         && typeof c.url === 'string' && typeof c.path === 'string' && Number.isInteger(c.count) && (c.imageUrl === null || typeof c.imageUrl === 'string')
         && typeof c.description === 'string') },
     },
