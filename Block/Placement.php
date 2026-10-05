@@ -25,6 +25,7 @@ use Magento\Framework\View\Element\Template\Context;
  */
 class Placement extends Template
 {
+    /** The button's text when neither Studio nor the widget sets one: translated per store view (i18n). */
     public const DEFAULT_TEXT = 'Is this right for me?';
 
     /**
@@ -119,14 +120,16 @@ class Placement extends Template
         if ($text === '') {
             $text = (string) ($this->getPlacement('productCheck')['buttonText'] ?? '');
         }
-        return ['href' => '#bluebarry:' . $quiz . '/' . $reference, 'text' => $text !== '' ? $text : self::DEFAULT_TEXT];
+        return ['href' => '#bluebarry:' . $quiz . '/' . $reference, 'text' => $text !== '' ? $text : (string) __(self::DEFAULT_TEXT)];
     }
 
     /**
      * The attributes of a recommendation block's element. On a product page it recommends from that
      * product (all its variants) and leads with the variant the page opens with; anywhere else from
      * the cart, which the SDK fills in from the shopper's own cart and keeps current: until then, and
-     * while the cart is empty, the element stays hidden.
+     * while the cart is empty, the element stays hidden. A product page whose product bluebarry does
+     * not know (a grouped product, a configurable product without synced variants) shows none: the
+     * cart is no stand-in for the product the shopper is looking at.
      *
      * @param string|null $blockId
      * @return array<string, string>|null null without a block to show
@@ -139,6 +142,9 @@ class Placement extends Template
         $attributes = ['data-bluebarry-recommendations' => strtolower((string) $blockId)];
         $product = $this->product();
         $references = $product === null ? [] : $this->pageProduct->references($product);
+        if ($product !== null && !$references) {
+            return null;
+        }
         if ($references) {
             $attributes['data-product-ids'] = implode(',', $references);
             $anchor = $this->pageProduct->defaultReference($product);

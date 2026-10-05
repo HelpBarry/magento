@@ -26,10 +26,14 @@ $config = [
             var last = parseInt(localStorage.getItem(KEY) || '0', 10);
             if (last && (Date.now() - last) / 86400000 < config.cooldown) return;
         } catch (e) {}
-        var done = false;
+        var done = false, waited = 0;
         function open() {
             if (done) return;
-            if (!window.barry || !window.barry.openAdvisor) { setTimeout(open, 500); return; }
+            // The SDK loads after the page; a page where it never does (blocked, offline) is given up on.
+            if (!window.barry || !window.barry.openAdvisor) {
+                if (++waited <= 60) setTimeout(open, 500);
+                return;
+            }
             done = true;
             try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
             window.barry.openAdvisor(config.quiz, undefined, { displayType: 'Dialog', pageContext: { source: 'quiz-popup-widget' } });
