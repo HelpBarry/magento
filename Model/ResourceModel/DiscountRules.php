@@ -159,24 +159,33 @@ class DiscountRules
      * @param int $couponId
      * @param string $until UTC, Y-m-d H:i:s
      * @return bool whether it was taken back
+     * @throws \Exception
      */
     public function revokeUnused(int $couponId, string $until): bool
     {
         $connection = $this->resource->getConnection();
-        $spent = $connection->update(
-            $this->resource->getTableName('salesrule_coupon'),
-            ['times_used' => new \Zend_Db_Expr('usage_limit')],
-            ['coupon_id = ?' => $couponId, 'times_used = ?' => 0, 'usage_limit > ?' => 0]
-        );
-        if ($spent < 1) {
-            return false;
+        // Spent and marked as taken back together, or neither: spent without the mark, the code would
+        // count as used for good.
+        $connection->beginTransaction();
+        try {
+            $spent = $connection->update(
+                $this->resource->getTableName('salesrule_coupon'),
+                ['times_used' => new \Zend_Db_Expr('usage_limit')],
+                ['coupon_id = ?' => $couponId, 'times_used = ?' => 0, 'usage_limit > ?' => 0]
+            );
+            if ($spent > 0) {
+                $connection->insertOnDuplicate(
+                    $this->resource->getTableName(self::CODES_TABLE),
+                    ['coupon_id' => $couponId, 'expires_at' => $until, 'revoked' => 1],
+                    ['expires_at', 'revoked']
+                );
+            }
+            $connection->commit();
+        } catch (\Exception $e) {
+            $connection->rollBack();
+            throw $e;
         }
-        $connection->insertOnDuplicate(
-            $this->resource->getTableName(self::CODES_TABLE),
-            ['coupon_id' => $couponId, 'expires_at' => $until, 'revoked' => 1],
-            ['expires_at', 'revoked']
-        );
-        return true;
+        return $spent > 0;
     }
 
     /**
