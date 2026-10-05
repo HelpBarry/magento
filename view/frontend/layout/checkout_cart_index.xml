@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <!-- Under the cart, when Studio switched recommendations on for it (Block\Placement). -->
+        <referenceContainer name="content">
+            <block class="Bluebarry\Bluebarry\Block\Placement" name="bluebarry.cart.recommendations" after="-"
+                   template="Bluebarry_Bluebarry::placement/recommendations.phtml">
+                <arguments>
+                    <argument name="placement" xsi:type="string">cartRecommendations</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+    </body>
+</page>

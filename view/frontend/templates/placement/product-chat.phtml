@@ -1,0 +1,12 @@
+<?php
+/**
+ * Product chat, inline: on product pages when switched on in Studio, and wherever the Product chat
+ * widget is placed.
+ *
+ * @var \Bluebarry\Bluebarry\Block\Placement $block
+ */
+if ($block->getData('placement') ? $block->getPlacement((string) $block->getData('placement')) === null : !$block->isConnected()) {
+    return;
+}
+?>
+<div data-bluebarry-product-chat-embed></div>

@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!-- The bluebarry elements as widgets, for anywhere the automatic placements (Studio, On your store)
+     do not put them: in a CMS page or block (Insert Widget), or assigned to a page's container under
+     Content > Widgets. Each prints the same markup as the automatic placement. -->
+<widgets xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Widget:etc/widget.xsd">
+    <widget id="bluebarry_quiz_button" class="Bluebarry\Bluebarry\Block\Widget\QuizButton" is_email_compatible="false">
+        <label translate="true">bluebarry quiz button</label>
+        <description translate="true">A button that opens a bluebarry quiz.</description>
+        <parameters>
+            <parameter name="quiz" xsi:type="text" required="true" visible="true" sort_order="10">
+                <label translate="true">Quiz ID</label>
+                <description translate="true">Copy it from the quiz's Launch tab in bluebarry.</description>
+            </parameter>
+            <parameter name="text" xsi:type="text" required="false" visible="true" sort_order="20">
+                <label translate="true">Button text</label>
+                <value>Find your match</value>
+            </parameter>
+        </parameters>
+    </widget>
+    <widget id="bluebarry_quiz_popup" class="Bluebarry\Bluebarry\Block\Widget\QuizPopup" is_email_compatible="false">
+        <label translate="true">bluebarry quiz popup</label>
+        <description translate="true">Opens a bluebarry quiz as a popup on the page this widget is on.</description>
+        <parameters>
+            <parameter name="quiz" xsi:type="text" required="true" visible="true" sort_order="10">
+                <label translate="true">Quiz ID</label>
+                <description translate="true">Copy it from the quiz's Launch tab in bluebarry.</description>
+            </parameter>
+            <parameter name="trigger" xsi:type="select" required="true" visible="true" sort_order="20">
+                <label translate="true">Opens</label>
+                <options>
+                    <option name="delay" value="delay" selected="true">
+                        <label translate="true">After a number of seconds</label>
+                    </option>
+                    <option name="scroll" value="scroll">
+                        <label translate="true">After scrolling part of the page</label>
+                    </option>
+                    <option name="exit" value="exit">
+                        <label translate="true">When the visitor is about to leave</label>
+                    </option>
+                </options>
+            </parameter>
+            <parameter name="delay" xsi:type="text" required="false" visible="true" sort_order="30">
+                <label translate="true">Seconds to wait</label>
+                <depends>
+                    <parameter name="trigger" value="delay"/>
+                </depends>
+                <value>5</value>
+            </parameter>
+            <parameter name="scroll" xsi:type="text" required="false" visible="true" sort_order="40">
+                <label translate="true">Part of the page scrolled (percent)</label>
+                <depends>
+                    <parameter name="trigger" value="scroll"/>
+                </depends>
+                <value>50</value>
+            </parameter>
+            <parameter name="cooldown" xsi:type="text" required="false" visible="true" sort_order="50">
+                <label translate="true">Days before the same visitor sees it again</label>
+                <value>7</value>
+            </parameter>
+        </parameters>
+    </widget>
+    <widget id="bluebarry_product_check" class="Bluebarry\Bluebarry\Block\Widget\ProductCheck" is_email_compatible="false">
+        <label translate="true">bluebarry product check button</label>
+        <description translate="true">The "Is this right for me?" button, on product pages of products with a product check quiz.</description>
+        <parameters>
+            <parameter name="text" xsi:type="text" required="false" visible="true" sort_order="10">
+                <label translate="true">Button text</label>
+                <description translate="true">Leave empty for the text set in bluebarry.</description>
+            </parameter>
+        </parameters>
+    </widget>
+    <widget id="bluebarry_recommendations" class="Bluebarry\Bluebarry\Block\Widget\Recommendations" is_email_compatible="false">
+        <label translate="true">bluebarry recommendations</label>
+        <description translate="true">A bluebarry recommendation block: from the product on a product page, from the cart anywhere else.</description>
+        <parameters>
+            <parameter name="block_id" xsi:type="text" required="true" visible="true" sort_order="10">
+                <label translate="true">Recommendation block ID</label>
+                <description translate="true">The last part of the address of the recommendation block's page in bluebarry.</description>
+            </parameter>
+        </parameters>
+    </widget>
+    <widget id="bluebarry_product_chat" class="Bluebarry\Bluebarry\Block\Widget\ProductChat" is_email_compatible="false">
+        <label translate="true">bluebarry product chat</label>
+        <description translate="true">Product chat, shown inline where this widget is placed.</description>
+    </widget>
+</widgets>

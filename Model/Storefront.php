@@ -14,8 +14,9 @@ use Magento\Store\Api\Data\WebsiteInterface;
 use Magento\Store\Model\StoreManagerInterface;
 
 /**
- * What each website shows from bluebarry, chosen in Studio: for now, search (the search box's
- * configuration and whether bluebarry's results replace the catalog search results page).
+ * What each website shows from bluebarry, chosen in Studio: search (the search box's configuration
+ * and whether bluebarry's results replace the catalog search results page), the elements on product
+ * and cart pages (Block\Placement), and which products have a product check quiz.
  *
  * Kept here, read from bluebarry with the website's API key every hour and whenever bluebarry
  * asks (Controller\Command\Index, "settings.refresh"), so a shopper's page never waits for bluebarry.
@@ -24,6 +25,15 @@ use Magento\Store\Model\StoreManagerInterface;
 class Storefront
 {
     public const FLAG = 'bluebarry_storefront';
+
+    /**
+     * Which products have a product check quiz, per website: a store can have thousands, so they are
+     * kept apart from the settings every page reads, and only product pages with the button read them.
+     */
+    public const CHECKS_FLAG = 'bluebarry_product_checks';
+
+    /** The elements Studio can switch on. */
+    private const PLACEMENTS = ['productCheck', 'productChat', 'productRecommendations', 'cartRecommendations'];
 
     /** The cache tag of every page that prints the settings (Block\Advisor), per website: cacheTag(). */
     public const CACHE_TAG = 'bluebarry_storefront';
@@ -114,6 +124,51 @@ class Storefront
     }
 
     /**
+     * An element Studio switched on for a website, or null while it is off: productCheck (with
+     * buttonText), productChat, productRecommendations and cartRecommendations (with recommendationId).
+     * Only for the Tenant ID the settings were read for.
+     *
+     * @param int|string $websiteId
+     * @param string $tenantId the store view's
+     * @param string $name
+     * @return array|null
+     */
+    public function placement($websiteId, string $tenantId, string $name): ?array
+    {
+        $settings = $this->cached()[(int) $websiteId] ?? null;
+        if (!$settings || strtolower((string) ($settings['tenantId'] ?? '')) !== strtolower($tenantId)) {
+            return null;
+        }
+        $placement = $settings['placements'][$name] ?? null;
+        return is_array($placement) ? $placement : null;
+    }
+
+    /**
+     * The product check quiz of a product (as bluebarry groups it: a configurable product's own id),
+     * or null when it has none. Only for the Tenant ID the settings were read for.
+     *
+     * @param int|string $websiteId
+     * @param string $tenantId the store view's
+     * @param string $productId
+     * @return string|null the quiz's id
+     */
+    public function productCheck($websiteId, string $tenantId, string $productId): ?string
+    {
+        $settings = $this->cached()[(int) $websiteId] ?? null;
+        if (!$settings || empty($settings['checks']) || strtolower((string) ($settings['tenantId'] ?? '')) !== strtolower($tenantId)) {
+            return null;
+        }
+        $checks = $this->checks((int) $websiteId);
+        // Read for other settings than the pages have now: a refresh is saving them, or its checks
+        // were lost. No button until both agree again.
+        if (($checks['version'] ?? null) !== $settings['checks']) {
+            return null;
+        }
+        $quiz = $checks['products'][$productId] ?? null;
+        return is_string($quiz) ? $quiz : null;
+    }
+
+    /**
      * Reads every connected website's settings (the cron).
      *
      * @return void
@@ -168,8 +223,64 @@ class Storefront
             return null;
         }
         $version = (string) ($answer['version'] ?? '');
-        $this->save($websiteId, ['tenantId' => strtolower($tenantId), 'version' => $version, 'search' => $search], $started);
+        $settings = ['tenantId' => strtolower($tenantId), 'version' => $version, 'search' => $search];
+        $placements = self::placements($answer['placements'] ?? null);
+        if ($placements) {
+            $settings['placements'] = $placements;
+        }
+        $checks = self::productChecks($answer['productChecks'] ?? null);
+        if ($checks) {
+            // The pages know the checks by this: they change with any product's quiz.
+            $settings['checks'] = hash('sha256', (string) json_encode($checks));
+        }
+        $this->save($websiteId, $settings, $started, $checks);
         return $version;
+    }
+
+    /**
+     * The elements switched on, as the module keeps them: only known ones, only while on, with only
+     * the fields it prints. A bluebarry from before placements sends none.
+     *
+     * @param mixed $answer
+     * @return array
+     */
+    private static function placements($answer): array
+    {
+        $placements = [];
+        foreach (self::PLACEMENTS as $name) {
+            $placement = is_array($answer) ? ($answer[$name] ?? null) : null;
+            if (!is_array($placement) || ($placement['enabled'] ?? null) !== true) {
+                continue;
+            }
+            if ($name === 'productCheck') {
+                $text = is_string($placement['buttonText'] ?? null) ? trim($placement['buttonText']) : '';
+                $placements[$name] = $text === '' ? [] : ['buttonText' => function_exists('mb_substr') ? mb_substr($text, 0, 60) : substr($text, 0, 60)];
+            } elseif ($name === 'productChat') {
+                $placements[$name] = [];
+            } elseif (Visitor::isUuid($placement['recommendationId'] ?? null)) {
+                $placements[$name] = ['recommendationId' => strtolower($placement['recommendationId'])];
+            }
+        }
+        return $placements;
+    }
+
+    /**
+     * Product id => quiz id, for the products bluebarry names with a number and a quiz it names with
+     * an id, in the product's order so the same checks are the same text.
+     *
+     * @param mixed $answer
+     * @return array<string, string>
+     */
+    private static function productChecks($answer): array
+    {
+        $checks = [];
+        foreach (is_array($answer) ? $answer : [] as $product => $quiz) {
+            if (ctype_digit((string) $product) && Visitor::isUuid($quiz)) {
+                $checks[(string) $product] = strtolower($quiz);
+            }
+        }
+        ksort($checks, SORT_STRING);
+        return $checks;
     }
 
     /**
@@ -187,9 +298,10 @@ class Storefront
      * @param int $websiteId
      * @param array|null $settings
      * @param int $started when the read began, in milliseconds
+     * @param array<string, string> $checks product id => quiz id
      * @return void
      */
-    private function save(int $websiteId, ?array $settings, int $started): void
+    private function save(int $websiteId, ?array $settings, int $started, array $checks = []): void
     {
         // Websites refresh on their own (the cron, bluebarry's commands): one writes at a time, so
         // none saves over another's newer settings. Not now: the next refresh saves them.
@@ -197,10 +309,57 @@ class Storefront
             return;
         }
         try {
+            if ((int) ($this->state()[$websiteId]['fetched'] ?? 0) <= $started) {
+                // Before the settings that name them, so a page never reads settings whose checks
+                // are not there yet.
+                $this->writeChecks($websiteId, $settings['checks'] ?? null, $checks);
+            }
             $this->write($websiteId, $settings, $started);
         } finally {
             $this->locks->unlock(self::FLAG);
         }
+    }
+
+    /**
+     * @param int $websiteId
+     * @param string|null $version the settings' name for these checks, or null when there are none
+     * @param array<string, string> $checks
+     * @return void
+     */
+    private function writeChecks(int $websiteId, ?string $version, array $checks): void
+    {
+        $all = $this->flags->getFlagData(self::CHECKS_FLAG);
+        $all = is_array($all) ? $all : [];
+        if (($all[$websiteId]['version'] ?? null) === $version) {
+            return;
+        }
+        if ($version === null) {
+            unset($all[$websiteId]);
+        } else {
+            $all[$websiteId] = ['version' => $version, 'products' => $checks];
+        }
+        $this->flags->saveFlag(self::CHECKS_FLAG, $all);
+        $this->cache->remove(self::CHECKS_FLAG . '_' . $websiteId);
+    }
+
+    /**
+     * A website's product checks as product pages read them: from Magento's cache, so rendering one
+     * costs no query.
+     *
+     * @param int $websiteId
+     * @return array{version?: string, products?: array<string, string>}
+     */
+    private function checks(int $websiteId): array
+    {
+        $key = self::CHECKS_FLAG . '_' . $websiteId;
+        $cached = $this->cache->load($key);
+        if (is_string($cached) && is_array($decoded = json_decode($cached, true))) {
+            return $decoded;
+        }
+        $all = $this->flags->getFlagData(self::CHECKS_FLAG);
+        $checks = is_array($all) && is_array($all[$websiteId] ?? null) ? $all[$websiteId] : [];
+        $this->cache->save((string) json_encode($checks), $key, [ConfigCache::CACHE_TAG]);
+        return $checks;
     }
 
     /**

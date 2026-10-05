@@ -1,0 +1,50 @@
+<?php
+/**
+ * Opens a quiz as a popup on the page it is on, once per cooldown, like Shopify's popup trigger block
+ * (the Quiz popup widget).
+ *
+ * @var \Bluebarry\Bluebarry\Block\Widget\QuizPopup $block
+ */
+$quiz = $block->quizId($block->getData('quiz'));
+if ($quiz === null) {
+    return;
+}
+$trigger = (string) $block->getData('trigger');
+$config = [
+    'quiz' => $quiz,
+    'trigger' => in_array($trigger, ['delay', 'scroll', 'exit'], true) ? $trigger : 'delay',
+    'delay' => max(0, (int) ($block->getData('delay') ?? 5)),
+    'scroll' => min(100, max(0, (int) ($block->getData('scroll') ?? 50))),
+    'cooldown' => max(0, (int) ($block->getData('cooldown') ?? 7)),
+];
+?>
+<script nonce="<?= $block->escapeHtmlAttr($block->getNonce()) ?>">
+    (function (config) {
+        // Per quiz: one campaign's popup doesn't silence another's.
+        var KEY = '_barry_popup_shown_' + config.quiz;
+        try {
+            var last = parseInt(localStorage.getItem(KEY) || '0', 10);
+            if (last && (Date.now() - last) / 86400000 < config.cooldown) return;
+        } catch (e) {}
+        var done = false;
+        function open() {
+            if (done) return;
+            if (!window.barry || !window.barry.openAdvisor) { setTimeout(open, 500); return; }
+            done = true;
+            try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+            window.barry.openAdvisor(config.quiz, undefined, { displayType: 'Dialog', pageContext: { source: 'quiz-popup-widget' } });
+        }
+        if (config.trigger === 'scroll') {
+            window.addEventListener('scroll', function onScroll() {
+                var height = document.documentElement.scrollHeight - window.innerHeight;
+                if (height <= 0 || (window.scrollY / height) * 100 >= config.scroll) { window.removeEventListener('scroll', onScroll); open(); }
+            }, { passive: true });
+        } else if (config.trigger === 'exit') {
+            document.addEventListener('mouseout', function onOut(event) {
+                if (!event.relatedTarget && event.clientY <= 0) { document.removeEventListener('mouseout', onOut); open(); }
+            });
+        } else {
+            setTimeout(open, config.delay * 1000);
+        }
+    })(<?= /* @noEscape */ json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);
+</script>

@@ -1,0 +1,18 @@
+<?php
+/**
+ * A button that opens a quiz (the Quiz button widget).
+ *
+ * @var \Bluebarry\Bluebarry\Block\Widget\QuizButton $block
+ * @var \Magento\Framework\Escaper $escaper
+ */
+$quiz = $block->quizId($block->getData('quiz'));
+if ($quiz === null) {
+    return;
+}
+$text = trim((string) $block->getData('text'));
+?>
+<div class="bluebarry-simple-quiz-button">
+    <a class="bluebarry-simple-quiz-button__btn"
+       href="<?= $escaper->escapeHtmlAttr('#bluebarry:' . $quiz) ?>"
+       style="display:inline-block;padding:12px 24px;font-size:16px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;border:none;border-radius:4px;background-color:#121212;color:#ffffff;"><?= $escaper->escapeHtml($text !== '' ? $text : __('Find your match')) ?></a>
+</div>
