@@ -170,7 +170,15 @@ test.describe('catalog sync', () => {
     // bluebarry is down: the set stays to be sent.
     await rest(request, 'put', `/rest/V1/categories/${categoryId}`, { category: { name: 'BB Catalog' } });
     await mockApi.respondWith({ status: 503 });
-    expect(magento('bluebarry:catalog:sync')).toContain('could not be sent');
+    // The command says so and fails, for whoever scripts it.
+    let failure: { status?: number; stdout?: string } | null = null;
+    try {
+      magento('bluebarry:catalog:sync');
+    } catch (error) {
+      failure = error as { status?: number; stdout?: string };
+    }
+    expect(failure?.status).toBe(1);
+    expect(String(failure?.stdout)).toContain('could not be sent');
     await mockApi.reset();
     expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
     expect((await categorySets())[0].body.categories.find((c: any) => c.id === String(categoryId)).name).toBe('BB Catalog');

@@ -89,6 +89,6 @@ class SyncCatalog extends Command
             $output->writeln('<error>' . $status['error'] . '</error>');
             return 1;
         }
-        return 0;
+        return $categories['failed'] > 0 ? 1 : 0;
     }
 }
