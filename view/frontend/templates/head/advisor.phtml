@@ -11,10 +11,17 @@ if ($tenantId != null && $tenantId != "") {
     window.barry.tenantId = "<?= $block->escapeJs($tenantId); ?>";
     window.barry.platform = "magento";
     // The SDK's Magento cart bridge adds through the module (bluebarry/cart/add).
+    // Discounts go through the module too (bluebarry/cart/discount): a quiz's or popup's code, and
+    // the offers of quiz results and recommendation blocks.
     window.barry.magento = {
         addToCartUrl: "<?= $block->escapeJs($block->getUrl('bluebarry/cart/add')); ?>",
+        discountUrl: "<?= $block->escapeJs($block->getUrl('bluebarry/cart/discount')); ?>",
         cartUrl: "<?= $block->escapeJs($block->getUrl('checkout/cart')); ?>"
     };
+<?php if ($block->hasApiKey()): ?>
+    // The rewards panel asks the store whether the shopper is signed in (bluebarry/loyalty/session).
+    window.barry.loyaltySessionUrl = "<?= $block->escapeJs($block->getUrl('bluebarry/loyalty/session')); ?>";
+<?php endif; ?>
     // The SDK sends page views, product views and adds to the cart itself on Magento, which has no web
     // pixel (SDK/src/storefront). The page describes itself: only what its address decides, so a page
     // from the full page cache is right for everyone.

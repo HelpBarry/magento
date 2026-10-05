@@ -11,6 +11,7 @@
 //                               what GET /data/magento/storefront answers
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const DEFAULT_BEHAVIOR = { status: 200, delayMs: 0, body: null };
@@ -207,6 +208,39 @@ const tasksRoute = {
 export const API_KEY = 'test-api-key';
 const API_KEY_TENANT = 'test-tenant';
 
+// A signed offer, checked the way DataApi's offers/coupon does, minus the signature (the tests make
+// the offers): 204 for an offer that gives nothing, 400 for one that is not an offer, 403 for one bound
+// to another shopper, else the one-time coupon to make. The whole set gets the "kit" rule when the
+// offer has one, part of it the "single" rule.
+const offerCoupon = {
+  disallowUnknown: true,
+  required: ['grant'],
+  fields: { grant: types.nullableString(8192), userId: types.nullableGuid, wholeSet: (v) => typeof v === 'boolean' },
+};
+function couponForOffer(body) {
+  let offer;
+  try {
+    offer = JSON.parse(Buffer.from(String(body.grant).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  } catch {
+    return [400, 'Invalid or expired offer.'];
+  }
+  if (!offer || !Array.isArray(offer.variantIds) || offer.expired) return [400, 'Invalid or expired offer.'];
+  if (offer.userId && offer.userId !== body.userId) return [403, null];
+  const rules = Array.isArray(offer.rules) ? offer.rules : [];
+  const kit = body.wholeSet ? rules.find((rule) => String(rule.scope).toLowerCase() === 'kit') : undefined;
+  const rule = kit ?? rules.find((rule) => String(rule.scope).toLowerCase() === 'single');
+  if (!rule) return [204, null];
+  const code = 'BB-' + createHash('sha256').update(`${body.grant}|${body.userId ?? ''}|${kit ? 'kit' : 'single'}`).digest('hex').slice(0, 12).toUpperCase();
+  return [200, {
+    code,
+    discountType: String(rule.type).toLowerCase() === 'percentage' ? 'percent' : 'fixed_product',
+    amount: Number(rule.value),
+    productIds: offer.variantIds.map(String),
+    expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+    minimumSpend: null, freeShipping: false, email: null, description: 'bluebarry offer', individualUse: false,
+  }];
+}
+
 const routes = {
   '/data/conversionevents': { schema: conversionEvent, ok: (n) => [201, { id: `mock-${n}` }] },
   '/data/identify': { schema: identify, ok: () => [204, null] },
@@ -229,6 +263,13 @@ const routes = {
   },
   '/data/magento/orders/sync': { schema: ordersSync, auth: 'apiKey', ok: () => [200, { synced: 0 }] },
   '/data/magento/checkout-started': { schema: checkoutStarted, auth: 'apiKey', ok: () => [204, null] },
+  '/data/magento/offers/coupon': { schema: offerCoupon, auth: 'apiKey', ok: (n, body) => couponForOffer(body) },
+  // The module vouching for a signed-in customer: bluebarry answers with their rewards session.
+  '/data/magento/loyalty/customer-session': {
+    schema: { disallowUnknown: true, required: ['email'], fields: { email: types.requiredEmail, referralCode: types.nullableString(64) } },
+    auth: 'apiKey',
+    ok: (n, body) => [200, { token: `mock-loyalty-${body.email}`, expiresAt: new Date(Date.now() + 86400000).toISOString() }],
+  },
   '/data/magento/deactivate': { schema: { disallowUnknown: false, required: ['siteUrl'], fields: { siteUrl: types.any } }, auth: 'apiKey', ok: () => [200, { success: true }] },
 };
 

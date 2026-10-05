@@ -86,4 +86,34 @@
             <column name="noted_at"/>
         </index>
     </table>
+    <!-- The cart price rules bluebarry's discount codes live under: one per set of terms (10% off, 5.00 off
+         these products), found again by the hash of those terms, so a thousand codes are one rule. No
+         foreign key: Adobe Commerce keeps a rule's versions under one rule_id, which is not unique there.
+         A row whose rule was deleted is cleared by the cron. -->
+    <table name="bluebarry_discount_rule" resource="default" engine="innodb" comment="bluebarry cart price rules">
+        <column xsi:type="int" name="rule_id" unsigned="true" nullable="false" comment="Cart price rule ID"/>
+        <column xsi:type="varchar" name="terms_hash" length="64" nullable="false" comment="Hash of the rule's terms"/>
+        <column xsi:type="varchar" name="kind" length="16" nullable="false" comment="code (rewards, popup and quiz codes) or offer (quiz and recommendation offers)"/>
+        <column xsi:type="timestamp" name="created_at" on_update="false" nullable="false" default="CURRENT_TIMESTAMP" comment="Created at"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="rule_id"/>
+        </constraint>
+        <constraint xsi:type="unique" referenceId="BLUEBARRY_DISCOUNT_RULE_TERMS_HASH">
+            <column name="terms_hash"/>
+        </constraint>
+    </table>
+    <!-- When each of bluebarry's codes ends. Magento keeps a coupon's expiry date but never checks it (only
+         a rule's own dates end its codes), so the cron removes a code once this moment has passed. Only
+         codes that end are here. No foreign key, for the same reason as above; a row whose coupon is gone
+         goes with its own expiry. -->
+    <table name="bluebarry_discount_code" resource="default" engine="innodb" comment="bluebarry coupon code expiry">
+        <column xsi:type="int" name="coupon_id" unsigned="true" nullable="false" comment="Coupon ID"/>
+        <column xsi:type="datetime" name="expires_at" nullable="false" comment="Its last moment, UTC"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="coupon_id"/>
+        </constraint>
+        <index referenceId="BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT" indexType="btree">
+            <column name="expires_at"/>
+        </index>
+    </table>
 </schema>

@@ -64,7 +64,13 @@
                 <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
                 <item name="bluebarry_catalog_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncCatalog</item>
                 <item name="bluebarry_orders_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncOrders</item>
+                <item name="bluebarry_discounts_clean" xsi:type="object">Bluebarry\Bluebarry\Console\Command\CleanDiscountCodes</item>
             </argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\CleanDiscountCodes">
+        <arguments>
+            <argument name="coupons" xsi:type="object">Bluebarry\Bluebarry\Model\Discount\Coupons\Proxy</argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Console\Command\SendDueConversions">

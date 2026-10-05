@@ -118,6 +118,21 @@ class Advisor extends Template implements IdentityInterface
     }
 
     /**
+     * Whether this website is connected with an API key: only then can the module vouch for a signed-in
+     * customer to bluebarry.
+     *
+     * @return bool
+     */
+    public function hasApiKey(): bool
+    {
+        return (string) $this->scopeConfig->getValue(
+            \Bluebarry\Bluebarry\Model\Config::XML_API_KEY,
+            ScopeInterface::SCOPE_WEBSITE,
+            $this->storeManager->getStore()->getWebsiteId()
+        ) !== '';
+    }
+
+    /**
      * Get CSP Nonce
      *
      * @return string
