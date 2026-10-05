@@ -15,6 +15,16 @@
         <observer name="bluebarry_queue_paid_order" instance="Bluebarry\Bluebarry\Observer\QueuePaidOrder" />
         <observer name="bluebarry_queue_order_sync" instance="Bluebarry\Bluebarry\Observer\QueueOrderSync" />
     </event>
+    <!-- The categories themselves: a change is noted (one flag write), and the cron sends the set. -->
+    <event name="catalog_category_save_commit_after">
+        <observer name="bluebarry_note_changed_categories" instance="Bluebarry\Bluebarry\Observer\NoteChangedCategories" />
+    </event>
+    <event name="catalog_category_delete_commit_after">
+        <observer name="bluebarry_note_changed_categories" instance="Bluebarry\Bluebarry\Observer\NoteChangedCategories" />
+    </event>
+    <event name="category_move">
+        <observer name="bluebarry_note_changed_categories" instance="Bluebarry\Bluebarry\Observer\NoteChangedCategories" />
+    </event>
     <!-- Catalog sync: queue the products a change touched (one insert; sent from the cron). -->
     <event name="catalog_product_save_before">
         <observer name="bluebarry_queue_changed_products" instance="Bluebarry\Bluebarry\Observer\QueueChangedProducts" />

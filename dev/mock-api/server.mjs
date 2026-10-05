@@ -263,6 +263,17 @@ const routes = {
   },
   '/data/magento/orders/sync': { schema: ordersSync, auth: 'apiKey', ok: () => [200, { synced: 0 }] },
   '/data/magento/checkout-started': { schema: checkoutStarted, auth: 'apiKey', ok: () => [204, null] },
+  // The full set of a website's categories, kept as collections.
+  '/data/magento/categories': {
+    schema: {
+      disallowUnknown: true, required: ['categories'],
+      fields: { categories: (v) => Array.isArray(v) && v.every((c) => c && typeof c.id === 'string' && /^\d+$/.test(c.id) && typeof c.name === 'string'
+        && typeof c.url === 'string' && typeof c.path === 'string' && Number.isInteger(c.count) && (c.imageUrl === null || typeof c.imageUrl === 'string')
+        && typeof c.description === 'string') },
+    },
+    auth: 'apiKey',
+    ok: (n, body) => [200, { synced: body.categories.length, deleted: 0, errors: 0 }],
+  },
   '/data/magento/offers/coupon': { schema: offerCoupon, auth: 'apiKey', ok: (n, body) => couponForOffer(body) },
   // The module vouching for a signed-in customer: bluebarry answers with their rewards session.
   '/data/magento/loyalty/customer-session': {

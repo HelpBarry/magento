@@ -93,7 +93,7 @@ test.describe('catalog sync', () => {
     await request.delete(`/rest/V1/products/${SKU}`, { headers: { Authorization: `Bearer ${token}` } });
     if (categoryId) await request.delete(`/rest/V1/categories/${categoryId}`, { headers: { Authorization: `Bearer ${token}` } });
     sql("DELETE FROM core_config_data WHERE path = 'bluebarry_module/general/api_key'");
-    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_catalog'");
+    sql("DELETE FROM flag WHERE flag_code IN ('bluebarry_catalog', 'bluebarry_categories')");
     sql('DELETE FROM bluebarry_product_sync');
     magento('cache:flush');
   });
@@ -135,6 +135,45 @@ test.describe('catalog sync', () => {
 
     // A bundle part without a page of its own is no product in bluebarry.
     expect(await sent(productId('bb-part-a'))).toEqual([{ reference: productId('bb-part-a'), inactive: true }]);
+  });
+
+  test('the categories go too, named as the products name them, and again only when one changed', async ({ request }) => {
+    sql("DELETE FROM flag WHERE flag_code = 'bluebarry_categories'");
+    const categorySets = async () => (await mockApi.requests()).filter((r) => r.path === '/data/magento/categories');
+
+    expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
+    const [first] = await categorySets();
+    expect(first.contractErrors).toEqual([]);
+    expect(first.headers.authorization).toBe('test-api-key');
+    const category = first.body.categories.find((c: any) => c.id === String(categoryId));
+    // The name the catalog sync puts on its products, the category's own page, and what it holds.
+    expect(category).toEqual({
+      id: String(categoryId), name: 'BB Catalog', description: '', imageUrl: null,
+      url: `${BASE_URL}/bb-catalog.html`, path: '/bb-catalog.html', count: 1,
+    });
+    // The store's root category is no category of its own.
+    expect(first.body.categories.map((c: any) => c.name)).not.toContain('Default Category');
+
+    // Nothing changed: nothing is sent, also when asked.
+    await mockApi.reset();
+    expect(magento('bluebarry:catalog:sync')).toContain('The categories are up to date.');
+    expect(await categorySets()).toHaveLength(0);
+
+    // A category renamed in the admin is noted, and the next run sends the set again.
+    await rest(request, 'put', `/rest/V1/categories/${categoryId}`, { category: { name: 'BB Catalog &amp; more' } });
+    expect(sql("SELECT flag_data FROM flag WHERE flag_code = 'bluebarry_categories'")).toContain('"changed":true');
+    magento('bluebarry:catalog:sync');
+    const [renamed] = await categorySets();
+    expect(renamed.body.categories.find((c: any) => c.id === String(categoryId)).name).toBe('BB Catalog & more');
+    expect(sql("SELECT flag_data FROM flag WHERE flag_code = 'bluebarry_categories'")).toContain('"changed":false');
+
+    // bluebarry is down: the set stays to be sent.
+    await rest(request, 'put', `/rest/V1/categories/${categoryId}`, { category: { name: 'BB Catalog' } });
+    await mockApi.respondWith({ status: 503 });
+    expect(magento('bluebarry:catalog:sync')).toContain('could not be sent');
+    await mockApi.reset();
+    expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
+    expect((await categorySets())[0].body.categories.find((c: any) => c.id === String(categoryId)).name).toBe('BB Catalog');
   });
 
   test('a sale goes out once Magento indexed its price', async ({ request }) => {

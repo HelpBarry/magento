@@ -7,6 +7,7 @@ This extension for Magento 2 integrates your store with [Bluebarry](https://blue
 - Records every paid order from a shopper who used bluebarry (quiz, search, recommendations, product chat, popups) and identifies the buyer's email, from the background so checkout never waits
 - Connects each Magento website to bluebarry with its Tenant ID and API key, and shows the connection in the admin and in bluebarry
 - Keeps bluebarry's copy of your catalog current without a product feed: products, variants, attributes, categories, prices, sale prices, images and stock
+- Sends your categories themselves (names, pages, images, product counts), so recommendation blocks can be limited to a category and search suggests them
 - Adds to the cart from a quiz result, the search widget and recommendation blocks, and updates the mini-cart (Luma and Hyvä)
 - Turns on bluebarry search and its results page from bluebarry (Search > Launch), without settings in Magento
 - Shows the product check button, product chat and recommendation blocks on product and cart pages when you switch them on in bluebarry, without editing your theme, and adds widgets to place them and your quizzes anywhere else
@@ -79,6 +80,7 @@ With `--remove-data`, Magento runs the module's own uninstall step, which tells 
 - Names, addresses, images and prices as the website's default store view shows them to guests, in its display currency: the price shoppers pay (special prices and catalog price rules included) and the regular price while it is higher.
 - Stock status and, while Magento manages the stock without backorders, the quantity that can still be sold.
 - Attributes that are shown on the product page or filterable in the layered navigation, as `attr_<code>`, and the product's categories.
+- The active categories of the website's category tree, by their Magento category id: within five minutes of a change, and once a day for their product counts. A store with more than 5000 categories sends none.
 - Websites that share a Tenant ID send one catalog: the default website's, or else the first one's.
 
 ## Usage

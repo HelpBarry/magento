@@ -16,6 +16,10 @@
         <job name="bluebarry_sync_catalog" instance="Bluebarry\Bluebarry\Cron\SyncCatalog" method="execute">
             <schedule>* * * * *</schedule>
         </job>
+        <!-- The categories, when one changed and once a day for their product counts. One flag read otherwise. -->
+        <job name="bluebarry_sync_categories" instance="Bluebarry\Bluebarry\Cron\SyncCategories" method="execute">
+            <schedule>*/5 * * * *</schedule>
+        </job>
         <!-- bluebarry's coupon codes end by being removed once their last moment has passed. Three small
              indexed queries when none has. -->
         <job name="bluebarry_clean_discount_codes" instance="Bluebarry\Bluebarry\Cron\CleanDiscountCodes" method="execute">
