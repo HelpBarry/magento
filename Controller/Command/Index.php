@@ -127,7 +127,10 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
                 return $result->setData(['started' => $this->orders->startImport((int) $website->getId(), $since ?: time() - 365 * 86400)]);
             case 'store.info':
                 // What bluebarry checks before it counts on this store for discount codes.
-                return $result->setData(['currency' => (string) $website->getBaseCurrencyCode(), 'couponsEnabled' => true]);
+                return $result->setData([
+                    'currency' => $website instanceof \Magento\Store\Model\Website ? (string) $website->getBaseCurrencyCode() : '',
+                    'couponsEnabled' => true,
+                ]);
             case 'coupon.create':
                 // A reward's, a popup's or a quiz's code for one person: single-use, under a cart price
                 // rule for its terms. 422 when it cannot be made as described: nothing was made.

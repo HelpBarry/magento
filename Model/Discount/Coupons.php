@@ -147,8 +147,9 @@ class Coupons
      * @param array $spec
      * @param WebsiteInterface $website the website asked; the code also holds on its sister websites
      * @param string $kind DiscountRules::KIND_CODE or KIND_OFFER
-     * @return array{exists: bool, id: int, status: string, usageCount: int}
+     * @return array{exists: bool, id?: int, status?: string, usageCount: int}
      * @throws RefusedException when the code cannot be made as described
+     * @throws \Exception when the store could not make it right now
      */
     public function ensure(array $spec, WebsiteInterface $website, string $kind = DiscountRules::KIND_CODE): array
     {
