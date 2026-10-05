@@ -40,6 +40,8 @@ class CouponsTest extends TestCase
     private array $orders = [];
     /** @var string[] the locks taken */
     private array $lockNames = [];
+    /** @var array<int, string> website => its currency, where it is not euros */
+    private array $currencies = [];
     private ?\Closure $whileWaitingForTheLock = null;
     private int $openedToGroups = 0;
     /** @var array<string, string[]> product id => the configurable products it is a variant of */
@@ -234,6 +236,16 @@ class CouponsTest extends TestCase
         $this->assertSame(['exists' => true, 'id' => 3, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0002', $this->website(1)));
     }
 
+    public function testACodeDoesNotHoldOnASisterWebsiteThatSellsInAnotherCurrency(): void
+    {
+        // Website 3 reports to the same account as website 1, in pounds: 5 off would be another amount there.
+        $this->currencies[3] = 'GBP';
+
+        $this->coupons()->ensure(['code' => 'CODE-0001', 'discountType' => 'fixed_cart', 'amount' => 5], $this->website(1));
+
+        $this->assertSame([1], $this->posted[0]['website_ids']);
+    }
+
     public function testTheSameRequestDeliveredTwiceAtOnceMakesOneCode(): void
     {
         $coupons = $this->coupons();
@@ -329,6 +341,7 @@ class CouponsTest extends TestCase
     {
         $website = $this->createStub(Website::class);
         $website->method('getId')->willReturn($id);
+        $website->method('getBaseCurrencyCode')->willReturnCallback(fn () => $this->currencies[$id] ?? 'EUR');
         return $website;
     }
 

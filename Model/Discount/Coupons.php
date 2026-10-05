@@ -481,7 +481,9 @@ class Coupons
 
     /**
      * The websites a code holds on: every website of this Magento that reports to the same bluebarry
-     * account as the one asked, so a code mailed to a shopper works on whichever of them they return to.
+     * account as the one asked and sells in the same currency, so a code mailed to a shopper works on
+     * whichever of them they return to. An amount off is in the asked website's currency: on a website
+     * with another one the same number would be another amount.
      *
      * @param WebsiteInterface $website
      * @return int[] sorted
@@ -489,15 +491,26 @@ class Coupons
     private function sisterWebsites(WebsiteInterface $website): array
     {
         $tenantId = strtolower((string) $this->config->getWebsiteTenantId($website->getId()));
+        $currency = self::currency($website);
         $ids = [(int) $website->getId()];
         foreach ($this->storeManager->getWebsites() as $other) {
-            if ($tenantId !== '' && strtolower((string) $this->config->getWebsiteTenantId($other->getId())) === $tenantId) {
+            if ($tenantId !== '' && strtolower((string) $this->config->getWebsiteTenantId($other->getId())) === $tenantId
+                && self::currency($other) === $currency) {
                 $ids[] = (int) $other->getId();
             }
         }
         $ids = array_values(array_unique($ids));
         sort($ids);
         return $ids;
+    }
+
+    /**
+     * @param WebsiteInterface $website
+     * @return string
+     */
+    private static function currency(WebsiteInterface $website): string
+    {
+        return $website instanceof \Magento\Store\Model\Website ? (string) $website->getBaseCurrencyCode() : '';
     }
 
     /**
