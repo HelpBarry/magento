@@ -37,7 +37,11 @@ test.describe('add to cart from bluebarry', () => {
 
   test('the storefront tells the SDK where to add and where the cart is', async ({ page }) => {
     const config = await page.evaluate(() => (window as any).barry.magento);
-    expect(config).toEqual({ addToCartUrl: `${BASE_URL}/bluebarry/cart/add/`, cartUrl: `${BASE_URL}/checkout/cart/` });
+    expect(config).toEqual({
+      addToCartUrl: `${BASE_URL}/bluebarry/cart/add/`,
+      discountUrl: `${BASE_URL}/bluebarry/cart/discount/`,
+      cartUrl: `${BASE_URL}/checkout/cart/`,
+    });
   });
 
   test('a configurable product variant lands with its options, as the product page adds it', async ({ page }) => {
