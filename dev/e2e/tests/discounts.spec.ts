@@ -143,13 +143,37 @@ test.describe('discounts from bluebarry', () => {
     expect(rule(shipping)).toMatchObject({ name: 'bluebarry: free shipping', amount: 0, freeShipping: 2 });
 
     expect((await command(request, 'coupon.get', { code: first })).body).toMatchObject({ exists: true, status: 'publish', usageCount: 0 });
-    // Unused, it is removed, so it cannot be spent; asking again changes nothing.
+    // Unused, it is taken back, so it cannot be spent; asking again changes nothing.
     expect((await command(request, 'coupon.revoke', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
     expect((await command(request, 'coupon.revoke', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
+    expect((await command(request, 'coupon.get', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
+    // Not deleted but spent: a checkout that holds the code right now is refused by Magento's own
+    // count, where a deleted coupon would let its order through with the discount.
+    expect(sql(`SELECT CONCAT(times_used, '/', usage_limit) FROM salesrule_coupon WHERE code = '${first}'`)).toBe('1/1');
+    expect(sql(`SELECT revoked FROM bluebarry_discount_code WHERE coupon_id = (SELECT coupon_id FROM salesrule_coupon WHERE code = '${first}')`)).toBe('1');
+    // The cron removes it a little later.
+    sql(`UPDATE bluebarry_discount_code SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE revoked = 1`);
+    expect(magento('bluebarry:discounts:clean')).toContain('1 expired codes');
     // The rule is this bluebarry account's.
     expect(sql(`SELECT tenant_id FROM bluebarry_discount_rule WHERE rule_id = ${rule(second)!.id}`)).not.toBe('');
     expect(rule(first)).toBeNull();
     expect(rule(second)).not.toBeNull();
+  });
+
+  test('a code that was taken back no longer goes on a cart', async ({ page, request }) => {
+    const code = unique('REWARD');
+    expect((await command(request, 'coupon.create', { code, discountType: 'percent', amount: 10, productIds: [] })).status).toBe(200);
+    await shopper(page);
+    await addToCart(page, 'bb-simple');
+    expect((await discount(page, { code })).body).toMatchObject({ applied: true, code: 'applied' });
+
+    // The shopper has it on the cart when bluebarry takes it back (the reward was cancelled).
+    expect((await command(request, 'coupon.revoke', { code })).body).toEqual({ exists: false, usageCount: 0 });
+    // The next look at the cart drops it, and it cannot be put on again.
+    await addToCart(page, 'bb-simple');
+    expect(await quote(page)).toMatchObject({ coupon: '', discount: 0 });
+    expect((await discount(page, { code })).body).toMatchObject({ applied: false, code: 'waiting' });
+    expect(await quote(page)).toMatchObject({ coupon: '' });
   });
 
   test('a code that cannot be made is refused, and the merchant\'s own coupons are never touched', async ({ request }) => {
@@ -181,6 +205,12 @@ test.describe('discounts from bluebarry', () => {
     expect(await quote(page)).toMatchObject({ coupon: '' });
     expect((await discount(page, { code })).body).toEqual({ applied: true, code: 'applied', drop: [] });
     expect(await quote(page)).toMatchObject({ coupon: code, discount: 10 });
+    // The shopper's cart data names the code: one taken off or put on is a change of the cart for the SDK.
+    const section = await page.evaluate(async () => {
+      const response = await fetch('/customer/section/load/?sections=cart&force_new_section_timestamp=true', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      return (await response.json()).cart;
+    });
+    expect(section.bluebarry_coupon).toBe(code);
 
     // Asked again with the code on the cart: nothing changes.
     expect((await discount(page, { code })).body).toMatchObject({ applied: true, code: 'applied' });
@@ -255,7 +285,7 @@ test.describe('discounts from bluebarry', () => {
         return response.json();
       }, part);
       expect(added).toMatchObject({ success: true });
-      expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: true, drop: [grant] });
+      expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toMatchObject({ applied: true, drop: [grant] });
 
       const cart = await quote(page);
       // Half of the product bought as itself, and nothing off either bundle or their parts.
@@ -279,7 +309,9 @@ test.describe('discounts from bluebarry', () => {
     // An older offer for the same product is passed over for good.
     const older = offer({ variantIds: [red], rules: [{ scope: 'Single', type: 'Percentage', value: 5 }], nonce: randomUUID() });
     await addToCart(page, 'bb-configurable', { color: 'BB Red' });
-    expect((await discount(page, { grants: JSON.stringify([older, grant]) })).body).toEqual({ applied: true, drop: [grant, older] });
+    const redeemed = (await discount(page, { grants: JSON.stringify([older, grant]) })).body;
+    // The answer names the offer that is on the cart and its code: the SDK does not ask about it again while it is.
+    expect(redeemed).toEqual({ applied: true, drop: [grant, older], offer: grant, coupon: expect.stringMatching(/^BB-[0-9A-F]{12}$/) });
     const asked = (await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon');
     expect(asked).toHaveLength(1);
     expect(asked[0].headers.authorization).toBe(KEY);
@@ -294,8 +326,12 @@ test.describe('discounts from bluebarry', () => {
     expect(rule(cart.coupon)).toMatchObject({ name: 'bluebarry: 25% off, 1 product', action: 'by_percent', usageLimit: 1 });
     expect(sql(`SELECT kind FROM bluebarry_discount_rule WHERE rule_id = ${rule(cart.coupon)!.id}`)).toBe('offer');
 
-    // Nothing was left to ask bluebarry about.
-    expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(1);
+    expect(redeemed.coupon).toBe(cart.coupon);
+
+    // The same offer handed in again (a browser that lost what it knew): its code is on the cart
+    // already, and the cart is left as it is.
+    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: false, drop: [grant], offer: grant, coupon: cart.coupon });
+    expect(await quote(page)).toMatchObject({ coupon: cart.coupon });
   });
 
   test('an amount off comes off each offered product once, and an offer built around a product needs it in the cart', async ({ page }) => {
@@ -307,7 +343,7 @@ test.describe('discounts from bluebarry', () => {
     expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: false, drop: [] });
 
     await addToCart(page, 'bb-configurable', { color: 'BB Red' });
-    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toEqual({ applied: true, drop: [grant] });
+    expect((await discount(page, { grants: JSON.stringify([grant]) })).body).toMatchObject({ applied: true, drop: [grant] });
     const cart = await quote(page);
     // Once for the product, whatever its quantity.
     expect(cart.lines).toEqual({ 'bb-simple': 5, 'bb-configurable-red': 0 });
@@ -324,6 +360,10 @@ test.describe('discounts from bluebarry', () => {
     await mockApi.respondWith({ status: 503 });
     expect((await discount(page, { grants: JSON.stringify([good]) })).body).toEqual({ applied: false, drop: [] });
     await mockApi.reset();
+    // A bluebarry that did not answer is left alone for half a minute, by every shopper of the store.
+    expect((await discount(page, { grants: JSON.stringify([good]) })).body).toEqual({ applied: false, drop: [] });
+    expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(0);
+    magento('cache:flush'); // half a minute later
 
     // The shopper's own code is on the cart: the offer waits, and bluebarry is not asked.
     await page.goto('/checkout/cart/');
@@ -338,6 +378,37 @@ test.describe('discounts from bluebarry', () => {
     expect((await discount(page, { grants: JSON.stringify([good]) })).body).toEqual({ applied: false, drop: [] });
     expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(0);
     expect(await quote(page)).toMatchObject({ coupon: own });
+  });
+
+  test('the shopper\'s other requests do not wait while bluebarry is asked about an offer', async ({ page }) => {
+    await shopper(page);
+    await addToCart(page, 'bb-simple');
+    const grant = offer({ variantIds: [simple], rules: [{ scope: 'Single', type: 'Percentage', value: 10 }], nonce: randomUUID() });
+    // A slow bluebarry: its answer about the offer takes a second and a half.
+    await mockApi.respondWith({ delayMs: 1500 });
+
+    const timing = await page.evaluate(async (grant) => {
+      const formKey = decodeURIComponent(document.cookie.match(/form_key=([^;]+)/)?.[1] ?? '');
+      const started = performance.now();
+      const redeemed = fetch((window as any).barry.magento.discountUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ form_key: formKey, grants: JSON.stringify([grant]) }).toString(),
+      }).then(async (response) => ({ body: await response.json(), ms: performance.now() - started }));
+      // The module is waiting for bluebarry now. The shopper's mini-cart reads their session meanwhile.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const asked = performance.now();
+      await fetch('/customer/section/load/?sections=cart&force_new_section_timestamp=true', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const sectionMs = performance.now() - asked;
+      return { ...(await redeemed), sectionMs };
+    }, grant);
+
+    // The session was let go before bluebarry was asked: the mini-cart did not wait for its answer.
+    expect(timing.ms).toBeGreaterThan(1500);
+    expect(timing.sectionMs).toBeLessThan(900);
+    expect(timing.body).toMatchObject({ applied: true, drop: [grant] });
+    expect(await quote(page)).toMatchObject({ discount: 10 });
   });
 
   test('a code ends by being removed once its last moment has passed', async ({ request }) => {

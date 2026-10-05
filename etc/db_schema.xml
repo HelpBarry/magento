@@ -105,11 +105,13 @@
     </table>
     <!-- When each of bluebarry's codes ends. Magento keeps a coupon's expiry date but never checks it (only
          a rule's own dates end its codes), so the cron removes a code once this moment has passed. Only
-         codes that end are here. No foreign key, for the same reason as above; a row whose coupon is gone
-         goes with its own expiry. -->
+         codes that end are here: also a code bluebarry took back, which is spent first (so a checkout
+         that already holds it is refused by Magento's own count) and removed a little later. No foreign
+         key, for the same reason as above; a row whose coupon is gone goes with its own expiry. -->
     <table name="bluebarry_discount_code" resource="default" engine="innodb" comment="bluebarry coupon code expiry">
         <column xsi:type="int" name="coupon_id" unsigned="true" nullable="false" comment="Coupon ID"/>
         <column xsi:type="datetime" name="expires_at" nullable="false" comment="Its last moment, UTC"/>
+        <column xsi:type="smallint" name="revoked" unsigned="true" nullable="false" default="0" comment="Taken back by bluebarry before anyone spent it"/>
         <constraint xsi:type="primary" referenceId="PRIMARY">
             <column name="coupon_id"/>
         </constraint>

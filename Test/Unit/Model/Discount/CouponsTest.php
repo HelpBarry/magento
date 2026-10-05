@@ -20,6 +20,7 @@ use Magento\SalesRule\Model\Rule\Condition\Address as AddressCondition;
 use Magento\SalesRule\Model\Rule\Condition\Product as ProductCondition;
 use Magento\SalesRule\Model\Rule\Condition\Product\Found as ProductFound;
 use Magento\SalesRule\Model\RuleFactory;
+use Magento\Store\Model\Store;
 use Magento\Store\Model\StoreManagerInterface;
 use Magento\Store\Model\Website;
 use PHPUnit\Framework\TestCase;
@@ -35,8 +36,10 @@ class CouponsTest extends TestCase
     /** @var array<int, string> coupon id => when it ends */
     private array $ends = [];
     private int $cartSubtotalDisplay = 1;
-    /** @var array<string, int> code => orders that carry it */
+    /** @var array<string, array<int, int>> code => store view => orders there that carry it */
     private array $orders = [];
+    /** @var string[] the locks taken */
+    private array $lockNames = [];
     /** @var array<string, string[]> product id => the configurable products it is a variant of */
     private array $parents = ['17' => ['mug'], '18' => ['mug', 'mug-gift-set']];
     private bool $endFails = false;
@@ -218,8 +221,25 @@ class CouponsTest extends TestCase
         $this->coupons['CODE-0002']['times_used'] = '1';
 
         $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('CODE-0001', $this->website(1)));
+        // Not deleted but spent, under the lock Magento counts a coupon's use under: a checkout that
+        // already holds the code finds its one use gone, and is refused by Magento itself.
+        $this->assertSame(['1', '1'], [$this->coupons['CODE-0001']['times_used'], $this->coupons['CODE-0001']['revoked']]);
+        $this->assertContains('coupon_code_CODE-0001', $this->lockNames);
+        // Gone for bluebarry from then on, also when asked again.
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('CODE-0001', $this->website(1)));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->revoke('CODE-0001', $this->website(1)));
         // Spent: it stays as it is.
         $this->assertSame(['exists' => true, 'id' => 3, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0002', $this->website(1)));
+    }
+
+    public function testACodeThatCannotBeLockedIsNotTakenBack(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+        $this->locked = true;
+
+        // A checkout is counting its use right now: the code stays, and bluebarry asks again later.
+        $this->assertSame(['exists' => true, 'id' => 2, 'status' => 'publish', 'usageCount' => 0], $coupons->revoke('CODE-0001', $this->website(1)));
     }
 
     public function testACodeAnOrderCarriesIsSpent_AlsoBeforeMagentoCountedIt_AndAfterItWasRemoved(): void
@@ -227,22 +247,25 @@ class CouponsTest extends TestCase
         $coupons = $this->coupons();
         $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
         // Magento counts a coupon's use from a queue: the order is there first.
-        $this->orders['CODE-0001'] = 1;
+        $this->orders['CODE-0001'] = [11 => 1];
 
         $this->assertSame(1, $coupons->state('CODE-0001', $this->website(1))['usageCount']);
         $this->assertSame(['exists' => true, 'id' => 2, 'status' => 'publish', 'usageCount' => 1], $coupons->revoke('CODE-0001', $this->website(1)));
         $this->assertArrayHasKey('CODE-0001', $this->coupons);
 
-        // Removed once it ended: the order still says it was spent.
+        // Removed once it ended: the order still says it was spent. Its sister website's orders count,
+        // another account's website learns nothing of them.
         unset($this->coupons['CODE-0001']);
         $this->assertSame(['exists' => false, 'usageCount' => 1], $coupons->state('CODE-0001', $this->website(1)));
+        $this->assertSame(['exists' => false, 'usageCount' => 1], $coupons->state('CODE-0001', $this->website(3)));
+        $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('CODE-0001', $this->website(2)));
     }
 
     public function testACheckoutThatCountsItsUseWhileTheCodeIsBeingRevokedKeepsItsCoupon(): void
     {
         $coupons = $this->coupons();
         $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
-        // Read as unused, then counted by a checkout before the removal: the removal finds it used.
+        // Read as unused, then counted by a checkout before it is taken back: that finds it used.
         $this->coupons['CODE-0001']['countedMeanwhile'] = true;
 
         $state = $coupons->revoke('CODE-0001', $this->website(1));
@@ -304,7 +327,7 @@ class CouponsTest extends TestCase
         $rules->method('connection')->willReturn($connection);
         $rules->method('coupon')->willReturnCallback(function ($code, $tenant = null) {
             $row = $this->coupons[$code] ?? null;
-            return $row && $row['ours'] && ($tenant === null || $row['tenant'] === $tenant) ? $row : null;
+            return $row && $row['ours'] && ($tenant === null || $row['tenant'] === $tenant) ? $row + ['code' => $code, 'revoked' => null] : null;
         });
         $rules->method('codeExists')->willReturnCallback(fn ($code) => isset($this->coupons[$code]));
         $rules->method('ruleFor')->willReturnCallback(fn ($hash) => $this->rules[$hash] ?? null);
@@ -321,15 +344,17 @@ class CouponsTest extends TestCase
         });
         $rules->method('skus')->willReturnCallback(fn ($ids) => array_intersect_key(['10' => 'espresso', '17' => 'mug-red', '18' => 'mug, blue'], array_flip($ids)));
         $rules->method('configurableParents')->willReturnCallback(fn ($ids) => array_intersect_key($this->parents, array_flip($ids)));
-        $rules->method('ordersWith')->willReturnCallback(fn ($code) => $this->orders[$code] ?? 0);
-        $rules->method('deleteUnused')->willReturnCallback(function ($couponId) {
+        $rules->method('ordersWith')->willReturnCallback(
+            fn ($code, $since, $storeIds) => array_sum(array_intersect_key($this->orders[$code] ?? [], array_flip($storeIds)))
+        );
+        $rules->method('revokeUnused')->willReturnCallback(function ($couponId) {
             foreach ($this->coupons as $code => $row) {
                 if ((int) $row['coupon_id'] === (int) $couponId) {
+                    $this->coupons[$code]['times_used'] = '1';
                     if (!empty($row['countedMeanwhile'])) {
-                        $this->coupons[$code]['times_used'] = '1';
                         return false;
                     }
-                    unset($this->coupons[$code]);
+                    $this->coupons[$code]['revoked'] = '1';
                     return true;
                 }
             }
@@ -391,12 +416,22 @@ class CouponsTest extends TestCase
         // Websites 1 and 3 report to the same bluebarry account, website 2 to another.
         $stores = $this->createStub(StoreManagerInterface::class);
         $stores->method('getWebsites')->willReturn([$this->website(3), $this->website(2), $this->website(1)]);
+        // One store view each: 11, 12 and 13.
+        $stores->method('getStores')->willReturn(array_map(function (int $website) {
+            $store = $this->createStub(Store::class);
+            $store->method('getId')->willReturn(10 + $website);
+            $store->method('getWebsiteId')->willReturn($website);
+            return $store;
+        }, [1, 2, 3]));
         $config = $this->createStub(Config::class);
         $config->method('getWebsiteTenantId')->willReturnCallback(fn ($id) => (int) $id === 2 ? 'other-tenant' : 'Tenant');
         $scopeConfig = $this->createStub(ScopeConfigInterface::class);
         $scopeConfig->method('getValue')->willReturnCallback(fn () => (string) $this->cartSubtotalDisplay);
         $locks = $this->createStub(LockManagerInterface::class);
-        $locks->method('lock')->willReturnCallback(fn () => !$this->locked);
+        $locks->method('lock')->willReturnCallback(function ($name) {
+            $this->lockNames[] = $name;
+            return !$this->locked;
+        });
 
         return new Coupons($rules, $ruleFactory, $this->createStub(RuleResource::class), $couponFactory, $couponResource, $groupFactory, $stores, $config, $scopeConfig, $locks);
     }

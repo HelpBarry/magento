@@ -15,6 +15,12 @@ class CheckoutSessionDouble extends Session
     /** @var array */
     public $data = [];
 
+    /** @var bool whether the session was let go (written and unlocked) */
+    public $closed = false;
+
+    /** @var string[] what was set after that, and so lost */
+    public $lost = [];
+
     public function __construct(QuoteDouble $quote)
     {
         $this->quote = $quote;
@@ -37,8 +43,17 @@ class CheckoutSessionDouble extends Session
 
     public function setData($key, $value = null)
     {
+        if ($this->closed) {
+            $this->lost[] = (string) $key;
+            return $this;
+        }
         $this->data[$key] = $value;
         return $this;
+    }
+
+    public function writeClose()
+    {
+        $this->closed = true;
     }
 
     public function unsetData($key = null)

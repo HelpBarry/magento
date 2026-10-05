@@ -26,6 +26,9 @@ class QuoteDouble extends Quote
     /** @var string[] every code the totals were collected with */
     public array $collected = [];
 
+    /** @var bool */
+    public $active = true;
+
     public function __construct()
     {
         $this->accepts = fn (string $code): bool => true;
@@ -34,6 +37,26 @@ class QuoteDouble extends Quote
     public function getId()
     {
         return $this->quoteId;
+    }
+
+    public function getStoreId()
+    {
+        return 1;
+    }
+
+    public function setStoreId($storeId)
+    {
+        return $this;
+    }
+
+    public function loadByIdWithoutStore($quoteId)
+    {
+        return $this;
+    }
+
+    public function getIsActive()
+    {
+        return $this->active;
     }
 
     public function getCouponCode()
