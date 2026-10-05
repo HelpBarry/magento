@@ -4,9 +4,9 @@ namespace Bluebarry\Bluebarry\Test\Unit\Plugin\Checkout;
 
 use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Plugin\Checkout\CartReferences;
+use Bluebarry\Bluebarry\Test\Unit\Double\QuoteDouble;
 use Magento\Checkout\CustomerData\Cart;
 use Magento\Checkout\Model\Session;
-use Magento\Quote\Model\Quote;
 use Magento\Quote\Model\Quote\Item;
 use Magento\Quote\Model\Quote\Item\Option;
 use Magento\Store\Model\Store;
@@ -21,7 +21,14 @@ class CartReferencesTest extends TestCase
 
         $result = $plugin->afterGetSectionData($this->createStub(Cart::class), ['summary_count' => 4]);
 
-        $this->assertSame(['summary_count' => 4, CartReferences::KEY => ['17', '10', '18']], $result);
+        $this->assertSame(['summary_count' => 4, CartReferences::KEY => ['17', '10', '18'], CartReferences::COUPON_KEY => ''], $result);
+    }
+
+    public function testNamesTheCouponCodeOnTheCart_SoACodeTakenOffIsAChangeOfTheCartToo(): void
+    {
+        $result = $this->plugin([$this->line(10)], coupon: 'WELCOME10')->afterGetSectionData($this->createStub(Cart::class), ['summary_count' => 1]);
+
+        $this->assertSame('WELCOME10', $result[CartReferences::COUPON_KEY]);
     }
 
     public function testAnEmptyCartNamesNone(): void
@@ -48,10 +55,11 @@ class CartReferencesTest extends TestCase
         $this->assertSame(['summary_count' => 1], $result);
     }
 
-    private function plugin(array $items, bool $connected = true): CartReferences
+    private function plugin(array $items, bool $connected = true, string $coupon = ''): CartReferences
     {
-        $quote = $this->createStub(Quote::class);
-        $quote->method('getAllVisibleItems')->willReturn($items);
+        $quote = new QuoteDouble();
+        $quote->lines = $items;
+        $quote->coupon = $coupon;
         $session = $this->createStub(Session::class);
         $session->method('getQuote')->willReturn($quote);
         return new CartReferences($session, $this->config($connected), $this->stores());

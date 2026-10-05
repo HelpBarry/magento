@@ -89,7 +89,8 @@
     "bluebarry_discount_code": {
         "column": {
             "coupon_id": true,
-            "expires_at": true
+            "expires_at": true,
+            "revoked": true
         },
         "index": {
             "BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT": true

@@ -104,16 +104,16 @@ class DiscountRules
      * @param string $code
      * @param string|null $tenantId only a code of this bluebarry account: two accounts can share one
      *                              Magento, and neither may read or end the other's codes
-     * @return array{coupon_id: string, rule_id: string, times_used: string, created_at: string|null, expires_at: string|null, is_active: string}|null
+     * @return array{coupon_id: string, rule_id: string, code: string, times_used: string, created_at: string|null, expires_at: string|null, revoked: string|null, is_active: string}|null
      */
     public function coupon(string $code, ?string $tenantId = null): ?array
     {
         $connection = $this->resource->getConnection();
         $select = $connection->select()
-            ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'rule_id', 'times_used', 'created_at'])
+            ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'rule_id', 'code', 'times_used', 'created_at'])
             ->join(['ours' => $this->table()], 'ours.rule_id = coupon.rule_id', [])
             ->join(['rule' => $this->resource->getTableName('salesrule')], 'rule.rule_id = coupon.rule_id', ['is_active'])
-            ->joinLeft(['ends' => $this->resource->getTableName(self::CODES_TABLE)], 'ends.coupon_id = coupon.coupon_id', ['expires_at'])
+            ->joinLeft(['ends' => $this->resource->getTableName(self::CODES_TABLE)], 'ends.coupon_id = coupon.coupon_id', ['expires_at', 'revoked'])
             ->where('coupon.code = ?', $code)
             ->limit(1);
         if ($tenantId !== null) {
@@ -129,14 +129,19 @@ class DiscountRules
      *
      * @param string $code
      * @param string|null $since the code's creation (UTC), which bounds the orders looked at by their date index
+     * @param int[] $storeIds only orders of these store views: the asking account's own
      * @return int
      */
-    public function ordersWith(string $code, ?string $since): int
+    public function ordersWith(string $code, ?string $since, array $storeIds): int
     {
+        if ($code === '' || !$storeIds) {
+            return 0;
+        }
         $connection = $this->resource->getConnection();
         $select = $connection->select()
             ->from($this->resource->getTableName('sales_order'), ['orders' => new \Zend_Db_Expr('COUNT(*)')])
             ->where('coupon_code = ?', $code)
+            ->where('store_id IN (?)', $storeIds)
             ->where('state <> ?', 'canceled');
         if ($since !== null && $since !== '') {
             $select->where('created_at >= ?', $since);
@@ -145,18 +150,32 @@ class DiscountRules
     }
 
     /**
-     * Removes a coupon only while Magento counts no use of it: one statement, so a checkout that just
-     * counted its use is not undone.
+     * Takes a coupon back while Magento counts no use of it: it is spent, not deleted, in one statement.
+     * A checkout that already holds the code finds its one use gone when it counts it, and is refused
+     * by Magento itself; a deleted coupon it would not find at all, and the order would go through with
+     * the discount. The cron removes it after $until.
      *
      * @param int $couponId
-     * @return bool whether it was removed
+     * @param string $until UTC, Y-m-d H:i:s
+     * @return bool whether it was taken back
      */
-    public function deleteUnused(int $couponId): bool
+    public function revokeUnused(int $couponId, string $until): bool
     {
-        return $this->resource->getConnection()->delete(
+        $connection = $this->resource->getConnection();
+        $spent = $connection->update(
             $this->resource->getTableName('salesrule_coupon'),
-            ['coupon_id = ?' => $couponId, 'times_used = ?' => 0]
-        ) > 0;
+            ['times_used' => new \Zend_Db_Expr('usage_limit')],
+            ['coupon_id = ?' => $couponId, 'times_used = ?' => 0, 'usage_limit > ?' => 0]
+        );
+        if ($spent < 1) {
+            return false;
+        }
+        $connection->insertOnDuplicate(
+            $this->resource->getTableName(self::CODES_TABLE),
+            ['coupon_id' => $couponId, 'expires_at' => $until, 'revoked' => 1],
+            ['expires_at', 'revoked']
+        );
+        return true;
     }
 
     /**

@@ -117,6 +117,10 @@ class Discount implements HttpPostActionInterface, CsrfAwareActionInterface
                 $offers = $this->cart->redeemOffers($grants);
                 $answer['drop'] = $offers['drop'];
                 $answer['applied'] = $answer['applied'] || $offers['applied'];
+                if (isset($offers['offer'])) {
+                    // The offer whose code is on the cart: the SDK does not ask about it again while it is.
+                    $answer += ['offer' => $offers['offer'], 'coupon' => $offers['coupon'] ?? ''];
+                }
             }
             return $result->setData($answer);
         } catch (\Exception $e) {

@@ -40,6 +40,12 @@ class Coupons
 {
     private const LOCK = 'bluebarry_discount_rule';
 
+    /** The lock Magento counts a coupon's use under at checkout (SalesRule's Coupon\Usage\Processor), by its code. */
+    private const COUPON_LOCK = 'coupon_code_';
+
+    /** Seconds a code that was taken back stays, spent: longer than any checkout that still holds it. */
+    private const REVOKED_KEPT = 600;
+
     /** More products than this is not one offer or reward; the rule would not be readable either. */
     private const MAX_PRODUCTS = 100;
 
@@ -222,9 +228,10 @@ class Coupons
     public function state(string $code, WebsiteInterface $website): array
     {
         $coupon = $this->rules->coupon($code, $this->tenantId($website));
-        if ($coupon === null) {
-            // Removed after it ended, or never made: an order that carries it still says it was spent.
-            return ['exists' => false, 'usageCount' => $code === '' ? 0 : $this->rules->ordersWith($code, null)];
+        if ($coupon === null || !empty($coupon['revoked'])) {
+            // Removed after it ended, taken back, or never made: an order that carries it still says it
+            // was spent. Only this account's own orders: another account's code is none of its business.
+            return ['exists' => false, 'usageCount' => $this->rules->ordersWith($code, $coupon['created_at'] ?? null, $this->storeIds($website))];
         }
         // Past its last moment and not removed by the cron yet.
         $expired = $coupon['expires_at'] !== null && strtotime($coupon['expires_at'] . ' UTC') < time();
@@ -233,12 +240,17 @@ class Coupons
             'id' => (int) $coupon['coupon_id'],
             // The word bluebarry knows a usable code by, from the WooCommerce plugin.
             'status' => (int) $coupon['is_active'] === 1 && !$expired ? 'publish' : 'disabled',
-            'usageCount' => $this->uses($code, $coupon),
+            'usageCount' => $this->uses($code, $coupon, $website),
         ];
     }
 
     /**
-     * Removes one of this account's codes that nobody spent, so it can't be. A spent one stays as it is.
+     * Takes back one of this account's codes that nobody spent, so it can't be. A spent one stays as it is.
+     *
+     * A checkout may be placing its order with the code at this very moment. So the code is not deleted
+     * but spent, under the lock Magento counts a coupon's use under: the checkout either counted first
+     * (the code is spent, and stays), or finds its one use gone and is refused. The cron removes it later.
+     * Magento before 2.4.8 counts after the order, without that check: there the orders are looked at.
      *
      * @param string $code
      * @param WebsiteInterface $website the website asked
@@ -247,10 +259,15 @@ class Coupons
     public function revoke(string $code, WebsiteInterface $website): array
     {
         $coupon = $this->rules->coupon($code, $this->tenantId($website));
-        // Only while Magento itself counts no use (one statement, so a checkout that counts its use at
-        // this moment keeps its coupon), and no order carries it.
-        if ($coupon !== null && $this->uses($code, $coupon) === 0 && $this->rules->deleteUnused((int) $coupon['coupon_id'])) {
-            return ['exists' => false, 'usageCount' => $this->rules->ordersWith($code, $coupon['created_at'])];
+        if ($coupon !== null && empty($coupon['revoked']) && $this->uses($code, $coupon, $website) === 0) {
+            $lock = self::COUPON_LOCK . $coupon['code'];
+            if ($this->locks->lock($lock, 5)) {
+                try {
+                    $this->rules->revokeUnused((int) $coupon['coupon_id'], gmdate('Y-m-d H:i:s', time() + self::REVOKED_KEPT));
+                } finally {
+                    $this->locks->unlock($lock);
+                }
+            }
         }
         return $this->state($code, $website);
     }
@@ -261,12 +278,31 @@ class Coupons
      *
      * @param string $code
      * @param array $coupon from DiscountRules::coupon()
+     * @param WebsiteInterface $website
      * @return int
      */
-    private function uses(string $code, array $coupon): int
+    private function uses(string $code, array $coupon, WebsiteInterface $website): int
     {
         $counted = (int) $coupon['times_used'];
-        return $counted > 0 ? $counted : $this->rules->ordersWith($code, $coupon['created_at']);
+        return $counted > 0 ? $counted : $this->rules->ordersWith($code, $coupon['created_at'], $this->storeIds($website));
+    }
+
+    /**
+     * The store views of the websites a code holds on: where an order can carry it.
+     *
+     * @param WebsiteInterface $website
+     * @return int[]
+     */
+    private function storeIds(WebsiteInterface $website): array
+    {
+        $websites = array_flip($this->sisterWebsites($website));
+        $ids = [];
+        foreach ($this->storeManager->getStores() as $store) {
+            if (isset($websites[(int) $store->getWebsiteId()])) {
+                $ids[] = (int) $store->getId();
+            }
+        }
+        return $ids;
     }
 
     /**

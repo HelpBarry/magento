@@ -7,9 +7,11 @@ use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Bluebarry\Bluebarry\Model\Visitor;
 use Magento\Checkout\Model\Session;
+use Magento\Framework\App\CacheInterface;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Model\Quote;
+use Magento\Quote\Model\QuoteFactory;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -28,7 +30,9 @@ use Psr\Log\LoggerInterface;
  * locking can lose it to another request of the same shopper.
  *
  * Nothing here runs on a page a shopper waits for, nor with Magento's own totals: the SDK asks from
- * the browser (Controller\Cart\Discount), after the page and the add to cart are done.
+ * the browser (Controller\Cart\Discount), after the page and the add to cart are done. And bluebarry
+ * is only asked about an offer after the shopper's session is let go, so their next page does not wait
+ * for the answer either.
  */
 class Cart
 {
@@ -39,15 +43,15 @@ class Cart
     private const MAX_GRANT = 4096;
     private const MAX_OFFERS = 20;
 
-    /** When bluebarry did not answer an offer: no offer of this shopper is asked about again before this time. */
-    public const SESSION_OFFERS_AFTER = 'bluebarry_offers_after';
+    /** Kept in the cache while bluebarry does not answer about offers, by website: nobody's offer is asked about meanwhile. */
+    public const OFFERS_PAUSED = 'bluebarry_offers_paused_';
 
     /**
-     * Seconds bluebarry gets to check an offer. No page waits on it, but the shopper's session is held
-     * meanwhile, which can make their next request wait: so not long, and after a miss not again for a while.
+     * Seconds bluebarry gets to check an offer, and seconds no offer is asked about after it did not
+     * answer: a slow bluebarry keeps one request of the store busy for a moment, not one per shopper.
      */
     private const OFFER_TIMEOUT = 2;
-    private const OFFER_BACK_OFF = 120;
+    private const OFFER_PAUSE = 30;
 
     /**
      * @var Session
@@ -90,6 +94,16 @@ class Cart
     private $cookies;
 
     /**
+     * @var QuoteFactory
+     */
+    private $quoteFactory;
+
+    /**
+     * @var CacheInterface
+     */
+    private $cache;
+
+    /**
      * @var LoggerInterface
      */
     private $logger;
@@ -103,6 +117,8 @@ class Cart
      * @param Config $config
      * @param StoreManagerInterface $storeManager
      * @param CookieManagerInterface $cookies
+     * @param QuoteFactory $quoteFactory
+     * @param CacheInterface $cache
      * @param LoggerInterface $logger
      */
     public function __construct(
@@ -114,6 +130,8 @@ class Cart
         Config $config,
         StoreManagerInterface $storeManager,
         CookieManagerInterface $cookies,
+        QuoteFactory $quoteFactory,
+        CacheInterface $cache,
         LoggerInterface $logger
     ) {
         $this->checkoutSession = $checkoutSession;
@@ -124,6 +142,8 @@ class Cart
         $this->config = $config;
         $this->storeManager = $storeManager;
         $this->cookies = $cookies;
+        $this->quoteFactory = $quoteFactory;
+        $this->cache = $cache;
         $this->logger = $logger;
     }
 
@@ -169,8 +189,10 @@ class Cart
      * none). One offer at a time: the cart takes one code.
      *
      * @param string[] $grants the offers the browser holds, the newest last
-     * @return array{applied: bool, drop: string[], reason?: string} drop: the offers the browser can
-     *     forget (redeemed, passed over for a newer one, or never giving anything); the others wait on
+     * @return array{applied: bool, drop: string[], offer?: string, coupon?: string, reason?: string}
+     *     applied: the cart got an offer's code just now. drop: the offers the browser can forget
+     *     (redeemed, passed over for a newer one, or never giving anything); the others wait on.
+     *     offer and coupon: the offer whose code is on the cart, and that code.
      */
     public function redeemOffers(array $grants): array
     {
@@ -199,9 +221,8 @@ class Cart
         $apiKey = $this->config->getWebsiteApiKey($website->getId());
         $tenantId = $this->config->getWebsiteTenantId($website->getId());
         $inCart = array_flip($this->references($quote));
-        // bluebarry did not answer a moment ago: it is not asked again right away, so a slow bluebarry
-        // holds this shopper's session once, not with every change of their cart.
-        if ($apiKey === null || $tenantId === null || !$inCart || (int) $this->checkoutSession->getData(self::SESSION_OFFERS_AFTER) > time()) {
+        // bluebarry did not answer a moment ago: it is not asked again right away, for any shopper.
+        if ($apiKey === null || $tenantId === null || !$inCart || $this->cache->load(self::OFFERS_PAUSED . $website->getId())) {
             return $result;
         }
         // The visitor is the one this browser's bluebarry cookie names, never what the request says:
@@ -225,11 +246,12 @@ class Cart
             }
             // A whole-set discount needs the whole set to stay in the cart, not only what it was built around.
             $keep = $wholeSet && self::hasRule($payload, 'kit') ? array_values(array_unique(array_merge($required, $covered))) : $required;
-            $outcome = $this->redeem($quote, $website, ['grant' => $offer['grant'], 'uid' => $uid], $wholeSet, $keep, $apiKey, $tenantId);
-            if ($outcome === 'applied') {
+            [$outcome, $code] = $this->redeem($quote, $website, ['grant' => $offer['grant'], 'uid' => $uid], $wholeSet, $keep, $apiKey, $tenantId);
+            if ($outcome === 'applied' || $outcome === 'present') {
                 // The newest offer the cart covers is on it. The older ones are passed over for good:
                 // kept, the next change of the cart would put one of them in its place.
                 $result['drop'] = array_merge($result['drop'], array_column(array_slice($offers, $index), 'grant'));
+                $result += ['offer' => $offer['grant'], 'coupon' => $code];
             } elseif ($outcome !== 'retry') {
                 $result['drop'][] = $offer['grant'];
             }
@@ -296,43 +318,60 @@ class Cart
      * @param string[] $required
      * @param string $apiKey
      * @param string $tenantId
-     * @return string applied, invalid (never gives anything) or retry (try after a later cart change)
+     * @return string[] what became of it, and its code: applied, present (its code was on the cart
+     *     already), invalid (never gives anything) or retry (try after a later cart change)
      */
-    private function redeem(Quote $quote, $website, array $offer, bool $wholeSet, array $required, string $apiKey, string $tenantId): string
+    private function redeem(Quote $quote, $website, array $offer, bool $wholeSet, array $required, string $apiKey, string $tenantId): array
     {
+        // The shopper's session is let go before bluebarry is asked, so their next page does not wait
+        // for the answer. Nothing is written to it after this, and the cart is read again below.
+        $this->checkoutSession->writeClose();
         $response = $this->client->post('/data/magento/offers/coupon', [
             'grant' => $offer['grant'],
             'userId' => $offer['uid'] !== '' ? $offer['uid'] : null,
             'wholeSet' => $wholeSet,
         ], $tenantId, $apiKey, self::OFFER_TIMEOUT);
         $status = $response->getStatus();
-        if ($status === 204 || ($status >= 400 && $status < 500 && $status !== 429)) {
-            return 'invalid';
+        if (!$response->isRetryable() && ($status === 204 || ($status >= 400 && $status < 500))) {
+            return ['invalid', ''];
         }
         $spec = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($spec)) {
-            $this->checkoutSession->setData(self::SESSION_OFFERS_AFTER, time() + self::OFFER_BACK_OFF);
-            return 'retry';
+            $this->cache->save('1', self::OFFERS_PAUSED . $website->getId(), [], self::OFFER_PAUSE);
+            return ['retry', ''];
         }
         try {
             $this->coupons->ensure($spec + ['requiredProductIds' => $required], $website, DiscountRules::KIND_OFFER);
         } catch (RefusedException $e) {
             $this->logger->info('bluebarry: an offer gives nothing here: ' . $e->getMessage());
-            return 'invalid';
+            return ['invalid', ''];
         } catch (\Exception $e) {
             $this->logger->warning('bluebarry: could not make the code for an offer: ' . $e->getMessage());
-            return 'retry';
+            return ['retry', ''];
         }
         $code = (string) ($spec['code'] ?? '');
-        $before = (string) $quote->getCouponCode();
-        if ($this->put($quote, $code)) {
-            $this->remember($code);
-            return 'applied';
+        // The cart as it is now, not as it was before bluebarry was asked: the shopper may have changed
+        // it meanwhile, or entered a code of their own, which stays.
+        $cart = $this->quoteFactory->create();
+        $cart->setStoreId($quote->getStoreId())->loadByIdWithoutStore((int) $quote->getId());
+        if (!$cart->getId() || !$cart->getIsActive()) {
+            return ['retry', ''];
+        }
+        $before = (string) $cart->getCouponCode();
+        if ($before !== '' && strcasecmp($before, $code) === 0) {
+            return ['present', $code];
+        }
+        if ($before !== '' && !$this->isOurs($before)) {
+            return ['retry', ''];
+        }
+        // The code is bluebarry's own by the rule it is under: nothing needs remembering in the session.
+        if ($this->put($cart, $code)) {
+            return ['applied', $code];
         }
         if ($before !== '') {
-            $this->put($quote, $before);
+            $this->put($cart, $before);
         }
-        return 'retry';
+        return ['retry', ''];
     }
 
     /**

@@ -12,8 +12,10 @@ use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Bluebarry\Bluebarry\Test\Unit\Double\CheckoutSessionDouble;
 use Bluebarry\Bluebarry\Test\Unit\Double\QuoteDouble;
 use Bluebarry\Bluebarry\Test\Unit\Double\QuoteItemDouble;
+use Magento\Framework\App\CacheInterface;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
+use Magento\Quote\Model\QuoteFactory;
 use Magento\Store\Model\StoreManagerInterface;
 use Magento\Store\Model\Website;
 use PHPUnit\Framework\TestCase;
@@ -36,6 +38,12 @@ class CartTest extends TestCase
     /** @var array<int, array> the codes made for offers */
     private array $made = [];
     private ?\Exception $makingFails = null;
+    /** @var array<string, string> the store's cache */
+    private array $cache = [];
+    /** The cart as the database has it once bluebarry answered, when the shopper changed it meanwhile. */
+    private ?QuoteDouble $meanwhile = null;
+    /** @var bool[] whether the session was let go, each time bluebarry was asked */
+    private array $askedWithoutSession = [];
 
     protected function setUp(): void
     {
@@ -121,8 +129,11 @@ class CartTest extends TestCase
         // The variant of a configurable product counts, not the product the line shows.
         $this->quote->lines[] = new QuoteItemDouble(16, 17);
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-OFFER', 'discountType' => 'percent', 'amount' => 10, 'productIds' => ['17', '18']]))];
-        $this->assertSame(['applied' => true, 'drop' => [$grant]], $cart->redeemOffers([$grant]));
+        $this->assertSame(['applied' => true, 'drop' => [$grant], 'offer' => $grant, 'coupon' => 'BB-OFFER'], $cart->redeemOffers([$grant]));
 
+        // The shopper's session was let go before bluebarry was asked, and nothing was written to it after.
+        $this->assertSame([true], $this->askedWithoutSession);
+        $this->assertSame([], $this->session->lost);
         // The shopper is the one the browser's cookie names; part of the set is in the cart.
         $this->assertSame([['grant' => $grant, 'userId' => self::UID, 'wholeSet' => false]], $this->asked);
         $this->assertSame('BB-OFFER', $this->quote->coupon);
@@ -163,20 +174,22 @@ class CartTest extends TestCase
         $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
         $this->quote->lines = [new QuoteItemDouble(10)];
 
-        $this->answers = [new Response(0, ''), new Response(503, ''), new Response(429, ''), new Response(400, 'Invalid or expired offer.')];
+        $this->answers = [new Response(0, ''), new Response(503, ''), new Response(429, ''), new Response(408, ''), new Response(400, 'Invalid or expired offer.')];
         $again = function () use ($grant) {
-            unset($this->session->data[Cart::SESSION_OFFERS_AFTER]); // two minutes later
+            $this->cache = []; // half a minute later
             return $this->cart()->redeemOffers([$grant])['drop'];
         };
         $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']); // no answer
-        // A bluebarry that did not answer is not asked again with the very next change of the cart.
+        // A bluebarry that did not answer is not asked again right away, for this shopper or another.
         $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']);
         $this->assertCount(1, $this->asked);
+        $this->assertSame([Cart::OFFERS_PAUSED . '1'], array_keys($this->cache));
         $this->assertSame([], $again());       // bluebarry is down
         $this->assertSame([], $again());       // asked too often
+        $this->assertSame([], $again());       // the answer took too long
         $this->assertSame([$grant], $again()); // not an offer
         $this->assertSame('', $this->quote->coupon);
-        unset($this->session->data[Cart::SESSION_OFFERS_AFTER]);
+        $this->assertSame([], $this->cache);
 
         // An offer for nothing this store sells, and one whose code cannot be made here.
         $this->answers = [new Response(204, '')];
@@ -214,15 +227,51 @@ class CartTest extends TestCase
 
         // The newest the cart covers is on it; the older one is passed over for good, so the next
         // change of the cart cannot put it in the newer one's place. The newest waits on.
-        $this->assertSame(['applied' => true, 'drop' => [$newer, $older]], $result);
+        $this->assertSame(['applied' => true, 'drop' => [$newer, $older], 'offer' => $newer, 'coupon' => 'BB-TEN'], $result);
         $this->assertSame($newer, $this->asked[0]['grant']);
         $this->assertSame('BB-TEN', $this->quote->coupon);
 
         // The newest offer's product is added: that one may take over.
         $this->quote->lines[] = new QuoteItemDouble(77);
         $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TWENTY', 'discountType' => 'percent', 'amount' => 20]))];
-        $this->assertSame(['applied' => true, 'drop' => [$newest]], $this->cart()->redeemOffers([$newest]));
+        $this->assertSame(['applied' => true, 'drop' => [$newest], 'offer' => $newest, 'coupon' => 'BB-TWENTY'], $this->cart()->redeemOffers([$newest]));
         $this->assertSame('BB-TWENTY', $this->quote->coupon);
+    }
+
+    public function testAnOfferWhoseCodeIsOnTheCartAlreadyChangesNothing(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        $this->quote->coupon = 'BB-TEN';
+        $this->ours[] = 'BB-TEN';
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
+
+        // Shown again on the next page: the browser is told it is on the cart, and the cart is left alone.
+        $this->assertSame(['applied' => false, 'drop' => [$grant], 'offer' => $grant, 'coupon' => 'BB-TEN'], $this->cart()->redeemOffers([$grant]));
+        $this->assertSame([], $this->quote->collected);
+    }
+
+    public function testACodeTheShopperEnteredWhileBluebarryWasAskedStays(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
+        // The cart had no code when the offer came in. By the time bluebarry answered, it has the shopper's.
+        $this->meanwhile = new QuoteDouble();
+        $this->meanwhile->lines = $this->quote->lines;
+        $this->meanwhile->coupon = 'MERCHANT5';
+
+        // The offer waits on, for a cart without that code.
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
+        $this->assertSame('MERCHANT5', $this->meanwhile->coupon);
+        $this->assertSame([], $this->meanwhile->collected);
+
+        // A cart that was ordered meanwhile is left alone too.
+        $this->meanwhile->coupon = '';
+        $this->meanwhile->active = false;
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
+        $this->assertSame([], $this->meanwhile->collected);
     }
 
     public function testOneRequestCannotMakeTheStoreLookAtMoreThanTwentyOffers(): void
@@ -265,6 +314,7 @@ class CartTest extends TestCase
         $client = $this->createStub(Client::class);
         $client->method('post')->willReturnCallback(function ($path, $body) {
             $this->asked[] = $body;
+            $this->askedWithoutSession[] = $this->session->closed;
             return array_shift($this->answers) ?? new Response(0, '');
         });
         $config = $this->createStub(Config::class);
@@ -276,6 +326,15 @@ class CartTest extends TestCase
         $stores->method('getWebsite')->willReturn($website);
         $cookies = $this->createStub(CookieManagerInterface::class);
         $cookies->method('getCookie')->willReturn(self::UID);
-        return new Cart($this->session, $this->createStub(CartRepositoryInterface::class), $rules, $coupons, $client, $config, $stores, $cookies, new NullLogger());
+        // The cart read again from the database: the same cart, unless the shopper changed it meanwhile.
+        $quotes = $this->createStub(QuoteFactory::class);
+        $quotes->method('create')->willReturnCallback(fn () => $this->meanwhile ?? $this->quote);
+        $cache = $this->createStub(CacheInterface::class);
+        $cache->method('load')->willReturnCallback(fn ($id) => $this->cache[$id] ?? false);
+        $cache->method('save')->willReturnCallback(function ($data, $id) {
+            $this->cache[$id] = $data;
+            return true;
+        });
+        return new Cart($this->session, $this->createStub(CartRepositoryInterface::class), $rules, $coupons, $client, $config, $stores, $cookies, $quotes, $cache, new NullLogger());
     }
 }
