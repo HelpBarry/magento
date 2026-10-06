@@ -185,31 +185,31 @@ class CouponsTest extends TestCase
         $this->assertSame(DiscountRules::KIND_OFFER, $this->rules['kind']);
     }
 
-    /**
-     * @dataProvider refused
-     */
-    public function testACodeThatCannotBeMadeAsDescribedIsRefused_AndNothingIsMade(array $spec): void
+    public function testACodeThatCannotBeMadeAsDescribedIsRefused_AndNothingIsMade(): void
     {
-        try {
-            $this->coupons()->ensure($spec, $this->website(1));
-            $this->fail('made');
-        } catch (RefusedException $e) {
-            $this->assertSame([], $this->posted);
-            $this->assertSame(['MERCHANT5'], array_keys($this->coupons));
+        // A loop, not a data provider: the PHPUnit versions of the supported Magento releases name those differently.
+        foreach (self::refused() as $case => $spec) {
+            try {
+                $this->coupons()->ensure($spec, $this->website(1));
+                $this->fail('made: ' . $case);
+            } catch (RefusedException $e) {
+                $this->assertSame([], $this->posted, $case);
+                $this->assertSame(['MERCHANT5'], array_keys($this->coupons), $case);
+            }
         }
     }
 
-    public static function refused(): array
+    private static function refused(): array
     {
         $ok = ['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10];
         return [
-            'the merchant has a coupon with this code' => [['code' => 'MERCHANT5'] + $ok],
-            'a code Magento would not take' => [['code' => 'has spaces'] + $ok],
-            'an unknown kind of discount' => [['discountType' => 'buy_one_get_one'] + $ok],
-            'a discount of nothing' => [['amount' => 0] + $ok],
-            'products that are not in this store' => [$ok + ['productIds' => ['999']]],
-            'a product the offer needs that is not in this store' => [$ok + ['productIds' => ['17'], 'requiredProductIds' => ['10', '999']]],
-            'an expiry that is no date' => [$ok + ['expiresAt' => 'soon']],
+            'the merchant has a coupon with this code' => ['code' => 'MERCHANT5'] + $ok,
+            'a code Magento would not take' => ['code' => 'has spaces'] + $ok,
+            'an unknown kind of discount' => ['discountType' => 'buy_one_get_one'] + $ok,
+            'a discount of nothing' => ['amount' => 0] + $ok,
+            'products that are not in this store' => $ok + ['productIds' => ['999']],
+            'a product the offer needs that is not in this store' => $ok + ['productIds' => ['17'], 'requiredProductIds' => ['10', '999']],
+            'an expiry that is no date' => $ok + ['expiresAt' => 'soon'],
         ];
     }
 
