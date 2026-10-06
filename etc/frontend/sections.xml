@@ -4,4 +4,8 @@
     <action name="bluebarry/cart/add">
         <section name="cart"/>
     </action>
+    <!-- A bluebarry discount changes the cart's totals. -->
+    <action name="bluebarry/cart/discount">
+        <section name="cart"/>
+    </action>
 </config>

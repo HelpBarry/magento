@@ -9,13 +9,17 @@ use Magento\Store\Model\StoreManagerInterface;
 
 /**
  * What is in the cart, as the catalog sync names it (the variant for a configurable product), added
- * to the shopper's own cart data: recommendation blocks leave it out and recommend from it. It
- * travels with the cart section Magento already loads after the cart changed, so no page and no
- * request is added for it, and pages from the full page cache never hold it.
+ * to the shopper's own cart data: recommendation blocks leave it out and recommend from it, and
+ * bluebarry's discounts that wait in the browser know by it, and by the cart's coupon code, when the
+ * cart changed. It travels with the cart section Magento already loads after the cart changed, so no
+ * page and no request is added for it, and pages from the full page cache never hold it.
  */
 class CartReferences
 {
     public const KEY = 'bluebarry_references';
+
+    /** The coupon code on the cart: a code taken off or put on is a change of the cart too. */
+    public const COUPON_KEY = 'bluebarry_coupon';
 
     /** More lines than this is not a shopper's cart; the SDK only needs what to leave out. */
     private const MAX = 100;
@@ -60,7 +64,8 @@ class CartReferences
             }
             $references = [];
             // The quote the section just read: its lines are loaded.
-            foreach ($this->checkoutSession->getQuote()->getAllVisibleItems() as $item) {
+            $quote = $this->checkoutSession->getQuote();
+            foreach ($quote->getAllVisibleItems() as $item) {
                 $variant = $item->getOptionByCode('simple_product');
                 $reference = (int) ($variant ? $variant->getValue() : $item->getProductId());
                 if ($reference > 0) {
@@ -71,6 +76,7 @@ class CartReferences
                 }
             }
             $result[self::KEY] = array_map('strval', array_keys($references));
+            $result[self::COUPON_KEY] = (string) $quote->getCouponCode();
         } catch (\Exception $e) {
             // Never in the way of the mini-cart.
             return $result;

@@ -118,6 +118,30 @@ class Advisor extends Template implements IdentityInterface
     }
 
     /**
+     * Whether this website is connected with an API key, for the bluebarry account this store view's
+     * pages are for: only then can the module vouch for a signed-in customer to bluebarry. A store view
+     * given another Tenant ID than its website has no key of its own, and the website's key is for
+     * another account.
+     *
+     * @return bool
+     */
+    public function hasApiKey(): bool
+    {
+        $store = $this->storeManager->getStore();
+        $websiteTenant = (string) $this->scopeConfig->getValue(
+            \Bluebarry\Bluebarry\Model\Config::XML_TENANT_ID,
+            ScopeInterface::SCOPE_WEBSITE,
+            $store->getWebsiteId()
+        );
+        return strcasecmp(trim($websiteTenant), trim((string) $this->getTenantId())) === 0
+            && (string) $this->scopeConfig->getValue(
+                \Bluebarry\Bluebarry\Model\Config::XML_API_KEY,
+                ScopeInterface::SCOPE_WEBSITE,
+                $store->getWebsiteId()
+            ) !== '';
+    }
+
+    /**
      * Get CSP Nonce
      *
      * @return string

@@ -2,8 +2,10 @@
 
 namespace Bluebarry\Bluebarry\Setup;
 
+use Bluebarry\Bluebarry\Model\Discount\Coupons;
 use Bluebarry\Bluebarry\Model\Heartbeat;
 use Bluebarry\Bluebarry\Model\ResourceModel\CheckoutNotes;
+use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderSyncQueue;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
 use Bluebarry\Bluebarry\Model\ResourceModel\ProductSyncQueue;
@@ -13,7 +15,7 @@ use Magento\Framework\Setup\UninstallInterface;
 
 /**
  * bin/magento module:uninstall --remove-data: tells bluebarry the store is gone, so Studio stops showing
- * it as connected, then removes what the module stored. Telling bluebarry is best effort; a module
+ * it as connected, then removes what the module stored and the cart price rules it made. Telling bluebarry is best effort; a module
  * removed by other means stops reporting in and drops off after a week.
  */
 class Uninstall implements UninstallInterface
@@ -23,6 +25,7 @@ class Uninstall implements UninstallInterface
      */
     private const TABLES = [
         OrderVisitor::TABLE, ProductSyncQueue::TABLE, OrderSyncQueue::TABLE, CheckoutNotes::TABLE,
+        DiscountRules::TABLE, DiscountRules::CODES_TABLE,
     ];
 
     /**
@@ -31,11 +34,18 @@ class Uninstall implements UninstallInterface
     private $heartbeat;
 
     /**
-     * @param Heartbeat $heartbeat
+     * @var Coupons
      */
-    public function __construct(Heartbeat $heartbeat)
+    private $coupons;
+
+    /**
+     * @param Heartbeat $heartbeat
+     * @param Coupons $coupons
+     */
+    public function __construct(Heartbeat $heartbeat, Coupons $coupons)
     {
         $this->heartbeat = $heartbeat;
+        $this->coupons = $coupons;
     }
 
     /**
@@ -49,8 +59,18 @@ class Uninstall implements UninstallInterface
             // Never block the uninstall.
         }
 
+        $keep = [];
+        try {
+            // bluebarry's cart price rules and their codes: nothing would end the codes any more.
+            $this->coupons->deleteAll();
+        } catch (\Exception $e) {
+            // Never block the uninstall. What says which rules and codes are bluebarry's, and when the
+            // codes end, stays: without it the rules that are left could not be found again.
+            $keep = [DiscountRules::TABLE, DiscountRules::CODES_TABLE];
+        }
+
         $connection = $setup->getConnection();
-        foreach (self::TABLES as $table) {
+        foreach (array_diff(self::TABLES, $keep) as $table) {
             $connection->dropTable($setup->getTable($table));
         }
         $connection->delete($setup->getTable('flag'), ['flag_code LIKE ?' => 'bluebarry\_%']);

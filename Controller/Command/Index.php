@@ -3,6 +3,8 @@
 namespace Bluebarry\Bluebarry\Controller\Command;
 
 use Bluebarry\Bluebarry\Model\Config;
+use Bluebarry\Bluebarry\Model\Discount\Coupons;
+use Bluebarry\Bluebarry\Model\Discount\RefusedException;
 use Bluebarry\Bluebarry\Model\Orders\Sync as OrderSync;
 use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\App\Action\HttpPostActionInterface;
@@ -63,6 +65,11 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
     private $orders;
 
     /**
+     * @var Coupons
+     */
+    private $coupons;
+
+    /**
      * @param HttpRequest $request
      * @param JsonFactory $json
      * @param Config $config
@@ -70,6 +77,7 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
      * @param Storefront $storefront
      * @param ModuleListInterface $modules
      * @param OrderSync $orders
+     * @param Coupons $coupons
      */
     public function __construct(
         HttpRequest $request,
@@ -78,7 +86,8 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         StoreManagerInterface $storeManager,
         Storefront $storefront,
         ModuleListInterface $modules,
-        OrderSync $orders
+        OrderSync $orders,
+        Coupons $coupons
     ) {
         $this->request = $request;
         $this->json = $json;
@@ -87,6 +96,7 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         $this->storefront = $storefront;
         $this->modules = $modules;
         $this->orders = $orders;
+        $this->coupons = $coupons;
     }
 
     /**
@@ -115,6 +125,24 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
                 // Studio's Orders page: the history import, run by the cron in batches.
                 $since = strtotime((string) ($decoded['payload']['since'] ?? ''));
                 return $result->setData(['started' => $this->orders->startImport((int) $website->getId(), $since ?: time() - 365 * 86400)]);
+            case 'store.info':
+                // What bluebarry checks before it counts on this store for discount codes.
+                return $result->setData([
+                    'currency' => $website instanceof \Magento\Store\Model\Website ? (string) $website->getBaseCurrencyCode() : '',
+                    'couponsEnabled' => true,
+                ]);
+            case 'coupon.create':
+                // A reward's, a popup's or a quiz's code for one person: single-use, under a cart price
+                // rule for its terms. 422 when it cannot be made as described: nothing was made.
+                try {
+                    return $result->setData($this->coupons->ensure((array) ($decoded['payload'] ?? []), $website));
+                } catch (RefusedException $e) {
+                    return $result->setHttpResponseCode(422)->setData(['ok' => false, 'error' => $e->getMessage()]);
+                }
+            case 'coupon.get':
+                return $result->setData($this->coupons->state((string) ($decoded['payload']['code'] ?? ''), $website));
+            case 'coupon.revoke':
+                return $result->setData($this->coupons->revoke((string) ($decoded['payload']['code'] ?? ''), $website));
             default:
                 return $result->setHttpResponseCode(404)->setData(['ok' => false, 'error' => 'Unknown command.']);
         }

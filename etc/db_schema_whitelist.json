@@ -72,5 +72,31 @@
             "PRIMARY": true,
             "BLUEBARRY_CHECKOUT_QUOTE_ID_QUOTE_ENTITY_ID": true
         }
+    },
+    "bluebarry_discount_rule": {
+        "column": {
+            "rule_id": true,
+            "terms_hash": true,
+            "kind": true,
+            "created_at": true,
+            "tenant_id": true
+        },
+        "constraint": {
+            "PRIMARY": true,
+            "BLUEBARRY_DISCOUNT_RULE_TERMS_HASH": true
+        }
+    },
+    "bluebarry_discount_code": {
+        "column": {
+            "coupon_id": true,
+            "expires_at": true,
+            "revoked": true
+        },
+        "index": {
+            "BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT": true
+        },
+        "constraint": {
+            "PRIMARY": true
+        }
     }
 }

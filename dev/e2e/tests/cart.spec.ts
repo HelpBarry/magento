@@ -33,11 +33,17 @@ test.describe('add to cart from bluebarry', () => {
     await stubAdvisor(page, null, { visitor: false });
     await page.goto('/bb-simple.html');
     await expect.poll(() => page.evaluate(() => (window as any).barry?.magento?.addToCartUrl)).toContain('/bluebarry/cart/add');
+    // The theme's own script makes the form key once it has loaded; these tests post with it as a shopper would.
+    await expect.poll(async () => (await page.context().cookies()).some((cookie) => cookie.name === 'form_key')).toBe(true);
   });
 
   test('the storefront tells the SDK where to add and where the cart is', async ({ page }) => {
     const config = await page.evaluate(() => (window as any).barry.magento);
-    expect(config).toEqual({ addToCartUrl: `${BASE_URL}/bluebarry/cart/add/`, cartUrl: `${BASE_URL}/checkout/cart/` });
+    expect(config).toEqual({
+      addToCartUrl: `${BASE_URL}/bluebarry/cart/add/`,
+      discountUrl: `${BASE_URL}/bluebarry/cart/discount/`,
+      cartUrl: `${BASE_URL}/checkout/cart/`,
+    });
   });
 
   test('a configurable product variant lands with its options, as the product page adds it', async ({ page }) => {
