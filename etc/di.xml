@@ -111,6 +111,18 @@
     <type name="Bluebarry\Bluebarry\Console\Command\SyncCatalog">
         <arguments>
             <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
+            <argument name="categories" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Categories\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Model\Catalog\Categories">
+        <arguments>
+            <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+        </arguments>
+    </type>
+    <!-- Category saves in the admin only note the change: the sync itself is built when the cron runs it. -->
+    <type name="Bluebarry\Bluebarry\Observer\NoteChangedCategories">
+        <arguments>
+            <argument name="categories" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Categories\Proxy</argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Block\Adminhtml\System\Config\Catalog">
