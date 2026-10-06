@@ -83,8 +83,8 @@ class CartReferencesTest extends TestCase
 
     private function line(int $productId, ?int $variantId = null): Item
     {
-        $item = $this->getMockBuilder(Item::class)->disableOriginalConstructor()->onlyMethods(['getOptionByCode'])->addMethods(['getProductId'])->getMock();
-        $item->method('getProductId')->willReturn($productId);
+        $item = $this->getMockBuilder(Item::class)->disableOriginalConstructor()->onlyMethods(['getOptionByCode'])->getMock();
+        $item->setData('product_id', $productId);
         $option = null;
         if ($variantId !== null) {
             $option = $this->getMockBuilder(Option::class)->disableOriginalConstructor()->onlyMethods(['getValue'])->getMock();
