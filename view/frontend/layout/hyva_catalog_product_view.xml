@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <!-- Hyvä renders the product's information from one template: its place for what comes under
+             the add to cart button is this container. -->
+        <move element="bluebarry.product.check" destination="product.info.additional"/>
+        <move element="bluebarry.product.chat" destination="product.info.additional" after="bluebarry.product.check"/>
+    </body>
+</page>

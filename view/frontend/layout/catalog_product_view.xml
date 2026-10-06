@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <!-- What Studio switched on for product pages (Block\Placement): each prints nothing while off.
+             Under the add to cart form; Hyvä's place for them is in hyva_catalog_product_view.xml. -->
+        <referenceContainer name="product.info.main">
+            <block class="Bluebarry\Bluebarry\Block\Placement" name="bluebarry.product.check" after="product.info"
+                   template="Bluebarry_Bluebarry::placement/product-check.phtml">
+                <arguments>
+                    <argument name="placement" xsi:type="string">productCheck</argument>
+                </arguments>
+            </block>
+            <block class="Bluebarry\Bluebarry\Block\Placement" name="bluebarry.product.chat" after="bluebarry.product.check"
+                   template="Bluebarry_Bluebarry::placement/product-chat.phtml">
+                <arguments>
+                    <argument name="placement" xsi:type="string">productChat</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+        <!-- Below the product's details, above the related products. -->
+        <referenceContainer name="content">
+            <block class="Bluebarry\Bluebarry\Block\Placement" name="bluebarry.product.recommendations" after="product.info.details"
+                   template="Bluebarry_Bluebarry::placement/recommendations.phtml">
+                <arguments>
+                    <argument name="placement" xsi:type="string">productRecommendations</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+    </body>
+</page>

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { adminLogin, magento, mockApi, openBluebarrySettings, sql } from './helpers';
+import { adminLogin, BASE_URL, magento, mockApi, openBluebarrySettings, sql } from './helpers';
 
 // Connecting the store (magento-internal#8): the API key is saved encrypted, the website sends a
 // heartbeat with it, and the settings page says whether bluebarry accepted it.
@@ -32,7 +32,7 @@ test.describe('connect with an API key', () => {
     expect(ping.responseStatus).toBe(200);
     expect(ping.headers.authorization).toBe('test-api-key');
     expect(ping.headers['bb-tenant-id'], 'a key-authenticated call must not name the tenant').toBeUndefined();
-    expect(ping.body).toMatchObject({ siteUrl: 'http://localhost:8080', siteName: 'Main Website' });
+    expect(ping.body).toMatchObject({ siteUrl: BASE_URL, siteName: 'Main Website' });
     expect(ping.body.moduleVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(ping.body.magentoVersion).toMatch(/^2\.4\./);
 

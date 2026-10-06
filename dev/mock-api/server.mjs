@@ -7,7 +7,8 @@
 //   GET    /__requests          recorded requests (oldest first)
 //   DELETE /__requests          clear recorded requests and reset behaviour
 //   PUT    /__behavior          {"status": 500, "delayMs": 0, "body": {...}} applied to every following request
-//   PUT    /__storefront        {"search": {"profileId": "...", "resultsPage": true} | null} what GET /data/magento/storefront answers
+//   PUT    /__storefront        {"search": {"profileId": "...", "resultsPage": true} | null, "placements": {...}, "productChecks": {...}}
+//                               what GET /data/magento/storefront answers
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -224,7 +225,7 @@ const routes = {
   },
   '/data/magento/storefront': {
     method: 'GET', auth: 'apiKey',
-    ok: () => [200, { tenantId: API_KEY_TENANT, search: storefront.search, version: JSON.stringify(storefront.search) }],
+    ok: () => [200, { tenantId: API_KEY_TENANT, ...storefront, version: JSON.stringify(storefront) }],
   },
   '/data/magento/orders/sync': { schema: ordersSync, auth: 'apiKey', ok: () => [200, { synced: 0 }] },
   '/data/magento/checkout-started': { schema: checkoutStarted, auth: 'apiKey', ok: () => [204, null] },

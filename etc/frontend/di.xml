@@ -4,4 +4,8 @@
     <type name="Magento\Quote\Model\Quote">
         <plugin name="bluebarry_ignore_line_edits" type="Bluebarry\Bluebarry\Plugin\Quote\IgnoreLineEdits" />
     </type>
+    <!-- The cart section also says what is in the cart the way bluebarry names it (recommendation blocks). -->
+    <type name="Magento\Checkout\CustomerData\Cart">
+        <plugin name="bluebarry_cart_references" type="Bluebarry\Bluebarry\Plugin\Checkout\CartReferences" />
+    </type>
 </config>

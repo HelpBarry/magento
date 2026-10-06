@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { sql, stubAdvisor } from './helpers';
+import { BASE_URL, sql, stubAdvisor } from './helpers';
 
 // Add to cart from bluebarry (magento-internal#4): the module's endpoint the SDK's Magento cart bridge
 // posts to, called here exactly as the bridge calls it (form key from the cookie, the lines as JSON).
@@ -37,7 +37,7 @@ test.describe('add to cart from bluebarry', () => {
 
   test('the storefront tells the SDK where to add and where the cart is', async ({ page }) => {
     const config = await page.evaluate(() => (window as any).barry.magento);
-    expect(config).toEqual({ addToCartUrl: 'http://localhost:8080/bluebarry/cart/add/', cartUrl: 'http://localhost:8080/checkout/cart/' });
+    expect(config).toEqual({ addToCartUrl: `${BASE_URL}/bluebarry/cart/add/`, cartUrl: `${BASE_URL}/checkout/cart/` });
   });
 
   test('a configurable product variant lands with its options, as the product page adds it', async ({ page }) => {

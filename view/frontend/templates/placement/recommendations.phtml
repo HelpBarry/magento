@@ -1,0 +1,17 @@
+<?php
+/**
+ * A recommendation block: below the product and under the cart when switched on in Studio, and
+ * wherever the Recommendations widget is placed.
+ *
+ * @var \Bluebarry\Bluebarry\Block\Placement $block
+ * @var \Magento\Framework\Escaper $escaper
+ */
+$blockId = $block->getData('placement')
+    ? ($block->getPlacement((string) $block->getData('placement'))['recommendationId'] ?? null)
+    : $block->getData('block_id');
+$attributes = $block->getRecommendationAttributes(is_string($blockId) ? trim($blockId) : null);
+if ($attributes === null) {
+    return;
+}
+?>
+<div class="bluebarry-recommendations" style="margin:24px 0"<?php foreach ($attributes as $name => $value): ?> <?= $escaper->escapeHtmlAttr($name) ?>="<?= $escaper->escapeHtmlAttr($value) ?>"<?php endforeach; ?>></div>

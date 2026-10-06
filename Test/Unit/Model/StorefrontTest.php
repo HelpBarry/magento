@@ -20,6 +20,7 @@ class StorefrontTest extends TestCase
     private const PROFILE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
     private array $flag = [];
+    private array $checks = [];
     private array $cache = [];
     private int $purges = 0;
     private array $purged = [];
@@ -214,9 +215,125 @@ class StorefrontTest extends TestCase
         $this->assertSame(self::PROFILE, $storefront->search(1, self::TENANT)['profileId']);
     }
 
-    private function answer(?array $search, string $tenant = self::TENANT): Response
+    public function testKeepsTheElementsSwitchedOn_AsTheModulePrintsThem(): void
     {
-        return new Response(200, (string) json_encode(['tenantId' => $tenant, 'search' => $search, 'version' => $search ? 'v1' : 'v0']));
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(null, self::TENANT, ['version' => 'p1', 'placements' => [
+            'productCheck' => ['enabled' => true, 'buttonText' => '  Is this my size?  '],
+            'productChat' => ['enabled' => true, 'somethingNewer' => 1],
+            'productRecommendations' => ['enabled' => true, 'recommendationId' => strtoupper(self::PROFILE)],
+            // Off, without a block, and one this module does not know: none is kept.
+            'cartRecommendations' => ['enabled' => false, 'recommendationId' => self::PROFILE],
+            'somethingNewer' => ['enabled' => true],
+        ]])];
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertSame(['buttonText' => 'Is this my size?'], $storefront->placement(1, self::TENANT, 'productCheck'));
+        $this->assertSame([], $storefront->placement(1, self::TENANT, 'productChat'));
+        $this->assertSame(['recommendationId' => self::PROFILE], $storefront->placement(1, self::TENANT, 'productRecommendations'));
+        $this->assertNull($storefront->placement(1, self::TENANT, 'cartRecommendations'));
+        $this->assertNull($storefront->placement(1, self::TENANT, 'somethingNewer'));
+        $this->assertSame(['productCheck', 'productChat', 'productRecommendations'], array_keys($this->flag[1]['placements']));
+        // A store view that reports to another company, and another website.
+        $this->assertNull($storefront->placement(1, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'productChat'));
+        $this->assertNull($storefront->placement(2, self::TENANT, 'productChat'));
+        $this->assertSame(1, $this->purges);
+    }
+
+    public function testARecommendationPlacementWithoutABlockIsNotKept(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(null, self::TENANT, ['placements' => [
+            'productRecommendations' => ['enabled' => true, 'recommendationId' => 'not-an-id'],
+            'cartRecommendations' => ['enabled' => true],
+            'productCheck' => ['enabled' => 'yes'],
+        ]])];
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertArrayNotHasKey('placements', $this->flag[1]);
+    }
+
+    public function testABluebarryFromBeforePlacementsSwitchesNoneOn(): void
+    {
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(['profileId' => self::PROFILE, 'resultsPage' => false])];
+
+        $storefront->refresh($this->website(1));
+
+        $this->assertNull($storefront->placement(1, self::TENANT, 'productChat'));
+        $this->assertNull($storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame([], $this->checks);
+    }
+
+    public function testProductChecksAreKeptApartFromWhatEveryPageReads_AndThePagesLeaveTheCacheWhenTheyChange(): void
+    {
+        $quiz = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+        $storefront = $this->storefront();
+        $checks = ['16' => strtoupper($quiz), '10' => $quiz, 'not-a-product' => $quiz, '11' => 'not-a-quiz'];
+        $this->answers = [
+            $this->answer(null, self::TENANT, ['version' => 'c1', 'productChecks' => $checks]),
+            $this->answer(null, self::TENANT, ['version' => 'c1', 'productChecks' => ['10' => $quiz, '16' => $quiz]]),
+            $this->answer(null, self::TENANT, ['version' => 'c2', 'productChecks' => ['16' => $quiz]]),
+            $this->answer(null, self::TENANT, ['version' => 'c3', 'productChecks' => []]),
+        ];
+
+        $storefront->refresh($this->website(1));
+        $this->assertSame($quiz, $storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame($quiz, $storefront->productCheck(1, self::TENANT, '16'));
+        $this->assertNull($storefront->productCheck(1, self::TENANT, '11'));
+        $this->assertNull($storefront->productCheck(1, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', '10'));
+        // What every page reads only names them.
+        $this->assertSame(hash('sha256', (string) json_encode(['10' => $quiz, '16' => $quiz])), $this->flag[1]['checks']);
+        $this->assertSame(['10' => $quiz, '16' => $quiz], $this->checks[1]['products']);
+        $this->assertSame(1, $this->purges);
+
+        $storefront->refresh($this->website(1)); // the same checks in another order: nothing changed
+        $this->assertSame(1, $this->purges);
+
+        $storefront->refresh($this->website(1)); // one product's quiz taken away
+        $this->assertNull($storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame($quiz, $storefront->productCheck(1, self::TENANT, '16'));
+        $this->assertSame(2, $this->purges);
+
+        $storefront->refresh($this->website(1)); // the last one
+        $this->assertNull($storefront->productCheck(1, self::TENANT, '16'));
+        $this->assertArrayNotHasKey('checks', $this->flag[1]);
+        $this->assertArrayNotHasKey(1, $this->checks);
+    }
+
+    public function testChecksThatAreNotTheSettingsOwnGiveNoButton(): void
+    {
+        $quiz = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+        $storefront = $this->storefront();
+        $this->answers = [$this->answer(null, self::TENANT, ['version' => 'c1', 'productChecks' => ['10' => $quiz]])];
+        $storefront->refresh($this->website(1));
+
+        // Another website's refresh is saving newer checks while this page renders.
+        $this->checks[1]['version'] = 'newer';
+        unset($this->cache[Storefront::CHECKS_FLAG . '_1']);
+
+        $this->assertNull($storefront->productCheck(1, self::TENANT, '10'));
+    }
+
+    public function testADisconnectedWebsiteForgetsItsElementsAndChecks(): void
+    {
+        $quiz = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+        $this->answers = [$this->answer(null, self::TENANT, ['placements' => ['productChat' => ['enabled' => true]], 'productChecks' => ['10' => $quiz]])];
+        $this->storefront()->refresh($this->website(1));
+
+        $disconnected = $this->storefront(connected: false);
+        $disconnected->refresh($this->website(1));
+
+        $this->assertNull($disconnected->placement(1, self::TENANT, 'productChat'));
+        $this->assertNull($disconnected->productCheck(1, self::TENANT, '10'));
+        $this->assertArrayNotHasKey(1, $this->checks);
+    }
+
+    private function answer(?array $search, string $tenant = self::TENANT, array $more = []): Response
+    {
+        return new Response(200, (string) json_encode($more + ['tenantId' => $tenant, 'search' => $search, 'version' => $search ? 'v1' : 'v0']));
     }
 
     private function website(int $id): Website
@@ -243,9 +360,13 @@ class StorefrontTest extends TestCase
             return $answer;
         });
         $flags = $this->createStub(FlagManager::class);
-        $flags->method('getFlagData')->willReturnCallback(fn () => $this->flag);
+        $flags->method('getFlagData')->willReturnCallback(fn ($code) => $code === Storefront::CHECKS_FLAG ? $this->checks : $this->flag);
         $flags->method('saveFlag')->willReturnCallback(function ($code, $data) {
-            $this->flag = $data;
+            if ($code === Storefront::CHECKS_FLAG) {
+                $this->checks = $data;
+            } else {
+                $this->flag = $data;
+            }
             return true;
         });
         $events = $this->createStub(ManagerInterface::class);

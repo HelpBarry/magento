@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import { magento, MOCK_API, mockApi, sql, stubAdvisor } from './helpers';
+import { BASE_URL, magento, MOCK_API, mockApi, sql, stubAdvisor } from './helpers';
 
 // Search from Studio (magento-internal#5): the website reads the choice from bluebarry, when bluebarry
 // asks (a signed command) or on its schedule, prints window.barry.search, and takes the catalog search
@@ -78,7 +78,7 @@ test.describe('search from Studio', () => {
 
     await page.goto('/bb-simple.html');
     expect(await page.evaluate(() => (window as any).barry.search.serpPage)).toEqual({
-      enabled: true, path: 'http://localhost:8080/catalogsearch/result/', here: false, hostSelector: '#maincontent .columns',
+      enabled: true, path: `${BASE_URL}/catalogsearch/result/`, here: false, hostSelector: '#maincontent .columns',
     });
 
     await page.goto('/catalogsearch/result/?q=bluebarry');
