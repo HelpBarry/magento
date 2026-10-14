@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { addToCart, adminToken, BASE_URL, sql, stubAdvisor } from './helpers';
+import { addToCart, adminToken, BASE_URL, sql, stubAdvisor, THEME } from './helpers';
 
 // A cart link (magento-internal#25): a quiz that is not on the store (a landing page, a standalone
 // quiz link) sends the shopper to bluebarry/cart/link, which adds the lines the way bluebarry/cart/add
@@ -104,15 +104,19 @@ test.describe('cart link', () => {
       expect((await cart(otherPage)).summary_count).toBe(1);
       // A shopper new to the store sees it in the mini-cart too.
       await expect.poll(() => miniCartCount(otherPage)).toBe(1);
-      // Luma clears what asked it to reload, so the next page does not reload again.
-      await expect.poll(async () => (await other.cookies()).find((c) => c.name === 'section_data_clean')?.value ?? '').toBe('');
+      // Luma clears what asked it to reload, so the next page does not reload again. Hyvä never reads
+      // that cookie (it reloads on private_content_version) and leaves it to expire; Hyvä's Luma
+      // checkout fallback reloads once from it and clears it like Luma.
+      if (THEME === 'luma') {
+        await expect.poll(async () => (await other.cookies()).find((c) => c.name === 'section_data_clean')?.value ?? '').toBe('');
+      }
     } finally {
       await other.close();
     }
     expect((await cart(page)).summary_count).toBe(1);
   });
 
-  test("a quiz's code goes on the cart with the products; an unknown one is passed over", async ({ page, request }) => {
+  test("a quiz's code goes on the cart with the products; an unknown one is passed over", async ({ page, request, browser }) => {
     // A coupon of this store (a quiz's code is the merchant's coupon, or one bluebarry made here).
     const code = `QUIZ-${randomUUID().slice(0, 8).toUpperCase()}`;
     const headers = { Authorization: `Bearer ${await adminToken(request)}` };
@@ -131,10 +135,18 @@ test.describe('cart link', () => {
       expect(page.url()).toBe(`${BASE_URL}/checkout/cart/`);
       expect(await coupon(page)).toBe(code);
 
-      await page.context().clearCookies();
-      await page.goto(link(productId('bb-simple'), '&code=NO-SUCH-CODE'), { referer: LANDING_PAGE });
-      expect((await cart(page)).summary_count).toBe(1);
-      expect(await coupon(page)).toBe('');
+      // Another shopper: a context of their own (clearing this one's cookies races the cart page's own
+      // requests, which can bring the first session back).
+      const other = await browser.newContext({ baseURL: BASE_URL });
+      try {
+        const otherPage = await other.newPage();
+        await stubAdvisor(otherPage, null, { visitor: false });
+        await otherPage.goto(link(productId('bb-simple'), '&code=NO-SUCH-CODE'), { referer: LANDING_PAGE });
+        expect((await cart(otherPage)).summary_count).toBe(1);
+        expect(await coupon(otherPage)).toBe('');
+      } finally {
+        await other.close();
+      }
     } finally {
       await request.delete(`/rest/V1/salesRules/${ruleId}`, { headers });
     }
