@@ -15,6 +15,8 @@ if [ $# -gt 0 ]; then
     rm -f "$ARTIFACTS"/*.zip
     ZIP="$ARTIFACTS/$(basename "$1")"
     mv "$STAGED" "$ZIP"
+    # mktemp makes the file readable by its owner only; Composer in the php container runs as www-data.
+    chmod 644 "$ZIP"
 else
     rm -f "$ARTIFACTS"/*.zip
     ZIP="$("$DEV_DIR/../scripts/package.sh" "$ARTIFACTS")"
