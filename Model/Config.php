@@ -18,6 +18,9 @@ use Magento\Store\Model\ScopeInterface;
  *         'advisor_url' => 'http://localhost:3000',
  *         'sdk_url' => 'https://staging.api.bluebarry.ai/sdk/{tenantId}/advisor.js',
  *     ]
+ *
+ * etc/csp_whitelist.xml only allows bluebarry's production hosts. A store pointed elsewhere allows the
+ * other hosts in a csp_whitelist.xml of its own, as bluebarry's staging test store does.
  */
 class Config
 {
