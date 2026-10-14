@@ -94,11 +94,10 @@ class Placement extends Template
     /**
      * The product check button of the product this page is for: where it leads and what it says, or
      * null for a product without a product check quiz. The link opens the quiz for the variant the
-     * page opens with; on a product with several variants the page's script follows the one the
-     * shopper picks, among the variants bluebarry has for it.
+     * page opens with; the page's script follows the one the shopper picks (getPickableVariants()).
      *
      * @param string $text the button's own text; empty for the one set in Studio, then the default
-     * @return array{href: string, text: string, variants: string[]}|null
+     * @return array{href: string, text: string}|null
      */
     public function getProductCheck(string $text = ''): ?array
     {
@@ -121,12 +120,24 @@ class Placement extends Template
         if ($text === '') {
             $text = (string) ($this->getPlacement('productCheck')['buttonText'] ?? '');
         }
+        return ['href' => '#bluebarry:' . $quiz . '/' . $reference, 'text' => $text !== '' ? $text : (string) __(self::DEFAULT_TEXT)];
+    }
+
+    /**
+     * The variants a shopper can pick on this product page that bluebarry has for its product, for the
+     * script that has the product check, product chat and recommendation blocks follow the pick. None
+     * on any other page, for a product with one or none, or without bluebarry on this store view.
+     *
+     * @return string[]
+     */
+    public function getPickableVariants(): array
+    {
+        $product = $this->product();
+        if ($product === null || $this->tenantId() === null) {
+            return [];
+        }
         $variants = $this->pageProduct->references($product);
-        return [
-            'href' => '#bluebarry:' . $quiz . '/' . $reference,
-            'text' => $text !== '' ? $text : (string) __(self::DEFAULT_TEXT),
-            'variants' => count($variants) > 1 ? $variants : [],
-        ];
+        return count($variants) > 1 ? $variants : [];
     }
 
     /**
