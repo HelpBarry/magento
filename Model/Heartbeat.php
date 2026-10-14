@@ -3,6 +3,7 @@
 namespace Bluebarry\Bluebarry\Model;
 
 use Bluebarry\Bluebarry\Model\Api\Client;
+use Bluebarry\Bluebarry\Model\Catalog\FilterAttributes;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
@@ -16,7 +17,8 @@ use Magento\Store\Model\StoreManagerInterface;
 /**
  * Tells bluebarry which Magento websites run the module: one installation per website, connected
  * with the website's Tenant ID and API key. Sent when the settings are saved, after a module upgrade,
- * and daily from Magento's cron. The outcome per website is kept for the settings page.
+ * and daily from Magento's cron. The outcome per website is kept for the settings page. It also
+ * reports the layered navigation's filters, which bluebarry can import as search filters.
  */
 class Heartbeat
 {
@@ -74,6 +76,11 @@ class Heartbeat
     private $frontendUrl;
 
     /**
+     * @var FilterAttributes
+     */
+    private $filterAttributes;
+
+    /**
      * @param Config $config
      * @param Client $client
      * @param StoreManagerInterface $storeManager
@@ -83,6 +90,7 @@ class Heartbeat
      * @param EncryptorInterface $encryptor
      * @param LockManagerInterface $locks
      * @param Url $frontendUrl
+     * @param FilterAttributes $filterAttributes
      */
     public function __construct(
         Config $config,
@@ -93,7 +101,8 @@ class Heartbeat
         FlagManager $flags,
         EncryptorInterface $encryptor,
         LockManagerInterface $locks,
-        Url $frontendUrl
+        Url $frontendUrl,
+        FilterAttributes $filterAttributes
     ) {
         $this->config = $config;
         $this->client = $client;
@@ -104,6 +113,7 @@ class Heartbeat
         $this->encryptor = $encryptor;
         $this->locks = $locks;
         $this->frontendUrl = $frontendUrl;
+        $this->filterAttributes = $filterAttributes;
     }
 
     /**
@@ -191,7 +201,7 @@ class Heartbeat
         if ($registration !== null && ($registration['tenant'] !== strtolower($tenantId) || $registration['site'] !== $siteUrl)) {
             $this->retire($websiteId);
         }
-        $response = $this->client->post('/data/magento/ping', [
+        $body = [
             // bluebarry refuses a key from another company before it registers anything.
             'tenantId' => $tenantId,
             'siteUrl' => $siteUrl,
@@ -202,7 +212,15 @@ class Heartbeat
             // Where bluebarry asks this website to reload its settings (Controller\Command\Index): in
             // its own store view, with the store code where URLs carry one.
             'commandUrl' => $this->commandUrl($website),
-        ], $tenantId, $apiKey, 10);
+        ];
+        try {
+            // The layered navigation's filters, labelled as in the store view the catalog is sent from.
+            $group = $this->storeManager->getGroup((string) $website->getDefaultGroupId());
+            $body['filterAttributes'] = $this->filterAttributes->forStore((int) $group->getDefaultStoreId());
+        } catch (\Exception $e) {
+            // Left out: bluebarry keeps what an earlier heartbeat reported, and the website still reports in.
+        }
+        $response = $this->client->post('/data/magento/ping', $body, $tenantId, $apiKey, 10);
 
         $outcome = ['at' => time(), 'site' => $siteUrl, 'ok' => false, 'status' => $response->getStatus(), 'error' => null];
         if ($response->isSuccess()) {

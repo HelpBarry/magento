@@ -1147,7 +1147,8 @@ class ProductBuilder
 
     /**
      * The attributes a merchant made part of the storefront: shown on the product page, or filterable
-     * in the layered navigation. Their own, not Magento's system attributes.
+     * in the layered navigation (on category pages or search results). Their own, not Magento's system
+     * attributes.
      *
      * @return array<string, \Magento\Catalog\Model\ResourceModel\Eav\Attribute>
      */
@@ -1157,7 +1158,7 @@ class ProductBuilder
             $collection = $this->attributes->create();
             $collection->addFieldToFilter('is_user_defined', ['eq' => 1])
                 ->addFieldToFilter('frontend_input', ['in' => self::ATTRIBUTE_INPUTS])
-                ->addFieldToFilter(['is_visible_on_front', 'is_filterable'], [['eq' => 1], ['gt' => 0]]);
+                ->addFieldToFilter(['is_visible_on_front', 'is_filterable', 'is_filterable_in_search'], [['eq' => 1], ['gt' => 0], ['eq' => 1]]);
             $this->syncedAttributes = [];
             foreach ($collection as $attribute) {
                 $this->syncedAttributes[(string) $attribute->getAttributeCode()] = $attribute;

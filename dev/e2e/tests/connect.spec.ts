@@ -41,6 +41,32 @@ test.describe('connect with an API key', () => {
     expect(stored).not.toContain('test-api-key');
   });
 
+  test('the heartbeat reports the layered navigation filters, labelled as in the store view', async ({ page }) => {
+    const color = sql("SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'color' AND entity_type_id = (SELECT entity_type_id FROM eav_entity_type WHERE entity_type_code = 'catalog_product')").trim();
+    const before = sql(`SELECT CONCAT(is_filterable, ',', is_filterable_in_search, ',', position) FROM catalog_eav_attribute WHERE attribute_id = ${color}`).trim().split(',');
+    sql(`UPDATE catalog_eav_attribute SET is_filterable = 1, is_filterable_in_search = 1, position = 5 WHERE attribute_id = ${color}`);
+    sql(`INSERT INTO eav_attribute_label (attribute_id, store_id, value) VALUES (${color}, 1, 'Kleur')`);
+    try {
+      await adminLogin(page);
+      await openBluebarrySettings(page);
+      await page.locator('#bluebarry_module_general_api_key').fill('test-api-key');
+      await page.locator('#save').click();
+      await expect(page.locator('.message-success', { hasText: 'Main Website is connected to bluebarry.' })).toBeVisible();
+
+      const [ping] = await pings();
+      expect(ping.responseStatus).toBe(200);
+      const filters: { code: string; label: string; position: number }[] = ping.body.filterAttributes;
+      expect(filters).toContainEqual({ code: 'color', label: 'Kleur', position: 5 });
+      // Magento's own price filter comes along; bluebarry makes it the price range.
+      expect(filters.map((f) => f.code)).toContain('price');
+      const positions = filters.map((f) => f.position);
+      expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    } finally {
+      sql(`DELETE FROM eav_attribute_label WHERE attribute_id = ${color} AND store_id = 1`);
+      sql(`UPDATE catalog_eav_attribute SET is_filterable = ${before[0]}, is_filterable_in_search = ${before[1]}, position = ${before[2]} WHERE attribute_id = ${color}`);
+    }
+  });
+
   test('a refused key is reported on save', async ({ page }) => {
     await adminLogin(page);
     await openBluebarrySettings(page);
