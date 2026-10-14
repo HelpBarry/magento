@@ -190,9 +190,11 @@ class Categories
         }
         $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_LINK), '/');
         $counts = $this->productCounts();
+        // As the products name them: by their path when another category has the same name.
+        $names = CategoryNames::forStore($this->categories, $store);
         $categories = [];
         foreach ($collection as $category) {
-            $name = self::text($category->getName());
+            $name = $names[(int) $category->getId()] ?? '';
             if ($name === '') {
                 continue;
             }

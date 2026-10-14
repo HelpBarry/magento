@@ -184,6 +184,28 @@ test.describe('catalog sync', () => {
     expect((await categorySets())[0].body.categories.find((c: any) => c.id === String(categoryId)).name).toBe('BB Catalog');
   });
 
+  test('two categories with the same name go by their path, in the list and on the products', async ({ request }) => {
+    const categorySets = async () => (await mockApi.requests()).filter((r) => r.path === '/data/magento/categories');
+    // An inactive parent still names the path; it is not sent itself.
+    const outlet = (await rest(request, 'post', '/rest/V1/categories', { category: { parent_id: 2, name: 'BB Outlet', is_active: false } })).id;
+    const namesake = (await rest(request, 'post', '/rest/V1/categories', { category: { parent_id: outlet, name: 'bb catalog', is_active: true } })).id;
+    try {
+      await rest(request, 'post', `/rest/V1/categories/${namesake}/products`, { productLink: { sku: SKU, position: 0, category_id: String(namesake) } });
+      expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
+      const names = Object.fromEntries((await categorySets())[0].body.categories.map((c: any) => [c.id, c.name]));
+      expect(names[String(categoryId)]).toBe('BB Catalog');
+      expect(names[String(namesake)]).toBe('BB Outlet / bb catalog');
+      expect(names[String(outlet)]).toBeUndefined();
+
+      syncCatalog('--all');
+      const [product] = await sent(productId(SKU));
+      expect([...property(product, 'categories')].sort()).toEqual(['BB Catalog', 'BB Outlet / bb catalog']);
+    } finally {
+      const token = await adminToken(request);
+      await request.delete(`/rest/V1/categories/${outlet}`, { headers: { Authorization: `Bearer ${token}` } });
+    }
+  });
+
   test('a sale goes out once Magento indexed its price', async ({ request }) => {
     const id = productId(SKU);
     await rest(request, 'put', `/rest/all/V1/products/${SKU}`, {

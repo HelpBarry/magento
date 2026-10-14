@@ -1116,7 +1116,8 @@ class ProductBuilder
     }
 
     /**
-     * The names of the product's active categories in the store's own category tree.
+     * The names of the product's active categories in the store's own category tree, as the category
+     * list names them (CategoryNames: a path when another category has the same name).
      *
      * @param int[] $ids
      * @param Store $store
@@ -1126,15 +1127,7 @@ class ProductBuilder
     {
         $storeId = (int) $store->getId();
         if (!isset($this->categoryNames[$storeId])) {
-            $collection = $this->categories->create();
-            $collection->setStoreId($storeId)
-                ->addAttributeToSelect('name')
-                ->addAttributeToFilter('is_active', ['eq' => 1])
-                ->addFieldToFilter('path', ['like' => '1/' . (int) $store->getRootCategoryId() . '/%']);
-            $this->categoryNames[$storeId] = [];
-            foreach ($collection as $category) {
-                $this->categoryNames[$storeId][(int) $category->getId()] = $this->text($category->getName());
-            }
+            $this->categoryNames[$storeId] = CategoryNames::forStore($this->categories, $store);
         }
         $names = [];
         foreach ($ids as $id) {
