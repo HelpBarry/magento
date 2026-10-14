@@ -45,15 +45,19 @@ if ($check === null) {
             var candidates = event.detail && event.detail.candidates;
             follow(candidates && candidates.length === 1 ? candidates[0] : null);
         });
-        // Luma: its swatches, or its option selects once each has a value (the last one changed then
-        // names the variant). Read once the widgets have taken the change. On the body, where the
-        // wishlist's own handler stops the change from going further.
+        // Luma: the product's swatches, or its option selects once each has a value (the last one changed
+        // then names the variant). Read once the widgets have taken a change, and once they are set up:
+        // an item's options page (cart, wishlist) opens with its saved options and no change. Delegated
+        // from the body, beside the wishlist's own handler, which stops the change from going further.
         if (typeof window.require === 'function') {
             window.require(['jquery'], function ($) {
-                $(document.body).on('change', '[name^="super_attribute"]', function () { setTimeout(picked); });
+                $(document.body)
+                    .on('change', '[name^="super_attribute"]', function () { setTimeout(picked); })
+                    .on('configurable.initialized swatch.initialized', function () { setTimeout(picked); });
+                picked();
                 function picked() {
-                    var swatches = $('[data-role=swatch-options]').data('mage-SwatchRenderer');
                     var form = $('#product_addtocart_form'), selects = form.data('mageConfigurable');
+                    var swatches = form.find('[data-role=swatch-options]').data('mage-SwatchRenderer');
                     if (swatches) {
                         var products = swatches._CalcProducts();
                         follow(products.length === 1 ? products[0] : null);

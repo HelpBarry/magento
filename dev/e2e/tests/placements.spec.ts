@@ -135,6 +135,15 @@ test.describe('placements from Studio', () => {
     // A choice taken back: the variant the page opens with again.
     await select.selectOption({ index: 0 });
     await expect(button).toHaveAttribute('href', opensWith);
+
+    // An item's options page opens with its saved options, without a change.
+    await addToCart(page, 'bb-configurable', { color: 'BB Red' });
+    const cart = await page.evaluate(async () => {
+      const response = await fetch('/customer/section/load/?sections=cart&force_new_section_timestamp=true', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      return (await response.json()).cart;
+    });
+    await page.goto(cart.items[0].configure_url);
+    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
     expect(await violations()).toEqual([]);
 
     if (THEME !== 'luma') return;
