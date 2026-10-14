@@ -89,11 +89,17 @@
     "bluebarry_discount_code": {
         "column": {
             "coupon_id": true,
+            "stage": true,
             "expires_at": true,
-            "revoked": true
+            "revoked": true,
+            "code": true,
+            "tenant_id": true,
+            "created_at": true
         },
         "index": {
-            "BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT": true
+            "BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT": true,
+            "BLUEBARRY_DISCOUNT_CODE_STAGE_EXPIRES_AT": true,
+            "BLUEBARRY_DISCOUNT_CODE_CODE": true
         },
         "constraint": {
             "PRIMARY": true

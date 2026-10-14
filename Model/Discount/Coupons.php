@@ -33,18 +33,24 @@ use Magento\Store\Model\StoreManagerInterface;
  * that reports to the same bluebarry account.
  *
  * Magento ends a code only by its rule's dates, and these rules have none (their codes each end at
- * their own moment). So a code ends by being removed: the cron does that within minutes of its last
- * moment (cleanUp()).
+ * their own moment). So the cron ends a code within minutes of its last moment, the way a code is
+ * taken back: spent, so it can't be used, and removed a little later (cleanUp()).
  */
 class Coupons
 {
     private const LOCK = 'bluebarry_discount_rule';
 
-    /** The lock Magento counts a coupon's use under at checkout (SalesRule's Coupon\Usage\Processor), by its code. */
+    /**
+     * The lock Magento counts a coupon's use under at checkout (SalesRule's Coupon\Usage\Processor): by
+     * its code, from Magento 2.4.9 by its id.
+     */
     private const COUPON_LOCK = 'coupon_code_';
 
-    /** Seconds a code that was taken back stays, spent: longer than any checkout that still holds it. */
-    private const REVOKED_KEPT = 600;
+    /** Seconds a code that ended (taken back, or expired) stays, spent: longer than any checkout that still holds it. */
+    private const ENDED_KEPT = 600;
+
+    /** Seconds what became of a removed code is kept, for bluebarry to look up. */
+    private const REMOVED_KEPT = 365 * 86400;
 
     /** More products than this is not one offer or reward; the rule would not be readable either. */
     private const MAX_PRODUCTS = 100;
@@ -223,7 +229,7 @@ class Coupons
 
     /**
      * What became of one of this account's codes. Any other code (the merchant's own, another bluebarry
-     * account's on the same Magento) does not exist here.
+     * account's on the same Magento) does not exist here, and the store's orders are not searched for it.
      *
      * @param string $code
      * @param WebsiteInterface $website the website asked
@@ -231,19 +237,37 @@ class Coupons
      */
     public function state(string $code, WebsiteInterface $website): array
     {
-        $coupon = $this->rules->coupon($code, $this->tenantId($website));
-        if ($coupon === null || !empty($coupon['revoked'])) {
-            // Removed after it ended, taken back, or never made: an order that carries it still says it
-            // was spent. Only this account's own orders: another account's code is none of its business.
-            return ['exists' => false, 'usageCount' => $this->rules->ordersWith($code, $coupon['created_at'] ?? null, $this->storeIds($website))];
+        $tenantId = $this->tenantId($website);
+        $coupon = $this->rules->coupon($code, $tenantId);
+        if ($coupon === null) {
+            // Removed after it ended, or never this account's. A removed code a shopper spent says so; one
+            // that ended unspent may still be carried by an order Magento had not counted yet, placed
+            // while the code existed. Only this account's own orders: another account's code is none of
+            // its business.
+            $removed = $this->rules->removed($code, $tenantId);
+            if ($removed === null) {
+                return ['exists' => false, 'usageCount' => 0];
+            }
+            return ['exists' => false, 'usageCount' => empty($removed['revoked']) ? 1 : $this->rules->ordersWith(
+                $code,
+                $removed['created_at'],
+                // A checkout that held the code when it was removed is placed moments later.
+                gmdate('Y-m-d H:i:s', strtotime($removed['expires_at'] . ' UTC') + 3600),
+                $this->storeIds($website)
+            )];
         }
-        // Past its last moment and not removed by the cron yet.
-        $expired = $coupon['expires_at'] !== null && strtotime($coupon['expires_at'] . ' UTC') < time();
+        if (!empty($coupon['revoked'])) {
+            // Ended before anyone spent it (taken back, or expired), and not removed yet.
+            return ['exists' => false, 'usageCount' => $this->rules->ordersWith($code, $coupon['created_at'], null, $this->storeIds($website))];
+        }
+        // Past its last moment, or ended by the cron and not removed yet.
+        $usable = (int) $coupon['is_active'] === 1 && (int) ($coupon['stage'] ?? 0) === DiscountRules::STAGE_USABLE
+            && ($coupon['expires_at'] === null || strtotime($coupon['expires_at'] . ' UTC') >= time());
         return [
             'exists' => true,
             'id' => (int) $coupon['coupon_id'],
             // The word bluebarry knows a usable code by, from the WooCommerce plugin.
-            'status' => (int) $coupon['is_active'] === 1 && !$expired ? 'publish' : 'disabled',
+            'status' => $usable ? 'publish' : 'disabled',
             'usageCount' => $this->uses($code, $coupon, $website),
         ];
     }
@@ -254,7 +278,8 @@ class Coupons
      * A checkout may be placing its order with the code at this very moment. So the code is not deleted
      * but spent, under the lock Magento counts a coupon's use under: the checkout either counted first
      * (the code is spent, and stays), or finds its one use gone and is refused. The cron removes it later.
-     * Magento before 2.4.8 counts after the order, without that check: there the orders are looked at.
+     * Magento releases before that lock (2.4.6-p10, 2.4.7-p5) count after the order, without that check:
+     * there the orders are looked at.
      *
      * @param string $code
      * @param WebsiteInterface $website the website asked
@@ -262,18 +287,46 @@ class Coupons
      */
     public function revoke(string $code, WebsiteInterface $website): array
     {
-        $coupon = $this->rules->coupon($code, $this->tenantId($website));
-        if ($coupon !== null && empty($coupon['revoked']) && $this->uses($code, $coupon, $website) === 0) {
-            $lock = self::COUPON_LOCK . $coupon['code'];
-            if ($this->locks->lock($lock, 5)) {
-                try {
-                    $this->rules->revokeUnused((int) $coupon['coupon_id'], gmdate('Y-m-d H:i:s', time() + self::REVOKED_KEPT));
-                } finally {
-                    $this->locks->unlock($lock);
-                }
+        $tenantId = $this->tenantId($website);
+        $coupon = $this->rules->coupon($code, $tenantId);
+        if ($coupon !== null && empty($coupon['revoked']) && $this->uses($code, $coupon, $website) === 0
+            && $this->lockCoupon($coupon, 5)) {
+            try {
+                $this->rules->end($coupon, $tenantId, gmdate('Y-m-d H:i:s', time() + self::ENDED_KEPT), true);
+            } finally {
+                $this->unlockCoupon($coupon);
             }
         }
         return $this->state($code, $website);
+    }
+
+    /**
+     * Takes the lock Magento counts a coupon's use under, by both of its names.
+     *
+     * @param array $coupon
+     * @param int $timeout seconds
+     * @return bool whether it was taken
+     */
+    private function lockCoupon(array $coupon, int $timeout): bool
+    {
+        if (!$this->locks->lock(self::COUPON_LOCK . $coupon['code'], $timeout)) {
+            return false;
+        }
+        if (!$this->locks->lock(self::COUPON_LOCK . $coupon['coupon_id'], $timeout)) {
+            $this->locks->unlock(self::COUPON_LOCK . $coupon['code']);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * @param array $coupon
+     * @return void
+     */
+    private function unlockCoupon(array $coupon): void
+    {
+        $this->locks->unlock(self::COUPON_LOCK . $coupon['coupon_id']);
+        $this->locks->unlock(self::COUPON_LOCK . $coupon['code']);
     }
 
     /**
@@ -288,7 +341,7 @@ class Coupons
     private function uses(string $code, array $coupon, WebsiteInterface $website): int
     {
         $counted = (int) $coupon['times_used'];
-        return $counted > 0 ? $counted : $this->rules->ordersWith($code, $coupon['created_at'], $this->storeIds($website));
+        return $counted > 0 ? $counted : $this->rules->ordersWith($code, $coupon['created_at'], null, $this->storeIds($website));
     }
 
     /**
@@ -321,17 +374,32 @@ class Coupons
     }
 
     /**
-     * From the cron, every few minutes: codes whose last moment has passed are removed, which is what
-     * ends them (and keeps a busy store from holding one per person forever); then offer rules that
-     * hold no code any more, then the notes of rules the merchant deleted. A batch a run. And the rules
-     * are opened to customer groups the merchant made since: a rule only holds for the groups it has.
+     * From the cron, every few minutes: codes whose last moment has passed are ended, which is what ends
+     * them (and keeps a busy store from holding one per person forever). Like a code that is taken back,
+     * each is spent under the lock Magento counts a coupon's use under, so a checkout that already holds
+     * it is refused by Magento itself, and removed ten minutes later; what became of it is kept for a
+     * year. Then offer rules that hold no code any more, then the notes of rules the merchant deleted. A
+     * batch a run. And the rules are opened to customer groups the merchant made since: a rule only holds
+     * for the groups it has.
      *
-     * @return array{codes: int, rules: int}
+     * @return array{ended: int, codes: int, rules: int}
      */
     public function cleanUp(): array
     {
         $this->rules->openToNewCustomerGroups();
-        $codes = $this->rules->deleteExpiredCodes(gmdate('Y-m-d H:i:s'), 2000);
+        $ended = 0;
+        foreach ($this->rules->expiredCodes(gmdate('Y-m-d H:i:s'), 500) as $coupon) {
+            // A checkout counting its use right now has the lock: the next run ends it.
+            if ($this->lockCoupon($coupon, 0)) {
+                try {
+                    $ended += (int) $this->rules->end($coupon, (string) $coupon['tenant_id'], gmdate('Y-m-d H:i:s', time() + self::ENDED_KEPT), false);
+                } finally {
+                    $this->unlockCoupon($coupon);
+                }
+            }
+        }
+        $codes = $this->rules->removeEndedCodes(gmdate('Y-m-d H:i:s'), 2000);
+        $this->rules->forgetRemovedCodes(gmdate('Y-m-d H:i:s', time() - self::REMOVED_KEPT), 2000);
         $rules = 0;
         $empty = $this->rules->emptyOfferRules(gmdate('Y-m-d H:i:s', time() - 86400), 50);
         // Under the lock codes are made under, and looked at again there: a code that is being put under
@@ -349,7 +417,7 @@ class Coupons
             }
         }
         $this->rules->forgetDeletedRules(500);
-        return ['codes' => $codes, 'rules' => $rules];
+        return ['ended' => $ended, 'codes' => $codes, 'rules' => $rules];
     }
 
     /**

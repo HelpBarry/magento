@@ -20,8 +20,8 @@
         <job name="bluebarry_sync_categories" instance="Bluebarry\Bluebarry\Cron\SyncCategories" method="execute">
             <schedule>*/5 * * * *</schedule>
         </job>
-        <!-- bluebarry's coupon codes end by being removed once their last moment has passed. Three small
-             indexed queries when none has. -->
+        <!-- bluebarry's coupon codes end once their last moment has passed: spent, and removed a little
+             later. A few small indexed queries when none has. -->
         <job name="bluebarry_clean_discount_codes" instance="Bluebarry\Bluebarry\Cron\CleanDiscountCodes" method="execute">
             <schedule>*/5 * * * *</schedule>
         </job>
