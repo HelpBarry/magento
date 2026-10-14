@@ -1,6 +1,29 @@
-# Bluebarry Magento 2 Module 2.0.0 Release Notes
+# Bluebarry Magento 2 Module 2.1.0 Release Notes
 
-Release date: 2026-09-30
+Release date: 2026-10-14
+
+2.1.0:
+Stability: Stable Build
+Description:
+Release 2.1.0 (2026-10-14)
+
+Improvements
+- bluebarry on product and cart pages: switch on the product check button, product chat and recommendation blocks in bluebarry (Integrations > Magento > On your store). They appear under the add to cart button, below the product details and under the cart, on Luma and Hyvä, without theme changes. Pages stay in the full page cache and never wait for bluebarry
+- Five widgets to place bluebarry anywhere else (Content > Widgets, or Insert Widget in a page or block): quiz button, quiz popup, product check button, recommendations and product chat
+- The product check button, product chat and recommendations follow the variant the shopper picks, with swatches or option dropdowns on Luma and the product options on Hyvä
+- Discount codes from bluebarry: quiz and recommendation offers, a personal code from a popup or quiz, and loyalty rewards become single-use Magento coupon codes, made by the module when bluebarry asks. A quiz or popup code goes on the shopper's cart by itself. A Magento cart holds one code, so a code the shopper entered themselves is never replaced. The codes share a few cart price rules named `bluebarry: ...`; your own coupons are never changed or removed
+- Offers are checked after a product is added to the cart, never while a page loads, with a 2-second limit and at most two checks per website at a time, so a slow bluebarry cannot hold up the store
+- Codes end within five minutes of their end date through Magento's cron (`bin/magento bluebarry:discounts:clean` runs it now). Magento's own coupon usage check keeps a code single-use at checkout from Magento 2.4.6-p9, 2.4.7-p4 and 2.4.8; on older patch levels Magento counts a use after the order is placed
+- Loyalty: signed-in customers see their rewards in bluebarry's rewards panel without an emailed code
+- A quiz outside the store, on a landing page or a quiz link, can fill the Magento cart with its products and its code, and opens the cart page
+- Your categories in bluebarry, so recommendations can be limited to a category and search suggests categories. Two categories with the same name go by their path, for example "Men / Tops" and "Women / Tops"
+- Search filters: **Import filters** in bluebarry turns your layered navigation filters into bluebarry's search filters, with the same names and order
+- For test stores: `app/etc/env.php` can point the storefront at another bluebarry environment (`bluebarry/advisor_url` and `bluebarry/sdk_url`). Live stores leave both unset
+- Upgrading from 2.0: the first cron run after the upgrade sends the whole catalog again, so products carry the new category names. Quiz filters or labels written for a category name that appears twice, such as "Tops", must use the new name, such as "Men / Tops"
+- The Marketplace package no longer contains developer scripts or the outdated README.pdf
+
+Bug Fixes
+- On a store view other than the website's default one, product pages now name the product and variant the same way the catalog sync does, for the product check, product chat, recommendations and page tracking
 
 2.0.0:
 Stability: Stable Build

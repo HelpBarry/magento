@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.1.0] - 2026-10-14
 ### Added
 - bluebarry on product and cart pages: switch on the product check button, product chat and recommendation blocks in bluebarry (Integrations > Magento > On your store). They appear under the add to cart button, below the product details and under the cart, on Luma and Hyvä, without theme changes. Pages stay in the full page cache and never wait for bluebarry.
 - Five widgets to place bluebarry anywhere else (Content > Widgets, or Insert Widget in a page or block): quiz button, quiz popup, product check button, recommendations and product chat.
