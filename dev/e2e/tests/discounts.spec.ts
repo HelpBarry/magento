@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { addToCart, adminToken, magento, mockApi, sql, stubAdvisor } from './helpers';
+import { addToCart, adminToken, checkoutAsGuest, magento, mockApi, sql, stubAdvisor } from './helpers';
 
 // Discounts from bluebarry (magento-internal#6): coupon codes the module makes on bluebarry's command
 // (a reward's, a popup's or a quiz's code for one person), a code put on the shopper's cart, and the
@@ -9,6 +9,9 @@ import { addToCart, adminToken, magento, mockApi, sql, stubAdvisor } from './hel
 
 const KEY = 'test-api-key';
 const productId = (sku: string) => sql(`SELECT entity_id FROM catalog_product_entity WHERE sku = '${sku}'`);
+/** Moves the cron's next step for a code (its end, or its removal once it ended) into the past. */
+const due = (code: string) => sql(`UPDATE bluebarry_discount_code SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE
+  WHERE coupon_id = (SELECT coupon_id FROM salesrule_coupon WHERE code = '${code}')`);
 const unique = (prefix: string) => `${prefix}-${randomUUID().slice(0, 8).toUpperCase()}`;
 
 /** bluebarry's command, signed like DataApi's MagentoStoreClient. */
@@ -151,9 +154,10 @@ test.describe('discounts from bluebarry', () => {
     // count, where a deleted coupon would let its order through with the discount.
     expect(sql(`SELECT CONCAT(times_used, '/', usage_limit) FROM salesrule_coupon WHERE code = '${first}'`)).toBe('1/1');
     expect(sql(`SELECT revoked FROM bluebarry_discount_code WHERE coupon_id = (SELECT coupon_id FROM salesrule_coupon WHERE code = '${first}')`)).toBe('1');
-    // The cron removes it a little later.
-    sql(`UPDATE bluebarry_discount_code SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE revoked = 1`);
-    expect(magento('bluebarry:discounts:clean')).toContain('1 expired codes');
+    // The cron removes it a little later. What became of it is kept: still not used.
+    due(first);
+    expect(magento('bluebarry:discounts:clean')).toContain('Ended codes removed: 1.');
+    expect((await command(request, 'coupon.get', { code: first })).body).toEqual({ exists: false, usageCount: 0 });
     // The rule is this bluebarry account's.
     expect(sql(`SELECT tenant_id FROM bluebarry_discount_rule WHERE rule_id = ${rule(second)!.id}`)).not.toBe('');
     expect(rule(first)).toBeNull();
@@ -464,7 +468,7 @@ test.describe('discounts from bluebarry', () => {
     }
   });
 
-  test('a code ends by being removed once its last moment has passed', async ({ request }) => {
+  test('a code ends once its last moment has passed: spent, then removed a little later', async ({ request }) => {
     const ended = unique('ENDED');
     const lasting = unique('LASTS');
     const spec = { discountType: 'percent', amount: 15, productIds: [] as string[] };
@@ -473,12 +477,52 @@ test.describe('discounts from bluebarry', () => {
     expect(sql(`SELECT COUNT(*) FROM bluebarry_discount_code WHERE coupon_id IN (SELECT coupon_id FROM salesrule_coupon WHERE code IN ('${ended}', '${lasting}'))`)).toBe('2');
 
     await new Promise((resolve) => setTimeout(resolve, 3000));
-    // Past its moment and not removed yet, bluebarry already hears it is no longer usable.
+    // Past its moment and not ended yet, bluebarry already hears it is no longer usable.
     expect((await command(request, 'coupon.get', { code: ended })).body).toMatchObject({ exists: true, status: 'disabled' });
-    expect(magento('bluebarry:discounts:clean')).toContain('1 expired codes');
+    expect(magento('bluebarry:discounts:clean')).toContain('Expired codes ended: 1.');
+    // Spent rather than deleted, like a code that is taken back: a checkout that holds it right now is
+    // refused by Magento's own count. Nobody used it, and bluebarry hears that.
+    expect(sql(`SELECT CONCAT(times_used, '/', usage_limit) FROM salesrule_coupon WHERE code = '${ended}'`)).toBe('1/1');
+    expect((await command(request, 'coupon.get', { code: ended })).body).toEqual({ exists: false, usageCount: 0 });
 
+    due(ended);
+    expect(magento('bluebarry:discounts:clean')).toContain('Ended codes removed: 1.');
+    expect(rule(ended)).toBeNull();
     expect((await command(request, 'coupon.get', { code: ended })).body).toEqual({ exists: false, usageCount: 0 });
     expect((await command(request, 'coupon.get', { code: lasting })).body).toMatchObject({ exists: true, status: 'publish' });
+  });
+
+  test('a cart that held a code when it ended gets no discount, and a code spent on an order stays spent once removed', async ({ page, request }) => {
+    const spec = { discountType: 'percent', amount: 10, productIds: [] as string[], expiresAt: new Date(Date.now() + 86400000).toISOString() };
+    const spent = unique('SPENT');
+    const held = unique('HELD');
+    expect((await command(request, 'coupon.create', { ...spec, code: spent })).status).toBe(200);
+    expect((await command(request, 'coupon.create', { ...spec, code: held })).status).toBe(200);
+
+    // An order with the code, then the code ends and is removed: bluebarry still hears it was used.
+    await shopper(page);
+    await addToCart(page, 'bb-simple');
+    expect((await discount(page, { code: spent })).body).toMatchObject({ applied: true });
+    const order = await checkoutAsGuest(page, `spent-${randomUUID().slice(0, 8)}@example.test`);
+    expect(sql(`SELECT coupon_code FROM sales_order WHERE increment_id = '${order}'`)).toBe(spent);
+    due(spent);
+    expect(magento('bluebarry:discounts:clean')).toContain('Expired codes ended: 1.');
+    expect((await command(request, 'coupon.get', { code: spent })).body).toMatchObject({ exists: true, status: 'disabled', usageCount: 1 });
+    due(spent);
+    expect(magento('bluebarry:discounts:clean')).toContain('Ended codes removed: 1.');
+    expect(rule(spent)).toBeNull();
+    expect((await command(request, 'coupon.get', { code: spent })).body).toEqual({ exists: false, usageCount: 1 });
+
+    // The cart got the other code and its discount, then the code ended before the shopper checked out.
+    await addToCart(page, 'bb-simple');
+    expect((await discount(page, { code: held })).body).toMatchObject({ applied: true });
+    expect(await quote(page)).toMatchObject({ coupon: held, discount: 10 });
+    due(held);
+    expect(magento('bluebarry:discounts:clean')).toContain('Expired codes ended: 1.');
+    const without = await checkoutAsGuest(page, `held-${randomUUID().slice(0, 8)}@example.test`);
+    expect(sql(`SELECT IFNULL(coupon_code, '') FROM sales_order WHERE increment_id = '${without}'`)).toBe('');
+    expect(Number(sql(`SELECT base_discount_amount FROM sales_order WHERE increment_id = '${without}'`))).toBe(0);
+    expect((await command(request, 'coupon.get', { code: held })).body).toEqual({ exists: false, usageCount: 0 });
   });
 });
 

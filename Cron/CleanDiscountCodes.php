@@ -5,9 +5,9 @@ namespace Bluebarry\Bluebarry\Cron;
 use Bluebarry\Bluebarry\Model\Discount\Coupons;
 
 /**
- * Every five minutes: bluebarry's coupon codes whose last moment has passed are removed, which is
- * what ends them (Magento does not check a coupon's own expiry date), and offer rules without codes
- * go with them. Three small indexed queries when there is nothing to do.
+ * Every five minutes: bluebarry's coupon codes whose last moment has passed are ended, spent and
+ * removed a little later (Magento does not check a coupon's own expiry date), and offer rules without
+ * codes go with them. A few small indexed queries when there is nothing to do.
  */
 class CleanDiscountCodes
 {

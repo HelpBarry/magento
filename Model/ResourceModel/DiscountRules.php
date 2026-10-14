@@ -12,7 +12,7 @@ use Magento\SalesRule\Api\Data\RuleInterface;
  * The bluebarry_discount_rule table: which cart price rules are bluebarry's, by the hash of their
  * terms. Everything bluebarry does to coupon codes goes through it, so it never touches a rule or a
  * code the merchant made. And bluebarry_discount_code: when each code ends, which Magento keeps on
- * the coupon but does not act on.
+ * the coupon but does not act on, and what became of a code once it is removed.
  */
 class DiscountRules
 {
@@ -21,6 +21,11 @@ class DiscountRules
 
     public const KIND_CODE = 'code';
     public const KIND_OFFER = 'offer';
+
+    /** A code's stage in bluebarry_discount_code: usable, ended (spent and kept a little while), removed. */
+    public const STAGE_USABLE = 0;
+    public const STAGE_ENDED = 1;
+    public const STAGE_REMOVED = 2;
 
     /**
      * @var ResourceConnection
@@ -105,7 +110,7 @@ class DiscountRules
      * @param string $code
      * @param string|null $tenantId only a code of this bluebarry account: two accounts can share one
      *                              Magento, and neither may read or end the other's codes
-     * @return array{coupon_id: string, rule_id: string, code: string, times_used: string, created_at: string|null, expires_at: string|null, revoked: string|null, is_active: string}|null
+     * @return array{coupon_id: string, rule_id: string, code: string, times_used: string, created_at: string|null, stage: string|null, expires_at: string|null, revoked: string|null, is_active: string}|null
      */
     public function coupon(string $code, ?string $tenantId = null): ?array
     {
@@ -114,7 +119,7 @@ class DiscountRules
             ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'rule_id', 'code', 'times_used', 'created_at'])
             ->join(['ours' => $this->table()], 'ours.rule_id = coupon.rule_id', [])
             ->join(['rule' => $this->resource->getTableName('salesrule')], 'rule.rule_id = coupon.rule_id', ['is_active'])
-            ->joinLeft(['ends' => $this->resource->getTableName(self::CODES_TABLE)], 'ends.coupon_id = coupon.coupon_id', ['expires_at', 'revoked'])
+            ->joinLeft(['ends' => $this->resource->getTableName(self::CODES_TABLE)], 'ends.coupon_id = coupon.coupon_id', ['stage', 'expires_at', 'revoked'])
             ->where('coupon.code = ?', $code)
             ->limit(1);
         if ($tenantId !== null) {
@@ -128,14 +133,18 @@ class DiscountRules
      * How many orders that were not cancelled carry a code. Magento counts a coupon's uses from a queue,
      * after the order: an order placed a moment ago may not be in the coupon's own count yet.
      *
+     * sales_order has no index on the coupon code: the orders looked at are only those placed while the
+     * code existed, found by their date index. Without the code's creation nothing is looked at.
+     *
      * @param string $code
-     * @param string|null $since the code's creation (UTC), which bounds the orders looked at by their date index
+     * @param string|null $since the code's creation (UTC)
+     * @param string|null $until the code's removal (UTC), when it is gone
      * @param int[] $storeIds only orders of these store views: the asking account's own
      * @return int
      */
-    public function ordersWith(string $code, ?string $since, array $storeIds): int
+    public function ordersWith(string $code, ?string $since, ?string $until, array $storeIds): int
     {
-        if ($code === '' || !$storeIds) {
+        if ($code === '' || $since === null || $since === '' || !$storeIds) {
             return 0;
         }
         $connection = $this->resource->getConnection();
@@ -143,49 +152,92 @@ class DiscountRules
             ->from($this->resource->getTableName('sales_order'), ['orders' => new \Zend_Db_Expr('COUNT(*)')])
             ->where('coupon_code = ?', $code)
             ->where('store_id IN (?)', $storeIds)
-            ->where('state <> ?', 'canceled');
-        if ($since !== null && $since !== '') {
-            $select->where('created_at >= ?', $since);
+            ->where('state <> ?', 'canceled')
+            ->where('created_at >= ?', $since);
+        if ($until !== null && $until !== '') {
+            $select->where('created_at <= ?', $until);
         }
         return (int) $connection->fetchOne($select);
     }
 
     /**
-     * Takes a coupon back while Magento counts no use of it: it is spent, not deleted, in one statement.
-     * A checkout that already holds the code finds its one use gone when it counts it, and is refused
-     * by Magento itself; a deleted coupon it would not find at all, and the order would go through with
-     * the discount. The cron removes it after $until.
+     * Ends a code: spent, unless a shopper spent it already, and kept until $removeAt. A checkout that
+     * still holds the code finds its one use gone when it counts it, and is refused by Magento itself; a
+     * deleted coupon it would not find at all, and the order would go through with the discount. The
+     * caller holds the lock Magento counts the coupon's use under. The cron removes it after $removeAt.
      *
-     * @param int $couponId
-     * @param string $until UTC, Y-m-d H:i:s
-     * @return bool whether it was taken back
+     * @param array $coupon coupon_id, code and created_at, from coupon() or expiredCodes()
+     * @param string $tenantId the bluebarry account it is for
+     * @param string $removeAt UTC, Y-m-d H:i:s
+     * @param bool $onlyUnused taking a code back: one a shopper spent stays as it is. Otherwise (it
+     *                         expired) it ends either way, unless it was taken back meanwhile.
+     * @return bool whether it ended
      * @throws \Exception
      */
-    public function revokeUnused(int $couponId, string $until): bool
+    public function end(array $coupon, string $tenantId, string $removeAt, bool $onlyUnused): bool
     {
+        $couponId = (int) $coupon['coupon_id'];
         $connection = $this->resource->getConnection();
-        // Spent and marked as taken back together, or neither: spent without the mark, the code would
-        // count as used for good.
+        $codes = $this->resource->getTableName(self::CODES_TABLE);
+        // Spent and marked as ended together, or neither: spent without the mark, the code would count
+        // as used for good.
         $connection->beginTransaction();
         try {
             $spent = $connection->update(
                 $this->resource->getTableName('salesrule_coupon'),
                 ['times_used' => new \Zend_Db_Expr('usage_limit')],
                 ['coupon_id = ?' => $couponId, 'times_used = ?' => 0, 'usage_limit > ?' => 0]
-            );
-            if ($spent > 0) {
-                $connection->insertOnDuplicate(
-                    $this->resource->getTableName(self::CODES_TABLE),
-                    ['coupon_id' => $couponId, 'expires_at' => $until, 'revoked' => 1],
-                    ['expires_at', 'revoked']
-                );
+            ) > 0;
+            $row = [
+                'stage' => self::STAGE_ENDED,
+                'expires_at' => $removeAt,
+                'revoked' => $spent ? 1 : 0,
+                'code' => (string) $coupon['code'],
+                'tenant_id' => $tenantId,
+                'created_at' => $coupon['created_at'] ?? null,
+            ];
+            if ($onlyUnused) {
+                // A code that would never end has no row yet.
+                if ($spent) {
+                    $connection->insertOnDuplicate($codes, ['coupon_id' => $couponId] + $row, array_keys($row));
+                }
+                $ended = $spent;
+            } else {
+                $ended = $connection->update($codes, $row, ['coupon_id = ?' => $couponId, 'stage = ?' => self::STAGE_USABLE]) > 0;
+            }
+            if (!$ended) {
+                $connection->rollBack();
+                return false;
             }
             $connection->commit();
         } catch (\Exception $e) {
             $connection->rollBack();
             throw $e;
         }
-        return $spent > 0;
+        return true;
+    }
+
+    /**
+     * What is known of one of an account's codes that was removed: whether a shopper spent it before it
+     * ended, and when it was made and removed. Null for any code bluebarry did not remove for this account.
+     *
+     * @param string $code
+     * @param string $tenantId
+     * @return array{revoked: string, created_at: string|null, expires_at: string}|null
+     */
+    public function removed(string $code, string $tenantId): ?array
+    {
+        $connection = $this->resource->getConnection();
+        $row = $connection->fetchRow(
+            $connection->select()
+                ->from($this->resource->getTableName(self::CODES_TABLE), ['revoked', 'created_at', 'expires_at'])
+                ->where('code = ?', $code)
+                ->where('tenant_id = ?', $tenantId)
+                ->where('stage = ?', self::STAGE_REMOVED)
+                ->order('expires_at DESC')
+                ->limit(1)
+        );
+        return $row ?: null;
     }
 
     /**
@@ -250,41 +302,114 @@ class DiscountRules
      */
     public function endsAt(int $couponId, string $expiresAt): void
     {
+        // A usable code's row, also over one left by a removed coupon that had the same id.
+        $row = ['stage' => self::STAGE_USABLE, 'expires_at' => $expiresAt, 'revoked' => 0, 'code' => null, 'tenant_id' => null, 'created_at' => null];
         $this->resource->getConnection()->insertOnDuplicate(
             $this->resource->getTableName(self::CODES_TABLE),
-            ['coupon_id' => $couponId, 'expires_at' => $expiresAt],
-            ['expires_at']
+            ['coupon_id' => $couponId] + $row,
+            array_keys($row)
         );
     }
 
     /**
-     * Removes bluebarry's codes whose last moment has passed, a batch at a time: this is what ends a
-     * code. One indexed query when none has.
+     * bluebarry's codes whose last moment has passed and that have not ended yet, a batch at a time, with
+     * the account each is for. A row whose coupon is gone (the merchant deleted its rule) goes now. One
+     * indexed query when none has.
      *
      * @param string $now UTC, Y-m-d H:i:s
      * @param int $limit
-     * @return int how many ended
+     * @return array<int, array{coupon_id: string, code: string, created_at: string|null, tenant_id: string}>
      */
-    public function deleteExpiredCodes(string $now, int $limit): int
+    public function expiredCodes(string $now, int $limit): array
     {
         $connection = $this->resource->getConnection();
         $codes = $this->resource->getTableName(self::CODES_TABLE);
-        $ids = $connection->fetchCol($connection->select()->from($codes, ['coupon_id'])->where('expires_at < ?', $now)->limit($limit));
+        $ids = $connection->fetchCol(
+            $connection->select()->from($codes, ['coupon_id'])
+                ->where('stage = ?', self::STAGE_USABLE)
+                ->where('expires_at < ?', $now)
+                ->limit($limit)
+        );
+        if (!$ids) {
+            return [];
+        }
+        // Only a coupon that is still under one of bluebarry's rules: an id is never taken on trust.
+        $ours = $connection->fetchAll(
+            $connection->select()
+                ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id', 'code', 'created_at'])
+                ->join(['ours' => $this->table()], 'ours.rule_id = coupon.rule_id', ['tenant_id'])
+                ->where('coupon.coupon_id IN (?)', $ids)
+        );
+        $gone = array_diff(array_map('intval', $ids), array_map('intval', array_column($ours, 'coupon_id')));
+        if ($gone) {
+            $connection->delete($codes, ['coupon_id IN (?)' => $gone, 'stage = ?' => self::STAGE_USABLE]);
+        }
+        return $ours;
+    }
+
+    /**
+     * Removes the codes that ended and were kept long enough for any checkout that held one to have
+     * counted it, a batch at a time. Their rows stay, as what became of them. One indexed query when none is due.
+     *
+     * @param string $now UTC, Y-m-d H:i:s
+     * @param int $limit
+     * @return int how many were removed
+     */
+    public function removeEndedCodes(string $now, int $limit): int
+    {
+        $connection = $this->resource->getConnection();
+        $codes = $this->resource->getTableName(self::CODES_TABLE);
+        $ids = $connection->fetchCol(
+            $connection->select()->from($codes, ['coupon_id'])
+                ->where('stage = ?', self::STAGE_ENDED)
+                ->where('expires_at < ?', $now)
+                ->limit($limit)
+        );
         if (!$ids) {
             return 0;
         }
-        // Only a coupon that is still under one of bluebarry's rules: an id is never taken on trust.
         $ours = $connection->fetchCol(
             $connection->select()
                 ->from(['coupon' => $this->resource->getTableName('salesrule_coupon')], ['coupon_id'])
                 ->join(['ours' => $this->table()], 'ours.rule_id = coupon.rule_id', [])
                 ->where('coupon.coupon_id IN (?)', $ids)
         );
-        if ($ours) {
-            $connection->delete($this->resource->getTableName('salesrule_coupon'), ['coupon_id IN (?)' => $ours]);
+        $connection->beginTransaction();
+        try {
+            if ($ours) {
+                $connection->delete($this->resource->getTableName('salesrule_coupon'), ['coupon_id IN (?)' => $ours]);
+            }
+            $connection->update(
+                $codes,
+                ['stage' => self::STAGE_REMOVED, 'expires_at' => $now],
+                ['coupon_id IN (?)' => $ids, 'stage = ?' => self::STAGE_ENDED]
+            );
+            $connection->commit();
+        } catch (\Exception $e) {
+            $connection->rollBack();
+            throw $e;
         }
-        $connection->delete($codes, ['coupon_id IN (?)' => $ids]);
         return count($ids);
+    }
+
+    /**
+     * Forgets codes removed before $before, a batch at a time.
+     *
+     * @param string $before UTC, Y-m-d H:i:s
+     * @param int $limit
+     * @return int how many were forgotten
+     */
+    public function forgetRemovedCodes(string $before, int $limit): int
+    {
+        $connection = $this->resource->getConnection();
+        $codes = $this->resource->getTableName(self::CODES_TABLE);
+        $ids = $connection->fetchCol(
+            $connection->select()->from($codes, ['coupon_id'])
+                ->where('stage = ?', self::STAGE_REMOVED)
+                ->where('expires_at < ?', $before)
+                ->limit($limit)
+        );
+        return $ids ? (int) $connection->delete($codes, ['coupon_id IN (?)' => $ids, 'stage = ?' => self::STAGE_REMOVED]) : 0;
     }
 
     /**

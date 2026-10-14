@@ -55,7 +55,12 @@ class CleanDiscountCodes extends Command
             // Area already set.
         }
         $cleaned = $this->coupons->cleanUp();
-        $output->writeln(sprintf('%d expired codes and %d empty offer rules removed.', $cleaned['codes'], $cleaned['rules']));
+        $output->writeln(sprintf(
+            'Expired codes ended: %d. Ended codes removed: %d. Empty offer rules removed: %d.',
+            $cleaned['ended'],
+            $cleaned['codes'],
+            $cleaned['rules']
+        ));
         return 0;
     }
 }
