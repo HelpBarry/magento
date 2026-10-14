@@ -121,6 +121,11 @@ class Cart
     private $logger;
 
     /**
+     * The database's locks (Magento\Framework\Lock\Backend\Database, see etc/di.xml), whatever lock
+     * backend the store configured: GET_LOCK is taken atomically, and a request the store abandons
+     * midway gives it back with its connection. The cache backend could hand one place to two
+     * requests, and keep an abandoned one for two hours.
+     *
      * @var LockManagerInterface
      */
     private $locks;
@@ -345,9 +350,14 @@ class Cart
     {
         $slot = $this->takeCallSlot((int) $website->getId());
         if ($slot === null) {
-            return ['retry', '']; // others are asking already, or bluebarry stopped answering meanwhile
+            return ['retry', '']; // others are asking already
         }
         try {
+            // A request that asked while this one was on its way may have found bluebarry not
+            // answering: its pause is saved before it gives its place back.
+            if ($this->cache->load(self::OFFERS_PAUSED . $website->getId())) {
+                return ['retry', ''];
+            }
             // The shopper's session is let go before bluebarry is asked, so their next page does not wait
             // for the answer. Nothing is written to it after this, and the cart is read again below.
             $this->checkoutSession->writeClose();
@@ -408,27 +418,19 @@ class Cart
     }
 
     /**
-     * One of the website's places to ask bluebarry about an offer, taken without waiting. A lock, so
-     * a request the store abandons midway gives it back with its database connection.
+     * One of the website's places to ask bluebarry about an offer, taken without waiting.
      *
      * @param int $websiteId
-     * @return string|null the place's lock, or null when all are taken or bluebarry is not to be asked now
+     * @return string|null the place's lock, or null when all are taken
      */
     private function takeCallSlot(int $websiteId): ?string
     {
         try {
             for ($i = 0; $i < self::OFFER_CALLS; $i++) {
                 $lock = self::OFFER_CALL_LOCK . $websiteId . '_' . $i;
-                if (!$this->locks->lock($lock, 0)) {
-                    continue;
+                if ($this->locks->lock($lock, 0)) {
+                    return $lock;
                 }
-                // A request that asked while this one was on its way may have found bluebarry not
-                // answering: its pause is saved before it gives the place back.
-                if ($this->cache->load(self::OFFERS_PAUSED . $websiteId)) {
-                    $this->releaseCallSlot($lock);
-                    return null;
-                }
-                return $lock;
             }
         } catch (\Exception $e) {
             $this->logger->warning('bluebarry: could not take a lock to ask about an offer: ' . $e->getMessage());

@@ -54,6 +54,7 @@ class CartTest extends TestCase
     /** @var callable|null what happens just before a request takes a lock */
     private $beforeLock;
     private ?\Exception $askingFails = null;
+    private ?\Exception $cacheFails = null;
 
     protected function setUp(): void
     {
@@ -375,6 +376,24 @@ class CartTest extends TestCase
         $this->assertSame([], $this->locks);
     }
 
+    public function testThePlaceToAskFromIsGivenBackWhenThePauseCannotBeRead(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        // The cache answered on the way in, and fails once the place is taken.
+        $this->beforeLock = function () {
+            $this->cacheFails = new \RuntimeException('Redis went away');
+        };
+        try {
+            $this->cart()->redeemOffers([$grant]);
+            $this->fail('The failure is not swallowed');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Redis went away', $e->getMessage());
+        }
+        $this->assertSame([], $this->asked);
+        $this->assertSame([], $this->locks);
+    }
+
     public function testWithoutLocksTheOfferWaits(): void
     {
         $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
@@ -435,7 +454,12 @@ class CartTest extends TestCase
         $quotes = $this->createStub(QuoteFactory::class);
         $quotes->method('create')->willReturnCallback(fn () => $this->meanwhile ?? $this->quote);
         $cache = $this->createStub(CacheInterface::class);
-        $cache->method('load')->willReturnCallback(fn ($id) => $this->cache[$id] ?? false);
+        $cache->method('load')->willReturnCallback(function ($id) {
+            if ($this->cacheFails) {
+                throw $this->cacheFails;
+            }
+            return $this->cache[$id] ?? false;
+        });
         $cache->method('save')->willReturnCallback(function ($data, $id) {
             $this->cache[$id] = $data;
             return true;
