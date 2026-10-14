@@ -58,7 +58,7 @@ class Coupons
     /** Expired codes ended at a time. */
     private const EXPIRED_BATCH = 500;
 
-    /** Seconds a cleanup run keeps ending expired codes: the rest are ended by the next run. */
+    /** Seconds a cleanup run keeps ending expired codes: no code is started after it, the next run ends the rest. */
     private const CLEANUP_SECONDS = 40;
 
     /** More products than this is not one offer or reward; the rule would not be readable either. */
@@ -115,6 +115,11 @@ class Coupons
     private $locks;
 
     /**
+     * @var int
+     */
+    private $cleanupSeconds;
+
+    /**
      * @param DiscountRules $rules
      * @param RuleFactory $ruleFactory
      * @param RuleResource $ruleResource
@@ -125,6 +130,7 @@ class Coupons
      * @param Config $config
      * @param ScopeConfigInterface $scopeConfig
      * @param LockManagerInterface $locks
+     * @param int $cleanupSeconds the time a cleanup run may spend ending expired codes
      */
     public function __construct(
         DiscountRules $rules,
@@ -136,7 +142,8 @@ class Coupons
         StoreManagerInterface $storeManager,
         Config $config,
         ScopeConfigInterface $scopeConfig,
-        LockManagerInterface $locks
+        LockManagerInterface $locks,
+        int $cleanupSeconds = self::CLEANUP_SECONDS
     ) {
         $this->rules = $rules;
         $this->ruleFactory = $ruleFactory;
@@ -148,6 +155,7 @@ class Coupons
         $this->config = $config;
         $this->scopeConfig = $scopeConfig;
         $this->locks = $locks;
+        $this->cleanupSeconds = $cleanupSeconds;
     }
 
     /**
@@ -441,12 +449,17 @@ class Coupons
         $this->rules->openToNewCustomerGroups();
         $ended = 0;
         // Batch after batch, so codes that all end at the same moment still end within this run: until
-        // none is due, a batch ends none (each held by a checkout), or the run's time is spent.
+        // none is due, a batch changes nothing (each held by a checkout), or the run's time is spent. A
+        // full batch of rows whose coupon the merchant deleted ends nothing, but those rows are gone now.
         $start = time();
         do {
             $endedNow = 0;
             $due = $this->rules->expiredCodes(gmdate('Y-m-d H:i:s'), self::EXPIRED_BATCH);
-            foreach ($due as $coupon) {
+            foreach ($due['codes'] as $coupon) {
+                if (time() - $start >= $this->cleanupSeconds) {
+                    // Not ended: still due, for the next run.
+                    break;
+                }
                 // A checkout counting its use right now has the lock: the next run ends it.
                 if ($this->lockCoupon($coupon, 0)) {
                     try {
@@ -457,7 +470,7 @@ class Coupons
                 }
             }
             $ended += $endedNow;
-        } while ($due && $endedNow > 0 && time() - $start < self::CLEANUP_SECONDS);
+        } while ($due['full'] && $endedNow + $due['purged'] > 0 && time() - $start < $this->cleanupSeconds);
         $codes = $this->rules->removeEndedCodes(gmdate('Y-m-d H:i:s'), 2000);
         $this->rules->forgetRemovedCodes(gmdate('Y-m-d H:i:s', time() - self::REMOVED_KEPT), 2000);
         $rules = 0;

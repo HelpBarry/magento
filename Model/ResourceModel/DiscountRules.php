@@ -318,7 +318,8 @@ class DiscountRules
      *
      * @param string $now UTC, Y-m-d H:i:s
      * @param int $limit
-     * @return array<int, array{coupon_id: string, code: string, created_at: string|null, tenant_id: string}>
+     * @return array{codes: array<int, array{coupon_id: string, code: string, created_at: string|null, tenant_id: string}>, purged: int, full: bool}
+     *         the codes, the rows whose coupon was gone, and whether the batch was full (more may be due)
      */
     public function expiredCodes(string $now, int $limit): array
     {
@@ -331,7 +332,7 @@ class DiscountRules
                 ->limit($limit)
         );
         if (!$ids) {
-            return [];
+            return ['codes' => [], 'purged' => 0, 'full' => false];
         }
         // Only a coupon that is still under one of bluebarry's rules: an id is never taken on trust.
         $ours = $connection->fetchAll(
@@ -344,7 +345,7 @@ class DiscountRules
         if ($gone) {
             $connection->delete($codes, ['coupon_id IN (?)' => $gone, 'stage = ?' => self::STAGE_USABLE]);
         }
-        return $ours;
+        return ['codes' => $ours, 'purged' => count($gone), 'full' => count($ids) >= $limit];
     }
 
     /**

@@ -26,9 +26,6 @@ use Magento\Store\Model\StoreManagerInterface;
  */
 class Session implements HttpGetActionInterface
 {
-    /** Seconds the shopper's request waits for bluebarry. */
-    private const TIMEOUT = 3;
-
     /**
      * @var HttpRequest
      */
@@ -114,12 +111,10 @@ class Session implements HttpGetActionInterface
         // Nothing of the session is needed from here on: it is let go before bluebarry is asked, so the
         // shopper's next request never waits behind this one.
         $this->customerSession->writeClose();
-        // A shopper's request holds a PHP worker while it waits: a few seconds, like the offer calls (a
-        // first visit makes the member and may award a welcome bonus). No answer shows no rewards panel.
         $response = $this->client->post('/data/magento/loyalty/customer-session', [
             'email' => $email,
             'referralCode' => is_string($referral) && $referral !== '' ? substr($referral, 0, 64) : null,
-        ], $tenantId, $apiKey, self::TIMEOUT);
+        ], $tenantId, $apiKey, 10);
         $body = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
         if (!is_array($body) || empty($body['token']) || !is_string($body['token'])) {
             return $result->setData($none);
