@@ -56,6 +56,10 @@ class CouponsTest extends TestCase
     private array $removedCodes = [];
     /** @var string[] the locks taken */
     private array $lockNames = [];
+    /** @var array<string, true> the locks held now: like Magento's cache and file locks, one is not taken twice */
+    private array $held = [];
+    /** A lock whose taking fails with an error (the lock's backend went away). */
+    private ?string $lockThrows = null;
     /** @var array<int, string> website => its currency, where it is not euros */
     private array $currencies = [];
     private ?\Closure $whileWaitingForTheLock = null;
@@ -381,6 +385,46 @@ class CouponsTest extends TestCase
 
         $this->locked = false;
         $this->assertSame(['ended' => 1, 'codes' => 0, 'rules' => 0], $coupons->cleanUp());
+    }
+
+    public function testACodeOfDigitsNamedLikeItsCouponIdIsLockedOnce(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => '1234', 'discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'], $this->website(1));
+        // Its lock by code and by id are the same lock.
+        $this->coupons['1234']['coupon_id'] = '1234';
+        $this->expire('1234');
+
+        $this->assertSame(1, $coupons->cleanUp()['ended']);
+        $this->assertSame(['coupon_code_1234'], array_values(array_filter($this->lockNames, fn ($name) => str_starts_with($name, 'coupon_code_'))));
+        $this->assertSame([], $this->held);
+    }
+
+    public function testALockTakenBeforeTheSecondFailedIsLetGo(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'], $this->website(1));
+
+        $this->lockThrows = 'coupon_code_2';
+        try {
+            $coupons->revoke('CODE-0001', $this->website(1));
+            $this->fail('the error was swallowed');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('the lock backend went away', $e->getMessage());
+        }
+        // The lock by code was let go, and nothing was spent.
+        $this->assertSame([], $this->held);
+        $this->assertSame('0', $this->coupons['CODE-0001']['times_used']);
+
+        // Held by a checkout instead: let go too, and the code ends on a later run.
+        $this->lockThrows = null;
+        $this->held['coupon_code_2'] = true;
+        $this->expire('CODE-0001');
+        $this->assertSame(0, $coupons->cleanUp()['ended']);
+        $this->assertSame(['coupon_code_2' => true], $this->held);
+        unset($this->held['coupon_code_2']);
+        $this->assertSame(1, $coupons->cleanUp()['ended']);
+        $this->assertSame([], $this->held);
     }
 
     public function testACheckoutThatHeldACodeWhenItExpiredIsRefusedByMagento(): void
@@ -718,7 +762,19 @@ class CouponsTest extends TestCase
                 ($this->whileWaitingForTheLock)();
                 $this->whileWaitingForTheLock = null;
             }
-            return !$this->locked;
+            if ($name === $this->lockThrows) {
+                throw new \RuntimeException('the lock backend went away');
+            }
+            if ($this->locked || isset($this->held[$name])) {
+                return false;
+            }
+            $this->held[$name] = true;
+            return true;
+        });
+        $locks->method('unlock')->willReturnCallback(function ($name) {
+            $held = isset($this->held[$name]);
+            unset($this->held[$name]);
+            return $held;
         });
 
         $this->locks = $locks;

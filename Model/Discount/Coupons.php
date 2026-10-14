@@ -301,7 +301,10 @@ class Coupons
     }
 
     /**
-     * Takes the lock Magento counts a coupon's use under, by both of its names.
+     * Takes the lock Magento counts a coupon's use under, by both of its names. A code of digits only
+     * (the command accepts one) can have the coupon's id as its name: then it is one lock, taken once,
+     * as Magento's cache and file locks cannot be taken twice. What was taken is let go again when the
+     * rest cannot be taken.
      *
      * @param array $coupon
      * @param int $timeout seconds
@@ -309,14 +312,23 @@ class Coupons
      */
     private function lockCoupon(array $coupon, int $timeout): bool
     {
-        if (!$this->locks->lock(self::COUPON_LOCK . $coupon['code'], $timeout)) {
-            return false;
+        $taken = [];
+        try {
+            foreach (self::couponLocks($coupon) as $name) {
+                if (!$this->locks->lock($name, $timeout)) {
+                    break;
+                }
+                $taken[] = $name;
+            }
+        } finally {
+            if (count($taken) < count(self::couponLocks($coupon))) {
+                foreach (array_reverse($taken) as $name) {
+                    $this->locks->unlock($name);
+                }
+                $taken = [];
+            }
         }
-        if (!$this->locks->lock(self::COUPON_LOCK . $coupon['coupon_id'], $timeout)) {
-            $this->locks->unlock(self::COUPON_LOCK . $coupon['code']);
-            return false;
-        }
-        return true;
+        return (bool) $taken;
     }
 
     /**
@@ -325,8 +337,18 @@ class Coupons
      */
     private function unlockCoupon(array $coupon): void
     {
-        $this->locks->unlock(self::COUPON_LOCK . $coupon['coupon_id']);
-        $this->locks->unlock(self::COUPON_LOCK . $coupon['code']);
+        foreach (array_reverse(self::couponLocks($coupon)) as $name) {
+            $this->locks->unlock($name);
+        }
+    }
+
+    /**
+     * @param array $coupon
+     * @return string[] the coupon's lock by its code, then by its id: once when they are the same
+     */
+    private static function couponLocks(array $coupon): array
+    {
+        return array_values(array_unique([self::COUPON_LOCK . $coupon['code'], self::COUPON_LOCK . $coupon['coupon_id']]));
     }
 
     /**
