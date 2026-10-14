@@ -212,11 +212,22 @@ class Sync
         }
         try {
             $this->queue->enqueueAll();
-            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null, 'full_due' => null]);
             return true;
         } finally {
             $this->locks->unlock(self::LOCK);
         }
+    }
+
+    /**
+     * Has the next cron run queue every product, the way the nightly full sync does: for an upgrade
+     * that changes what the products say. Nothing is read or sent during the deploy itself.
+     *
+     * @return void
+     */
+    public function queueAllOnNextRun(): void
+    {
+        $this->saveState(['full_due' => true]);
     }
 
     /**
@@ -466,7 +477,7 @@ class Sync
     /**
      * The whole catalog goes to a company that is new, came back, or is now read from another store
      * view: changes made meanwhile never reached it, or it holds the other view's names and prices.
-     * Everyone gets it at night once a day.
+     * Everyone gets it at night once a day, and on the run after an upgrade that asked for it.
      *
      * @param array $targets
      * @return void
@@ -484,10 +495,11 @@ class Sync
         $nightly = $targets && $hour >= 1 && $hour < 5 && ($lastDay !== $now->format('Y-m-d') || $this->fullAtBefore($state, 1));
         // A company that left gets the whole catalog when it comes back, and its failure is no more.
         $failures = array_intersect_key($state['targets'] ?? [], $sources) ?: null;
-        if ($changed || $nightly) {
+        $upgraded = $targets && !empty($state['full_due']);
+        if ($changed || $nightly || $upgraded) {
             $this->queue->enqueueAll();
             // The same clock the nightly check reads.
-            $this->saveState(['tenants' => $sources, 'full_at' => $now->getTimestamp(), 'targets' => $failures]);
+            $this->saveState(['tenants' => $sources, 'full_at' => $now->getTimestamp(), 'targets' => $failures, 'full_due' => null]);
         } elseif ($sources != $saved) {
             $this->saveState(['tenants' => $sources, 'targets' => $failures]);
         }

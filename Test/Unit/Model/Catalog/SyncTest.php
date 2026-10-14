@@ -241,6 +241,31 @@ class SyncTest extends TestCase
         $this->assertSame(1, $this->catalogQueued);
     }
 
+    public function testAnUpgradeThatAsksForItHasTheNextRunQueueTheWholeCatalog_Once(): void
+    {
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
+        $this->sync([], tenants: [1 => 'a'])->queueAllOnNextRun();
+        $this->assertSame(0, $this->catalogQueued); // nothing during the deploy
+
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertArrayNotHasKey('full_due', $this->flag);
+
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testAnUpgradeWithoutAConnectedWebsiteQueuesNothing_TheCatalogGoesOnConnecting(): void
+    {
+        $this->sync([], tenants: [])->queueAllOnNextRun();
+        $this->sync([], tenants: [])->run();
+        $this->assertSame(0, $this->catalogQueued);
+
+        $this->sync([200], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertArrayNotHasKey('full_due', $this->flag);
+    }
+
     public function testADisconnectedCompanysFailureIsForgotten(): void
     {
         $this->flag = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'targets' => ['b' => ['retry_at' => time() + 60, 'error' => 'x']]];
