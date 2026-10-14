@@ -11,6 +11,7 @@ dev/bin/test-e2e       # Playwright: quiz → checkout → queue consumer → Bl
 dev/bin/test-deploy-race   # zero-downtime first-install deploy (the 1.0.3 incident)
 dev/bin/test-all       # all of the above for the current variant
 dev/bin/test-matrix    # set up and test every variant in turn (about 20 min each)
+dev/bin/test-upgrade <previous.zip>   # upgrade a compiled store from a release, before generated/ is rebuilt
 ```
 
 After changing module code, run `dev/bin/deploy-module` to repackage and redeploy it. Then rerun the
@@ -64,7 +65,7 @@ BB_ENV=mysql-queue dev/bin/test-e2e
 ```
 
 CI (`.github/workflows/tests.yml`) runs `default`, `mysql-queue` and `hyva` on every PR, and every variant plus the deploy-race
-test on `main`, nightly and on demand.
+and upgrade (from the latest release) tests on `main`, nightly and on demand.
 
 ## Useful commands
 
