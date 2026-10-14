@@ -40,7 +40,13 @@ class CategoryNamesTest extends TestCase
         10 => ['name' => 'Sale', 'path' => '1/2/4/10', 'is_active' => '1'],
         11 => ['name' => 'Jeans', 'path' => '1/2/3/11', 'is_active' => '1'],
         12 => ['name' => 'Jeans', 'path' => '1/2/4/12', 'is_active' => '0'],
+        // An archive of inactive categories nobody's path goes through: never read.
+        13 => ['name' => 'Old stock', 'path' => '1/2/8/13', 'is_active' => '0'],
+        14 => ['name' => 'Older stock', 'path' => '1/2/8/13/14', 'is_active' => '0'],
     ];
+
+    /** @var int[] the ids each read of a collection hydrated */
+    private array $loaded = [];
 
     public function testANameAnotherActiveCategoryShares_IsItsPathBelowTheRoot_AndAUniqueNameStays(): void
     {
@@ -54,6 +60,16 @@ class CategoryNamesTest extends TestCase
             10 => 'Women / Sale',
             11 => 'Jeans',
         ], CategoryNames::forStore($this->factory(), $this->store()));
+        // The active categories, then only the inactive parent a namesake's path goes through.
+        $this->assertSame([[3, 4, 5, 6, 7, 9, 10, 11], [8]], $this->loaded);
+    }
+
+    public function testWithoutNamesakesOnlyTheActiveCategoriesAreRead(): void
+    {
+        $factory = $this->factory([5, 6, 9, 10]);
+
+        $this->assertSame([3 => 'Men', 4 => 'Women', 7 => 'Shirts & blouses', 11 => 'Jeans'], CategoryNames::forStore($factory, $this->store()));
+        $this->assertSame([[3, 4, 7, 11]], $this->loaded);
     }
 
     public function testAProductNamesItsCategoriesAsTheCategoryListDoes_ReadOncePerStore(): void
@@ -68,7 +84,7 @@ class CategoryNamesTest extends TestCase
 
         $this->assertSame(['Men / Tops', 'Shirts & blouses'], $names->invoke($builder, [5, 7, 8], $this->store()));
         $this->assertSame(['Women / TOPS', 'Jeans'], $names->invoke($builder, [6, 11], $this->store()));
-        $this->assertSame(1, $this->reads, 'the categories are read once per store, not per product');
+        $this->assertCount(2, $this->loaded, 'the categories are read once per store, not per product');
     }
 
     public function testTheCategoryListNamesThemTheSameWay(): void
@@ -93,35 +109,45 @@ class CategoryNamesTest extends TestCase
         );
     }
 
-    private int $reads = 0;
-
     /**
-     * A category collection over TREE below root 2: the active ones when filtered on is_active (the
-     * category list's own query), all of them otherwise (the names' query).
+     * A category collection over TREE (without the given ids) that honours the filters the module sets:
+     * the path below root 2, is_active, and a list of ids. Each read is recorded in $loaded.
+     *
+     * @param int[] $without
      */
-    private function factory(): CollectionFactory
+    private function factory(array $without = []): CollectionFactory
     {
         $factory = $this->createStub(CollectionFactory::class);
-        $factory->method('create')->willReturnCallback(function () {
+        $factory->method('create')->willReturnCallback(function () use ($without) {
             $activeOnly = false;
+            $ids = null;
             $collection = $this->createStub(Collection::class);
-            foreach (['setStoreId', 'addAttributeToSelect', 'addFieldToFilter', 'addUrlRewriteToResult', 'setOrder', 'setPageSize'] as $method) {
+            foreach (['setStoreId', 'addAttributeToSelect', 'addUrlRewriteToResult', 'setOrder', 'setPageSize'] as $method) {
                 $collection->method($method)->willReturnSelf();
             }
             $collection->method('addAttributeToFilter')->willReturnCallback(function ($attribute) use (&$activeOnly, $collection) {
                 $activeOnly = $activeOnly || $attribute === 'is_active';
                 return $collection;
             });
+            $collection->method('addFieldToFilter')->willReturnCallback(function ($field, $condition) use (&$ids, $collection) {
+                if ($field === 'entity_id') {
+                    $ids = $condition['in'];
+                }
+                return $collection;
+            });
             $collection->method('getSize')->willReturn(count(self::TREE));
-            $collection->method('getIterator')->willReturnCallback(function () use (&$activeOnly) {
-                $this->reads++;
+            $collection->method('getIterator')->willReturnCallback(function () use (&$activeOnly, &$ids, $without) {
                 $rows = [];
+                $read = [];
                 foreach (self::TREE as $id => $row) {
-                    if ($id === 2 || ($activeOnly && $row['is_active'] !== '1')) {
+                    if ($id === 2 || in_array($id, $without, true) || ($activeOnly && $row['is_active'] !== '1')
+                        || ($ids !== null && !in_array($id, $ids, true))) {
                         continue; // the root is no category of the store's own
                     }
+                    $read[] = $id;
                     $rows[] = new DataObject(['id' => $id, 'url' => 'https://shop.example/c' . $id . '.html'] + $row);
                 }
+                $this->loaded[] = $read;
                 return new \ArrayIterator($rows);
             });
             return $collection;

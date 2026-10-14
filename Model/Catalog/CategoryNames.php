@@ -21,7 +21,8 @@ class CategoryNames
 
     /**
      * The store's active categories under its root category, by id, each under the name bluebarry knows
-     * it by. One query; read it once per run, not per product.
+     * it by. Read it once per run, not per product: one query for the active categories and, only when
+     * two share a name, one more for the names of the inactive parents their paths go through.
      *
      * @param CategoryCollectionFactory $factory
      * @param Store $store
@@ -30,20 +31,74 @@ class CategoryNames
     public static function forStore(CategoryCollectionFactory $factory, Store $store): array
     {
         $root = (int) $store->getRootCategoryId();
+        $storeId = (int) $store->getId();
         $collection = $factory->create();
-        // Inactive ones too: an active category's parent can be inactive, and still names its path.
-        $collection->setStoreId((int) $store->getId())
-            ->addAttributeToSelect(['name', 'is_active'])
+        $collection->setStoreId($storeId)
+            ->addAttributeToSelect('name')
+            ->addAttributeToFilter('is_active', ['eq' => 1])
             ->addFieldToFilter('path', ['like' => '1/' . $root . '/%']);
         $categories = [];
         foreach ($collection as $category) {
             $categories[(int) $category->getId()] = [
                 'name' => self::text($category->getName()),
                 'path' => (string) $category->getPath(),
-                'active' => (int) $category->getData('is_active') === 1,
+                'active' => true,
             ];
         }
+        // An active category's parent can be inactive and still names its path. Only those parents are
+        // read, not every inactive category: a store can keep a large archive of them.
+        $missing = self::missingAncestors($categories, $root);
+        if ($missing) {
+            $parents = $factory->create();
+            $parents->setStoreId($storeId)
+                ->addAttributeToSelect('name')
+                ->addFieldToFilter('entity_id', ['in' => $missing]);
+            foreach ($parents as $category) {
+                $categories[(int) $category->getId()] = [
+                    'name' => self::text($category->getName()),
+                    'path' => (string) $category->getPath(),
+                    'active' => false,
+                ];
+            }
+        }
         return self::resolve($categories, $root);
+    }
+
+    /**
+     * The parents below the root that the paths of namesakes go through and that were not read with
+     * the active categories.
+     *
+     * @param array<int, array{name: string, path: string, active: bool}> $categories by id
+     * @param int $root
+     * @return int[]
+     */
+    private static function missingAncestors(array $categories, int $root): array
+    {
+        $count = [];
+        foreach ($categories as $category) {
+            if ($category['name'] !== '') {
+                $key = self::key($category['name']);
+                $count[$key] = ($count[$key] ?? 0) + 1;
+            }
+        }
+        $missing = [];
+        foreach ($categories as $id => $category) {
+            if ($category['name'] === '' || $count[self::key($category['name'])] < 2) {
+                continue;
+            }
+            $below = false;
+            foreach (explode('/', $category['path']) as $ancestor) {
+                $ancestor = (int) $ancestor;
+                if ($ancestor === $id) {
+                    break;
+                }
+                if ($below && !isset($categories[$ancestor])) {
+                    $missing[$ancestor] = true;
+                }
+                $below = $below || $ancestor === $root;
+            }
+        }
+        return array_keys($missing);
     }
 
     /**
