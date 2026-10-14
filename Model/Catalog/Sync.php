@@ -25,6 +25,9 @@ class Sync
 {
     public const FLAG = 'bluebarry_catalog';
 
+    /** Set by an upgrade that has the next run queue the whole catalog. A flag of its own: written without the sync's lock. */
+    public const FULL_DUE_FLAG = 'bluebarry_catalog_full_due';
+
     private const BATCH = 100;
 
     /** DataApi's limit per request (MagentoProductSyncRequest.MaxProducts). */
@@ -212,7 +215,8 @@ class Sync
         }
         try {
             $this->queue->enqueueAll();
-            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null, 'full_due' => null]);
+            $this->saveState(['tenants' => self::sources($this->targets()), 'full_at' => time(), 'targets' => null]);
+            $this->flags->deleteFlag(self::FULL_DUE_FLAG);
             return true;
         } finally {
             $this->locks->unlock(self::LOCK);
@@ -221,13 +225,14 @@ class Sync
 
     /**
      * Has the next cron run queue every product, the way the nightly full sync does: for an upgrade
-     * that changes what the products say. Nothing is read or sent during the deploy itself.
+     * that changes what the products say. Nothing is read or sent during the deploy itself. Its own
+     * flag, not the sync's state: a run of the previous release may hold the sync while this is set.
      *
      * @return void
      */
     public function queueAllOnNextRun(): void
     {
-        $this->saveState(['full_due' => true]);
+        $this->flags->saveFlag(self::FULL_DUE_FLAG, true);
     }
 
     /**
@@ -495,11 +500,14 @@ class Sync
         $nightly = $targets && $hour >= 1 && $hour < 5 && ($lastDay !== $now->format('Y-m-d') || $this->fullAtBefore($state, 1));
         // A company that left gets the whole catalog when it comes back, and its failure is no more.
         $failures = array_intersect_key($state['targets'] ?? [], $sources) ?: null;
-        $upgraded = $targets && !empty($state['full_due']);
+        $upgraded = $targets && $this->flags->getFlagData(self::FULL_DUE_FLAG);
         if ($changed || $nightly || $upgraded) {
             $this->queue->enqueueAll();
             // The same clock the nightly check reads.
-            $this->saveState(['tenants' => $sources, 'full_at' => $now->getTimestamp(), 'targets' => $failures, 'full_due' => null]);
+            $this->saveState(['tenants' => $sources, 'full_at' => $now->getTimestamp(), 'targets' => $failures]);
+            if ($upgraded) {
+                $this->flags->deleteFlag(self::FULL_DUE_FLAG);
+            }
         } elseif ($sources != $saved) {
             $this->saveState(['tenants' => $sources, 'targets' => $failures]);
         }
