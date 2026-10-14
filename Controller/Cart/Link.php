@@ -10,7 +10,7 @@ use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\App\RequestInterface;
 use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Framework\Message\ManagerInterface as Messages;
-use Magento\Framework\Stdlib\Cookie\CookieMetadataFactory;
+use Magento\Framework\Stdlib\Cookie\PublicCookieMetadataFactory;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\StoreManagerInterface;
@@ -83,7 +83,7 @@ class Link implements HttpGetActionInterface
     private $cookies;
 
     /**
-     * @var CookieMetadataFactory
+     * @var PublicCookieMetadataFactory
      */
     private $cookieMetadata;
 
@@ -106,7 +106,7 @@ class Link implements HttpGetActionInterface
      * @param StoreManagerInterface $storeManager
      * @param Messages $messages
      * @param CookieManagerInterface $cookies
-     * @param CookieMetadataFactory $cookieMetadata
+     * @param PublicCookieMetadataFactory $cookieMetadata
      * @param ScopeConfigInterface $scopeConfig
      * @param LoggerInterface $logger
      */
@@ -119,7 +119,7 @@ class Link implements HttpGetActionInterface
         StoreManagerInterface $storeManager,
         Messages $messages,
         CookieManagerInterface $cookies,
-        CookieMetadataFactory $cookieMetadata,
+        PublicCookieMetadataFactory $cookieMetadata,
         ScopeConfigInterface $scopeConfig,
         LoggerInterface $logger
     ) {
@@ -224,11 +224,11 @@ class Link implements HttpGetActionInterface
         try {
             // As Magento's own PageCache\Version sets it after a POST.
             $this->cookies->setPublicCookie(self::PRIVATE_CONTENT_VERSION, bin2hex(random_bytes(16)),
-                $this->cookieMetadata->createPublicCookieMetadata()->setDuration(self::PRIVATE_CONTENT_PERIOD)
+                $this->cookieMetadata->create()->setDuration(self::PRIVATE_CONTENT_PERIOD)
                     ->setPath('/')->setSecure($secure)->setHttpOnly(false)->setSameSite('Lax'));
             // As Luma's customer-data sets it (domain included, or its clearing would miss this one), and
             // short-lived: a cookie it does not clear only reloads the shopper's data for a few minutes.
-            $clean = $this->cookieMetadata->createPublicCookieMetadata()->setDuration(self::SECTION_DATA_CLEAN_PERIOD)
+            $clean = $this->cookieMetadata->create()->setDuration(self::SECTION_DATA_CLEAN_PERIOD)
                 ->setPath('/')->setSecure($secure)->setHttpOnly(false)->setSameSite('Lax');
             $domain = (string) $this->scopeConfig->getValue('web/cookie/cookie_domain', ScopeInterface::SCOPE_STORE);
             if ($domain !== '') {
