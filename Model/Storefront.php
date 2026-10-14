@@ -158,9 +158,9 @@ class Storefront
         if (!$settings || empty($settings['checks']) || strtolower((string) ($settings['tenantId'] ?? '')) !== strtolower($tenantId)) {
             return null;
         }
-        $checks = $this->checks((int) $websiteId);
-        // Read for other settings than the pages have now: a refresh is saving them, or its checks
-        // were lost. No button until both agree again.
+        $checks = $this->checks((int) $websiteId, (string) $settings['checks']);
+        // Read for other settings than the pages have now: a refresh is saving them. No button until
+        // both agree again.
         if (($checks['version'] ?? null) !== $settings['checks']) {
             return null;
         }
@@ -330,7 +330,8 @@ class Storefront
     {
         $all = $this->flags->getFlagData(self::CHECKS_FLAG);
         $all = is_array($all) ? $all : [];
-        if (($all[$websiteId]['version'] ?? null) === $version) {
+        $before = $all[$websiteId]['version'] ?? null;
+        if ($before === $version) {
             return;
         }
         if ($version === null) {
@@ -339,7 +340,10 @@ class Storefront
             $all[$websiteId] = ['version' => $version, 'products' => $checks];
         }
         $this->flags->saveFlag(self::CHECKS_FLAG, $all);
-        $this->cache->remove(self::CHECKS_FLAG . '_' . $websiteId);
+        if (is_string($before)) {
+            // Only to free the space: no page with the new settings reads the old checks' entry.
+            $this->cache->remove(self::checksKey($websiteId, $before));
+        }
     }
 
     /**
@@ -347,19 +351,36 @@ class Storefront
      * costs no query.
      *
      * @param int $websiteId
+     * @param string $version the checks the page's settings name
      * @return array{version?: string, products?: array<string, string>}
      */
-    private function checks(int $websiteId): array
+    private function checks(int $websiteId, string $version): array
     {
-        $key = self::CHECKS_FLAG . '_' . $websiteId;
+        $key = self::checksKey($websiteId, $version);
         $cached = $this->cache->load($key);
         if (is_string($cached) && is_array($decoded = json_decode($cached, true))) {
             return $decoded;
         }
         $all = $this->flags->getFlagData(self::CHECKS_FLAG);
         $checks = is_array($all) && is_array($all[$websiteId] ?? null) ? $all[$websiteId] : [];
-        $this->cache->save((string) json_encode($checks), $key, [ConfigCache::CACHE_TAG]);
+        if (($checks['version'] ?? null) === $version) {
+            $this->cache->save((string) json_encode($checks), $key, [ConfigCache::CACHE_TAG]);
+        }
         return $checks;
+    }
+
+    /**
+     * Where a version of a website's checks is cached. Each version has its own entry: a page that read
+     * the checks before a refresh and caches them after it fills the old version's entry, which pages
+     * with the new settings never read.
+     *
+     * @param int $websiteId
+     * @param string $version
+     * @return string
+     */
+    private static function checksKey(int $websiteId, string $version): string
+    {
+        return self::CHECKS_FLAG . '_' . $websiteId . '_' . $version;
     }
 
     /**
