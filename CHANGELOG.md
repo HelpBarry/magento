@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Changed
+- The module is on Packagist: `composer require bluebarry/magento2-module` works without the Marketplace repository, and each release is available there right away. A Composer install no longer brings along the old 1.0 release zips.
 
 ## [2.1.0] - 2026-10-14
 ### Added
