@@ -13,6 +13,7 @@ use Bluebarry\Bluebarry\Test\Unit\Double\CheckoutSessionDouble;
 use Bluebarry\Bluebarry\Test\Unit\Double\QuoteDouble;
 use Bluebarry\Bluebarry\Test\Unit\Double\QuoteItemDouble;
 use Magento\Framework\App\CacheInterface;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Model\QuoteFactory;
@@ -46,6 +47,13 @@ class CartTest extends TestCase
     private ?QuoteDouble $meanwhile = null;
     /** @var bool[] whether the session was let go, each time bluebarry was asked */
     private array $askedWithoutSession = [];
+    /** @var array<string, true> the locks held, by any request */
+    private array $locks = [];
+    /** @var callable[] what other requests do while bluebarry is being asked, one for each time it is */
+    private array $meanwhileAsking = [];
+    /** @var callable|null what happens just before a request takes a lock */
+    private $beforeLock;
+    private ?\Exception $askingFails = null;
 
     protected function setUp(): void
     {
@@ -300,6 +308,85 @@ class CartTest extends TestCase
         $this->assertSame([], $this->asked);
     }
 
+    public function testWhileBluebarryIsSlowAtMostTwoRequestsWaitOnIt_TheOthersAnswerAtOnce(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        $others = [];
+        // Shoppers ask while the first request waits on a bluebarry that does not answer: the second
+        // gets the other place to ask from; a third and fourth find both taken.
+        $this->meanwhileAsking = [
+            function () use ($grant, &$others) {
+                $others[] = $this->cart()->redeemOffers([$grant]);
+            },
+            function () use ($grant, &$others) {
+                $others[] = $this->cart()->redeemOffers([$grant]);
+                $others[] = $this->cart()->redeemOffers([$grant]);
+            },
+        ];
+
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
+
+        $this->assertCount(2, $this->asked);
+        // Not queued behind them: their offers wait in the browser for the next cart change.
+        $this->assertSame(array_fill(0, 3, ['applied' => false, 'drop' => []]), $others);
+        $this->assertSame([], $this->locks);
+        // Then nobody asks for half a minute.
+        $this->assertSame([], $this->cart()->redeemOffers([$grant])['drop']);
+        $this->assertCount(2, $this->asked);
+
+        // Half a minute later bluebarry answers again, and the offer goes on the cart.
+        $this->cache = [];
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
+        $this->assertTrue($this->cart()->redeemOffers([$grant])['applied']);
+        $this->assertSame([], $this->locks);
+    }
+
+    public function testARequestThatGetsItsTurnAfterBluebarryStoppedAnsweringDoesNotAsk(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        // It found no pause on its way in; another request saved one before this one took its place.
+        $this->beforeLock = function () {
+            $this->cache[Cart::OFFERS_PAUSED . '1'] = '1';
+        };
+
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
+        $this->assertSame([], $this->asked);
+        $this->assertSame([], $this->locks);
+    }
+
+    public function testThePlaceToAskFromIsGivenBackWhenAskingFails(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        $this->askingFails = new \RuntimeException('out of memory');
+        try {
+            $this->cart()->redeemOffers([$grant]);
+            $this->fail('The failure is not swallowed');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('out of memory', $e->getMessage());
+        }
+        $this->assertSame([], $this->locks);
+
+        // A request bluebarry answered gives it back too.
+        $this->answers = [new Response(200, (string) json_encode(['code' => 'BB-TEN', 'discountType' => 'percent', 'amount' => 10]))];
+        $this->assertTrue($this->cart()->redeemOffers([$grant])['applied']);
+        $this->assertSame([], $this->locks);
+    }
+
+    public function testWithoutLocksTheOfferWaits(): void
+    {
+        $grant = self::offer(['variantIds' => ['10'], 'rules' => [['scope' => 'Single', 'value' => 10]]]);
+        $this->quote->lines = [new QuoteItemDouble(10)];
+        $this->beforeLock = function () {
+            throw new \RuntimeException('MySQL server has gone away');
+        };
+
+        $this->assertSame(['applied' => false, 'drop' => []], $this->cart()->redeemOffers([$grant]));
+        $this->assertSame([], $this->asked);
+    }
+
     private static function offer(array $payload): string
     {
         return rtrim(strtr(base64_encode((string) json_encode($payload)), '+/', '-_'), '=') . '.signature';
@@ -325,6 +412,14 @@ class CartTest extends TestCase
         $client->method('post')->willReturnCallback(function ($path, $body) {
             $this->asked[] = $body;
             $this->askedWithoutSession[] = $this->session->closed;
+            if ($this->askingFails) {
+                $failure = $this->askingFails;
+                $this->askingFails = null;
+                throw $failure;
+            }
+            if ($meanwhile = array_shift($this->meanwhileAsking)) {
+                $meanwhile();
+            }
             return array_shift($this->answers) ?? new Response(0, '');
         });
         $config = $this->createStub(Config::class);
@@ -345,6 +440,26 @@ class CartTest extends TestCase
             $this->cache[$id] = $data;
             return true;
         });
-        return new Cart($this->session, $this->createStub(CartRepositoryInterface::class), $rules, $coupons, $client, $config, $stores, $cookies, $quotes, $cache, new NullLogger());
+        // Shared by every request, like the store's database locks: taken without waiting, or not at all.
+        $locks = $this->createStub(LockManagerInterface::class);
+        $locks->method('lock')->willReturnCallback(function ($name, $timeout) {
+            $this->assertSame(0, $timeout);
+            if ($this->beforeLock) {
+                $beforeLock = $this->beforeLock;
+                $this->beforeLock = null;
+                $beforeLock();
+            }
+            if (isset($this->locks[$name])) {
+                return false;
+            }
+            $this->locks[$name] = true;
+            return true;
+        });
+        $locks->method('unlock')->willReturnCallback(function ($name) {
+            $held = isset($this->locks[$name]);
+            unset($this->locks[$name]);
+            return $held;
+        });
+        return new Cart($this->session, $this->createStub(CartRepositoryInterface::class), $rules, $coupons, $client, $config, $stores, $cookies, $quotes, $cache, new NullLogger(), $locks);
     }
 }

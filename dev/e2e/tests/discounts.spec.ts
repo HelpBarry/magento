@@ -411,6 +411,39 @@ test.describe('discounts from bluebarry', () => {
     expect(await quote(page)).toMatchObject({ discount: 10 });
   });
 
+  test('while bluebarry does not answer, two requests wait on it and other shoppers get an answer at once', async ({ browser }) => {
+    const contexts = await Promise.all([0, 1, 2, 3].map(() => browser.newContext()));
+    try {
+      const pages = await Promise.all(contexts.map(async (context) => {
+        const page = await context.newPage();
+        await shopper(page);
+        await addToCart(page, 'bb-simple');
+        return page;
+      }));
+      // bluebarry stops answering: the module gives up on it after two seconds.
+      await mockApi.respondWith({ delayMs: 4000 });
+
+      const answers = await Promise.all(pages.map(async (page) => {
+        const grant = offer({ variantIds: [simple], rules: [{ scope: 'Single', type: 'Percentage', value: 10 }], nonce: randomUUID() });
+        const started = Date.now();
+        const answer = await discount(page, { grants: JSON.stringify([grant]) });
+        return { ...answer, ms: Date.now() - started };
+      }));
+
+      // Two of the store's PHP workers waited on bluebarry; the other shoppers' requests did not queue
+      // behind them. Every offer waits in the browser for the next cart change.
+      expect((await mockApi.requests()).filter((r) => r.path === '/data/magento/offers/coupon')).toHaveLength(2);
+      const ms = answers.map((answer) => answer.ms).sort((a, b) => a - b);
+      expect(ms[1]).toBeLessThan(1500);
+      expect(ms[2]).toBeGreaterThanOrEqual(1900);
+      for (const answer of answers) expect(answer.body).toEqual({ applied: false, drop: [] });
+    } finally {
+      await Promise.all(contexts.map((context) => context.close()));
+      await mockApi.reset();
+      magento('cache:flush'); // the pause half a minute later
+    }
+  });
+
   test('a customer group the merchant makes later gets bluebarry\'s codes too', async ({ request }) => {
     const code = unique('GROUPS');
     expect((await command(request, 'coupon.create', { code, discountType: 'percent', amount: 10, productIds: [] })).status).toBe(200);
