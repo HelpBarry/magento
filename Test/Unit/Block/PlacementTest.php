@@ -71,9 +71,20 @@ class PlacementTest extends TestCase
     {
         $this->placements = ['productCheck' => ['buttonText' => 'Is this my size?']];
 
-        $this->assertSame(['href' => '#bluebarry:' . self::QUIZ . '/17', 'text' => 'Is this my size?'], $this->placement()->getProductCheck());
+        // With the variants bluebarry has for it, so the page's script can follow the one the shopper picks.
+        $this->assertSame(['href' => '#bluebarry:' . self::QUIZ . '/17', 'text' => 'Is this my size?', 'variants' => ['17', '18']], $this->placement()->getProductCheck());
         // The widget's own text wins over Studio's.
         $this->assertSame('Fits me?', $this->placement()->getProductCheck(' Fits me? ')['text']);
+    }
+
+    public function testAProductWithoutVariantsToPickHasNoneToFollow(): void
+    {
+        $this->references = ['16'];
+        $this->opensWith = '16';
+        $this->group = null;
+        $this->checks = ['16' => self::QUIZ];
+
+        $this->assertSame([], $this->placement()->getProductCheck()['variants']);
     }
 
     public function testWithoutATextTheButtonSaysTheDefault_AndAProductWithoutAQuizHasNone(): void

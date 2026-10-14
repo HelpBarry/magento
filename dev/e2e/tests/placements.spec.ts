@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import { addToCart, adminToken, collectCspViolations, magento, MOCK_API, mockApi, sql, stubAdvisor } from './helpers';
+import { addToCart, adminToken, collectCspViolations, magento, MOCK_API, mockApi, sql, stubAdvisor, THEME } from './helpers';
 
 // The bluebarry elements on the store's pages (magento-internal#9): the product check button, product
 // chat and recommendation blocks, switched on in Studio and printed from the settings the website
@@ -111,6 +111,56 @@ test.describe('placements from Studio', () => {
     await page.goto('/checkout/cart/');
     await expect(page.locator('[data-bluebarry-recommendations]')).toHaveCount(0);
     expect(await violations()).toEqual([]);
+  });
+
+  test('the product check follows the variant the shopper picks', async ({ page, request }) => {
+    const violations = await collectCspViolations(page);
+    await setStorefront({ placements: { productCheck: { enabled: true } }, productChecks: { [configurable]: quiz } });
+    await refresh(request);
+    await stubAdvisor(page, null, { visitor: false });
+    const red = productId('bb-configurable-red');
+    const blue = productId('bb-configurable-blue');
+    const button = page.locator('.bluebarry-product-check__btn');
+    const opensWith = `#bluebarry:${quiz}/${variants[0]}`;
+
+    // Luma's option select, Hyvä's options.
+    await page.goto('/bb-configurable.html');
+    await expect(button).toHaveAttribute('href', opensWith);
+    await expect(button).toHaveAttribute('data-bluebarry-variants', variants.join(','));
+    const select = page.locator('select[name^="super_attribute"]').first();
+    await select.selectOption({ label: 'BB Red' });
+    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
+    await select.selectOption({ label: 'BB Blue' });
+    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${blue}`);
+    // A choice taken back: the variant the page opens with again.
+    await select.selectOption({ index: 0 });
+    await expect(button).toHaveAttribute('href', opensWith);
+    expect(await violations()).toEqual([]);
+
+    if (THEME !== 'luma') return;
+    // Luma's swatches: color shown as text swatches for a moment.
+    const color = sql("SELECT attribute_id FROM eav_attribute WHERE attribute_code = 'color' AND entity_type_id = 4");
+    const before = sql(`SELECT IFNULL(additional_data, 'NULL') FROM catalog_eav_attribute WHERE attribute_id = ${color}`);
+    const options = sql(`SELECT o.option_id, v.value FROM eav_attribute_option o JOIN eav_attribute_option_value v ON v.option_id = o.option_id AND v.store_id = 0 WHERE o.attribute_id = ${color} AND v.value IN ('BB Red', 'BB Blue')`)
+      .split('\n').map((row) => row.split('\t'));
+    try {
+      sql(`UPDATE catalog_eav_attribute SET additional_data = '{"swatch_input_type":"text","update_product_preview_image":"0","use_product_image_for_swatch":"0"}' WHERE attribute_id = ${color}`);
+      sql(`INSERT INTO eav_attribute_option_swatch (option_id, store_id, type, value) VALUES ${options.map(([id, label]) => `(${id}, 0, 0, '${label}')`).join(', ')}`);
+      magento('cache:flush');
+      await page.goto('/bb-configurable.html');
+      const swatch = (label: string) => page.locator(`.swatch-attribute.color .swatch-option[data-option-label="${label}"]`);
+      await expect(button).toHaveAttribute('href', opensWith);
+      await swatch('BB Red').click();
+      await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
+      await swatch('BB Blue').click();
+      await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${blue}`);
+      await swatch('BB Blue').click(); // unselected
+      await expect(button).toHaveAttribute('href', opensWith);
+    } finally {
+      sql(`UPDATE catalog_eav_attribute SET additional_data = ${before === 'NULL' ? 'NULL' : `'${before}'`} WHERE attribute_id = ${color}`);
+      sql(`DELETE FROM eav_attribute_option_swatch WHERE option_id IN (${options.map(([id]) => id).join(', ')})`);
+      magento('cache:flush');
+    }
   });
 
   test('a quiz taken off a product takes its button off the page', async ({ page, request }) => {
