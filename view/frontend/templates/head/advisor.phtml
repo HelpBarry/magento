@@ -10,6 +10,7 @@ if ($tenantId != null && $tenantId != "") {
     window.barry = window.barry || {};
     window.barry.tenantId = "<?= $block->escapeJs($tenantId); ?>";
     window.barry.platform = "magento";
+    window.barry.baseUrl = window.barry.baseUrl || "<?= $block->escapeJs($block->getAdvisorUrl()); ?>";
     // The SDK's Magento cart bridge adds through the module (bluebarry/cart/add).
     // Discounts go through the module too (bluebarry/cart/discount): a quiz's or popup's code, and
     // the offers of quiz results and recommendation blocks.
@@ -157,7 +158,7 @@ if ($tenantId != null && $tenantId != "") {
 <?php endif; ?>
     var advisorScript = document.createElement('script');
     advisorScript.async = true;
-    advisorScript.src = "https://cdn.bluebarry.ai/advisor/advisor.js";
+    advisorScript.src = "<?= $block->escapeJs($block->getSdkUrl($tenantId)); ?>";
     document.head.appendChild(advisorScript);
 
     function getFormKey() {
@@ -207,7 +208,7 @@ if ($tenantId != null && $tenantId != "") {
     });
 
     window.addEventListener('message', (message) => {
-        if (message.origin !== "https://advisor.bluebarry.ai")
+        if (message.origin !== new URL(window.barry.baseUrl).origin)
             return;
         const { event, value } = message.data;
         if (event !== "barry-analytics")
