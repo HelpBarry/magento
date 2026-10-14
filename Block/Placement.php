@@ -94,10 +94,11 @@ class Placement extends Template
     /**
      * The product check button of the product this page is for: where it leads and what it says, or
      * null for a product without a product check quiz. The link opens the quiz for the variant the
-     * page opens with.
+     * page opens with; on a product with several variants the page's script follows the one the
+     * shopper picks, among the variants bluebarry has for it.
      *
      * @param string $text the button's own text; empty for the one set in Studio, then the default
-     * @return array{href: string, text: string}|null
+     * @return array{href: string, text: string, variants: string[]}|null
      */
     public function getProductCheck(string $text = ''): ?array
     {
@@ -120,7 +121,12 @@ class Placement extends Template
         if ($text === '') {
             $text = (string) ($this->getPlacement('productCheck')['buttonText'] ?? '');
         }
-        return ['href' => '#bluebarry:' . $quiz . '/' . $reference, 'text' => $text !== '' ? $text : (string) __(self::DEFAULT_TEXT)];
+        $variants = $this->pageProduct->references($product);
+        return [
+            'href' => '#bluebarry:' . $quiz . '/' . $reference,
+            'text' => $text !== '' ? $text : (string) __(self::DEFAULT_TEXT),
+            'variants' => count($variants) > 1 ? $variants : [],
+        ];
     }
 
     /**

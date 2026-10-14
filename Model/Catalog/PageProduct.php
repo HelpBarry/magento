@@ -124,7 +124,8 @@ class PageProduct
 
     /**
      * The configurable product the catalog sync groups a product under: its lowest parent that is
-     * enabled, has a page and is in this website (ProductBuilder::build()), or null.
+     * enabled, has a page and is in this website (ProductBuilder::build()), in the website's default
+     * store view like the sync, or null.
      *
      * @param int $childId
      * @return int|null
@@ -184,11 +185,14 @@ class PageProduct
             $links = $connection->fetchAll($select);
             $parentIds = array_values(array_unique(array_map('intval', array_column($links, 'parent'))));
             if ($parentIds) {
-                $store = $this->storeManager->getStore();
+                // Read in the website's default store view, as the catalog sync reads its catalog
+                // (Sync::targets()): a parent's visibility or status in this store view may differ.
+                $website = $this->storeManager->getWebsite($this->storeManager->getStore()->getWebsiteId());
+                $syncStoreId = (int) $this->storeManager->getGroup((string) $website->getDefaultGroupId())->getDefaultStoreId();
                 $shown = array_flip(array_map('intval', $this->products->create()
-                    ->setStoreId((int) $store->getId())
+                    ->setStoreId($syncStoreId)
                     ->addIdFilter($parentIds)
-                    ->addWebsiteFilter([(int) $store->getWebsiteId()])
+                    ->addWebsiteFilter([(int) $website->getId()])
                     ->addAttributeToFilter('status', ['eq' => Status::STATUS_ENABLED])
                     ->addAttributeToFilter('visibility', ['neq' => Visibility::VISIBILITY_NOT_VISIBLE])
                     ->getAllIds()));
