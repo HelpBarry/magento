@@ -5,6 +5,7 @@ namespace Bluebarry\Bluebarry\Console\Command;
 use Bluebarry\Bluebarry\Model\Catalog\Categories;
 use Bluebarry\Bluebarry\Model\Catalog\Sync;
 use Magento\Framework\App\Area;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\State;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -35,13 +36,15 @@ class SyncCatalog extends Command
     /**
      * @param Sync $sync proxied in di.xml: every bin/magento call builds the command list
      * @param State $state
-     * @param Categories $categories proxied too
+     * @param Categories|null $categories proxied too. Optional because a store upgrading from 2.0.0
+     *                                builds this command from 2.0.0's compiled DI (two arguments) when
+     *                                bin/magento setup:upgrade starts, before it is compiled again.
      */
-    public function __construct(Sync $sync, State $state, Categories $categories)
+    public function __construct(Sync $sync, State $state, ?Categories $categories = null)
     {
         $this->sync = $sync;
         $this->state = $state;
-        $this->categories = $categories;
+        $this->categories = $categories ?? ObjectManager::getInstance()->get(Categories\Proxy::class);
         parent::__construct();
     }
 

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Upgrades a production-mode store from a previous release while generated/ still holds the previous
+# release's compiled DI: the previous release is installed and compiled (setup:di:compile), the new
+# code goes in, and bin/magento setup:upgrade runs. bin/magento builds every command when it starts, and
+# setup:upgrade builds the module's setup classes, from the old compiled DI and interceptors, so a new
+# required constructor argument fails right there (ArgumentCountError).
+#
+# Magento's Composer plugin asks for generated/ to be cleaned on the next bin/magento run
+# (var/.regenerate), which hides this. The flag is removed here, as on a manual upgrade (new files in
+# app/code, README "Manual") or a deploy that updates vendor/ without that plugin.
+#
+# Usage: dev/bin/test-upgrade <previous-release.zip> [new.zip]   (new: default the working tree)
+#   e.g. gh release download v2.0.0 -R HelpBarry/magento -D /tmp/prev && dev/bin/test-upgrade /tmp/prev/*.zip
+#
+# Always leaves the module installed from the working tree, so the stack is usable again.
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+DEV_DIR="$(dirname "$BIN")"
+in_php() { "$BIN/compose" exec -T -u www-data php bash -ec "$1"; }
+[ $# -ge 1 ] && [ -f "$1" ] || { echo "Usage: dev/bin/test-upgrade <previous-release.zip> [new.zip]" >&2; exit 2; }
+PREVIOUS="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+NEW="${2:-}"
+[ -n "$NEW" ] && NEW="$(cd "$(dirname "$NEW")" && pwd)/$(basename "$NEW")"
+WORK="$(mktemp -d)"
+
+cleanup() {
+    rm -rf "$WORK"
+    in_php 'php bin/magento maintenance:disable >/dev/null 2>&1' || true
+    echo "==> Restoring the working-tree module"
+    "$BIN/deploy-module" >/dev/null 2>&1 || echo "WARNING: restoring the module failed; run dev/bin/deploy-module"
+}
+trap cleanup EXIT
+
+echo "==> Installing the previous release $(basename "$PREVIOUS") (production deploy, compiled DI)"
+if ! "$BIN/deploy-module" "$PREVIOUS" >"$WORK/previous.log" 2>&1; then
+    tail -25 "$WORK/previous.log"
+    echo "ERROR: could not install the previous release; the upgrade would prove nothing."
+    exit 1
+fi
+PREVIOUS_VERSION="$(unzip -p "$PREVIOUS" composer.json | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
+
+# The new code under a version above the previous release, so Composer updates the package in place,
+# as `composer update` does on a merchant's store (deploy-module removes it first instead).
+mkdir "$WORK/new"
+if [ -n "$NEW" ]; then
+    (cd "$WORK/new" && unzip -q "$NEW")
+else
+    (cd "$WORK/new" && unzip -q "$("$DEV_DIR/../scripts/package.sh" "$WORK")")
+fi
+UPGRADE_VERSION="$PREVIOUS_VERSION.1"
+sed -i.bak "s/\"version\": *\"[^\"]*\"/\"version\": \"$UPGRADE_VERSION\"/" "$WORK/new/composer.json" && rm "$WORK/new/composer.json.bak"
+rm -f "$DEV_DIR/.artifacts"/*.zip
+(cd "$WORK/new" && zip -q -X -r "$DEV_DIR/.artifacts/bluebarry-magento2-module-$UPGRADE_VERSION.zip" .)
+
+echo "==> The new code ($UPGRADE_VERSION) in place, generated/ still from the previous release"
+if ! in_php "
+    test -f generated/metadata/global.php
+    rm -rf /var/www/.composer/cache/files/bluebarry
+    composer require --no-interaction --no-progress 'bluebarry/magento2-module:$UPGRADE_VERSION' >/dev/null 2>&1
+    rm -f var/.regenerate
+    test -f generated/metadata/global.php
+"; then
+    echo "ERROR: could not update the package with the previous release's compiled DI in place."
+    exit 1
+fi
+
+echo "==> bin/magento setup:upgrade"
+if ! in_php 'php bin/magento setup:upgrade --no-interaction' >"$WORK/upgrade.log" 2>&1; then
+    grep -m5 -E "Error|Exception" "$WORK/upgrade.log" || tail -25 "$WORK/upgrade.log"
+    echo "FAIL: setup:upgrade from $PREVIOUS_VERSION failed on a compiled store"
+    exit 1
+fi
+echo "PASS: setup:upgrade from $PREVIOUS_VERSION succeeds while the previous release's compiled DI is in place"
+
+echo "==> The rest of the deploy: setup:di:compile, cache:flush, and the module's commands"
+if ! in_php '
+    php bin/magento setup:di:compile >/dev/null
+    php bin/magento cache:flush >/dev/null
+    php bin/magento list bluebarry >/dev/null
+' >"$WORK/compile.log" 2>&1; then
+    tail -25 "$WORK/compile.log"
+    echo "FAIL: the deploy after setup:upgrade failed"
+    exit 1
+fi
+echo "PASS: the upgraded store compiles and runs the module's commands"

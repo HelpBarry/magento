@@ -9,6 +9,7 @@ use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderSyncQueue;
 use Bluebarry\Bluebarry\Model\ResourceModel\OrderVisitor;
 use Bluebarry\Bluebarry\Model\ResourceModel\ProductSyncQueue;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\Setup\ModuleContextInterface;
 use Magento\Framework\Setup\SchemaSetupInterface;
 use Magento\Framework\Setup\UninstallInterface;
@@ -40,12 +41,13 @@ class Uninstall implements UninstallInterface
 
     /**
      * @param Heartbeat $heartbeat
-     * @param Coupons $coupons
+     * @param Coupons|null $coupons optional because a store that last compiled with 2.0.0 builds this
+     *                           from that compiled DI (one argument)
      */
-    public function __construct(Heartbeat $heartbeat, Coupons $coupons)
+    public function __construct(Heartbeat $heartbeat, ?Coupons $coupons = null)
     {
         $this->heartbeat = $heartbeat;
-        $this->coupons = $coupons;
+        $this->coupons = $coupons ?? ObjectManager::getInstance()->get(Coupons::class);
     }
 
     /**

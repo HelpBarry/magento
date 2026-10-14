@@ -52,6 +52,15 @@ class Coupons
     /** Seconds what became of a removed code is kept, for bluebarry to look up. */
     private const REMOVED_KEPT = 365 * 86400;
 
+    /** Seconds back an order is looked for that Magento's queue may not have counted yet. */
+    private const UNCOUNTED_ORDERS = 86400;
+
+    /** Expired codes ended at a time. */
+    private const EXPIRED_BATCH = 500;
+
+    /** Seconds a cleanup run keeps ending expired codes: no code is started after it, the next run ends the rest. */
+    private const CLEANUP_SECONDS = 40;
+
     /** More products than this is not one offer or reward; the rule would not be readable either. */
     private const MAX_PRODUCTS = 100;
 
@@ -106,6 +115,11 @@ class Coupons
     private $locks;
 
     /**
+     * @var int
+     */
+    private $cleanupSeconds;
+
+    /**
      * @param DiscountRules $rules
      * @param RuleFactory $ruleFactory
      * @param RuleResource $ruleResource
@@ -116,6 +130,7 @@ class Coupons
      * @param Config $config
      * @param ScopeConfigInterface $scopeConfig
      * @param LockManagerInterface $locks
+     * @param int $cleanupSeconds the time a cleanup run may spend ending expired codes
      */
     public function __construct(
         DiscountRules $rules,
@@ -127,7 +142,8 @@ class Coupons
         StoreManagerInterface $storeManager,
         Config $config,
         ScopeConfigInterface $scopeConfig,
-        LockManagerInterface $locks
+        LockManagerInterface $locks,
+        int $cleanupSeconds = self::CLEANUP_SECONDS
     ) {
         $this->rules = $rules;
         $this->ruleFactory = $ruleFactory;
@@ -139,6 +155,7 @@ class Coupons
         $this->config = $config;
         $this->scopeConfig = $scopeConfig;
         $this->locks = $locks;
+        $this->cleanupSeconds = $cleanupSeconds;
     }
 
     /**
@@ -258,7 +275,7 @@ class Coupons
         }
         if (!empty($coupon['revoked'])) {
             // Ended before anyone spent it (taken back, or expired), and not removed yet.
-            return ['exists' => false, 'usageCount' => $this->rules->ordersWith($code, $coupon['created_at'], null, $this->storeIds($website))];
+            return ['exists' => false, 'usageCount' => $this->uncountedOrders($code, $coupon, $website)];
         }
         // Past its last moment, or ended by the cron and not removed yet.
         $usable = (int) $coupon['is_active'] === 1 && (int) ($coupon['stage'] ?? 0) === DiscountRules::STAGE_USABLE
@@ -278,7 +295,7 @@ class Coupons
      * A checkout may be placing its order with the code at this very moment. So the code is not deleted
      * but spent, under the lock Magento counts a coupon's use under: the checkout either counted first
      * (the code is spent, and stays), or finds its one use gone and is refused. The cron removes it later.
-     * Magento releases before that lock (2.4.6-p10, 2.4.7-p5) count after the order, without that check:
+     * Magento releases before that lock (2.4.6-p9, 2.4.7-p4) count after the order, without that check:
      * there the orders are looked at.
      *
      * @param string $code
@@ -353,7 +370,6 @@ class Coupons
 
     /**
      * How often a code was spent: Magento's own count, or the orders that carry it when that is more.
-     * Magento counts from a queue after the order, so an order placed a moment ago may be ahead of it.
      *
      * @param string $code
      * @param array $coupon from DiscountRules::coupon()
@@ -363,7 +379,28 @@ class Coupons
     private function uses(string $code, array $coupon, WebsiteInterface $website): int
     {
         $counted = (int) $coupon['times_used'];
-        return $counted > 0 ? $counted : $this->rules->ordersWith($code, $coupon['created_at'], null, $this->storeIds($website));
+        return $counted > 0 ? $counted : $this->uncountedOrders($code, $coupon, $website);
+    }
+
+    /**
+     * The orders that carry a code Magento may not have counted yet. Magento releases before the locked
+     * usage check (2.4.6-p9, 2.4.7-p4) count a use from a queue after the order, so an order placed a
+     * moment ago may be ahead of the count; later releases count at checkout. Only the last day's orders
+     * are looked at, for what that queue may still be behind on: for a code made months ago, every order
+     * since would be searched on each look-up.
+     *
+     * @param string $code
+     * @param array $coupon from DiscountRules::coupon()
+     * @param WebsiteInterface $website
+     * @return int
+     */
+    private function uncountedOrders(string $code, array $coupon, WebsiteInterface $website): int
+    {
+        if ($coupon['created_at'] === null || $coupon['created_at'] === '') {
+            return 0;
+        }
+        $since = max((string) $coupon['created_at'], gmdate('Y-m-d H:i:s', time() - self::UNCOUNTED_ORDERS));
+        return $this->rules->ordersWith($code, $since, null, $this->storeIds($website));
     }
 
     /**
@@ -400,9 +437,10 @@ class Coupons
      * them (and keeps a busy store from holding one per person forever). Like a code that is taken back,
      * each is spent under the lock Magento counts a coupon's use under, so a checkout that already holds
      * it is refused by Magento itself, and removed ten minutes later; what became of it is kept for a
-     * year. Then offer rules that hold no code any more, then the notes of rules the merchant deleted. A
-     * batch a run. And the rules are opened to customer groups the merchant made since: a rule only holds
-     * for the groups it has.
+     * year. Expired codes are ended batch after batch for up to 40 seconds, so a burst of them all ends
+     * in one run. Then offer rules that hold no code any more, then the notes of rules the merchant
+     * deleted, a batch a run. And the rules are opened to customer groups the merchant made since: a
+     * rule only holds for the groups it has.
      *
      * @return array{ended: int, codes: int, rules: int}
      */
@@ -410,16 +448,29 @@ class Coupons
     {
         $this->rules->openToNewCustomerGroups();
         $ended = 0;
-        foreach ($this->rules->expiredCodes(gmdate('Y-m-d H:i:s'), 500) as $coupon) {
-            // A checkout counting its use right now has the lock: the next run ends it.
-            if ($this->lockCoupon($coupon, 0)) {
-                try {
-                    $ended += (int) $this->rules->end($coupon, (string) $coupon['tenant_id'], gmdate('Y-m-d H:i:s', time() + self::ENDED_KEPT), false);
-                } finally {
-                    $this->unlockCoupon($coupon);
+        // Batch after batch, so codes that all end at the same moment still end within this run: until
+        // none is due, a batch changes nothing (each held by a checkout), or the run's time is spent. A
+        // full batch of rows whose coupon the merchant deleted ends nothing, but those rows are gone now.
+        $start = time();
+        do {
+            $endedNow = 0;
+            $due = $this->rules->expiredCodes(gmdate('Y-m-d H:i:s'), self::EXPIRED_BATCH);
+            foreach ($due['codes'] as $coupon) {
+                if (time() - $start >= $this->cleanupSeconds) {
+                    // Not ended: still due, for the next run.
+                    break;
+                }
+                // A checkout counting its use right now has the lock: the next run ends it.
+                if ($this->lockCoupon($coupon, 0)) {
+                    try {
+                        $endedNow += (int) $this->rules->end($coupon, (string) $coupon['tenant_id'], gmdate('Y-m-d H:i:s', time() + self::ENDED_KEPT), false);
+                    } finally {
+                        $this->unlockCoupon($coupon);
+                    }
                 }
             }
-        }
+            $ended += $endedNow;
+        } while ($due['full'] && $endedNow + $due['purged'] > 0 && time() - $start < $this->cleanupSeconds);
         $codes = $this->rules->removeEndedCodes(gmdate('Y-m-d H:i:s'), 2000);
         $this->rules->forgetRemovedCodes(gmdate('Y-m-d H:i:s', time() - self::REMOVED_KEPT), 2000);
         $rules = 0;

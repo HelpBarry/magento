@@ -51,6 +51,14 @@ jobs:
         if: github.event_name != 'pull_request'
         run: dev/bin/test-deploy-race
 
+      - name: Upgrade from the latest release on a compiled store
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.zip' --dir "$RUNNER_TEMP/previous"
+          dev/bin/test-upgrade "$RUNNER_TEMP"/previous/*.zip
+
       - name: Collect logs
         if: failure()
         run: |

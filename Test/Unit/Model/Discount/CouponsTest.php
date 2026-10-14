@@ -72,6 +72,12 @@ class CouponsTest extends TestCase
     private int $transactions = 0;
     private array $snapshot = [];
     private int $rollbacks = 0;
+    /** @var int[] how many expired codes each look-up found */
+    private array $expiredBatches = [];
+    /** @var int[] expired codes' rows whose coupon the merchant deleted (with its rule) */
+    private array $orphans = [];
+    private ?\Closure $whileEnding = null;
+    private int $cleanupSeconds = 40;
 
     public function testAPercentageCodeIsASingleUseCodeUnderARuleForItsTerms(): void
     {
@@ -357,6 +363,90 @@ class CouponsTest extends TestCase
         $this->assertSame(['exists' => false, 'usageCount' => 0], $coupons->state('CODE-0001', $this->website(1)));
     }
 
+    public function testCodesThatAllExpireTogetherAllEndInOneRun_ABatchAtATime(): void
+    {
+        $coupons = $this->coupons();
+        // A popup's codes, all made for the same weekend: more than two batches end at the same moment.
+        $this->weekend(1201);
+
+        $this->assertSame(1201, $coupons->cleanUp()['ended']);
+        $this->assertSame([500, 500, 201], $this->expiredBatches);
+        foreach ($this->coupons as $code => $row) {
+            if (str_starts_with($code, 'WEEKEND-')) {
+                $this->assertSame(DiscountRules::STAGE_ENDED, $row['stage'], $code);
+            }
+        }
+    }
+
+    public function testABatchOfCodesWhoseRuleTheMerchantDeletedDoesNotStopTheRun(): void
+    {
+        $coupons = $this->coupons();
+        $this->orphans = range(5001, 5500);
+        $this->weekend(3);
+
+        $this->assertSame(3, $coupons->cleanUp()['ended']);
+        $this->assertSame([500, 3], $this->expiredBatches);
+        $this->assertSame([], $this->orphans);
+    }
+
+    public function testNoCodeIsStartedOnceTheRunsTimeIsSpent(): void
+    {
+        $this->cleanupSeconds = 2;
+        $coupons = $this->coupons();
+        $this->weekend(3);
+        // The database is slow: ending the first code takes the whole run's time.
+        $this->whileEnding = fn () => sleep(2);
+
+        $this->assertSame(1, $coupons->cleanUp()['ended']);
+        $this->assertSame([DiscountRules::STAGE_ENDED, 0, 0], array_map(fn ($i) => (int) ($this->coupons['WEEKEND-' . $i]['stage'] ?? 0), [1, 2, 3]));
+        // The rest end on the next run.
+        $this->assertSame(2, $coupons->cleanUp()['ended']);
+    }
+
+    public function testExpiredCodesThatCannotBeEndedNowDoNotKeepTheRunGoing(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'CODE-0001', 'discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'], $this->website(1));
+        $this->expire('CODE-0001');
+
+        // Held by a checkout: looked at once, and left for the next run.
+        $this->locked = true;
+        $this->assertSame(0, $coupons->cleanUp()['ended']);
+        $this->assertSame([1], $this->expiredBatches);
+    }
+
+    public function testAnUnusedCodeIsLookedForInTheLastDaysOrdersOnly_NotInEveryOrderSinceItWasMade(): void
+    {
+        $coupons = $this->coupons();
+        $coupons->ensure(['code' => 'LOYAL-1', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+        $coupons->ensure(['code' => 'LOYAL-2', 'discountType' => 'percent', 'amount' => 10], $this->website(1));
+        // A loyalty reward made months ago and never used, and one made an hour ago.
+        $this->coupons['LOYAL-1']['created_at'] = gmdate('Y-m-d H:i:s', time() - 90 * 86400);
+        $this->coupons['LOYAL-2']['created_at'] = gmdate('Y-m-d H:i:s', time() - 3600);
+        $this->orderSearches = [];
+
+        $before = time();
+        $coupons->state('LOYAL-1', $this->website(1));
+        $coupons->revoke('LOYAL-1', $this->website(1));
+        $after = time();
+        // Magento has counted every use older than that (at checkout from 2.4.6-p9, 2.4.7-p4 and 2.4.8;
+        // from its queue before them): only the orders the count may still miss are looked at.
+        $this->assertNotEmpty($this->orderSearches);
+        // Also once it was taken back, until it is removed.
+        $this->assertCount(3, $this->orderSearches);
+        foreach ($this->orderSearches as [$code, $since, $until]) {
+            $this->assertSame('LOYAL-1', $code);
+            $this->assertGreaterThanOrEqual(gmdate('Y-m-d H:i:s', $before - 86400), $since);
+            $this->assertLessThanOrEqual(gmdate('Y-m-d H:i:s', $after - 86400), $since);
+            $this->assertNull($until);
+        }
+
+        // A code younger than a day: the orders since it was made.
+        $this->orderSearches = [];
+        $coupons->state('LOYAL-2', $this->website(1));
+        $this->assertSame([['LOYAL-2', $this->coupons['LOYAL-2']['created_at'], null]], $this->orderSearches);
+    }
+
     public function testAnExpiredCodeAShopperSpentStaysSpent_AlsoOnceRemoved(): void
     {
         $coupons = $this->coupons();
@@ -430,7 +520,7 @@ class CouponsTest extends TestCase
     public function testACheckoutThatHeldACodeWhenItExpiredIsRefusedByMagento(): void
     {
         if (!(new \ReflectionClass(Processor::class))->hasConstant('LOCK_NAME')) {
-            $this->markTestSkipped('This Magento counts a coupon\'s use after the order (before 2.4.6-p10 and 2.4.7-p5).');
+            $this->markTestSkipped('This Magento counts a coupon\'s use after the order (before 2.4.6-p9 and 2.4.7-p4).');
         }
         $coupons = $this->coupons();
         $spec = ['discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'];
@@ -507,6 +597,16 @@ class CouponsTest extends TestCase
     }
 
     /** Moves a code's last moment into the past. */
+    /** A popup's codes, all made for the same weekend, which has passed. */
+    private function weekend(int $count): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            $this->coupons['WEEKEND-' . $i] = ['coupon_id' => (string) (1000 + $i), 'rule_id' => '101', 'times_used' => '0',
+                'created_at' => gmdate('Y-m-d H:i:s', time() - 86400), 'expires_at' => gmdate('Y-m-d H:i:s', time() - 60),
+                'is_active' => '1', 'ours' => true, 'tenant' => 'tenant'];
+        }
+    }
+
     private function expire(string $code): void
     {
         $this->coupons[$code]['expires_at'] = gmdate('Y-m-d H:i:s', time() - 60);
@@ -654,6 +754,10 @@ class CouponsTest extends TestCase
         });
         // As the statements do: spent while unused, under the lock the caller holds, and marked as ended.
         $rules->method('end')->willReturnCallback(function ($coupon, $tenant, $removeAt, $onlyUnused) {
+            if ($this->whileEnding) {
+                ($this->whileEnding)();
+                $this->whileEnding = null;
+            }
             $code = $coupon['code'];
             $row = $this->coupons[$code] ?? null;
             if ($row === null) {
@@ -667,14 +771,20 @@ class CouponsTest extends TestCase
             $this->coupons[$code] = ['stage' => DiscountRules::STAGE_ENDED, 'revoked' => $spent ? '1' : '0', 'expires_at' => $removeAt, 'tenant' => $tenant] + $this->coupons[$code];
             return true;
         });
-        $rules->method('expiredCodes')->willReturnCallback(function ($now) {
-            $due = [];
+        $rules->method('expiredCodes')->willReturnCallback(function ($now, $limit) {
+            // The rows of codes whose coupon the merchant deleted come first, and go.
+            $due = array_map(fn ($id) => ['coupon_id' => (string) $id], $this->orphans);
             foreach ($this->coupons as $code => $row) {
                 if ($row['ours'] && (int) ($row['stage'] ?? 0) === DiscountRules::STAGE_USABLE && $row['expires_at'] !== null && $row['expires_at'] < $now) {
                     $due[] = ['coupon_id' => $row['coupon_id'], 'code' => $code, 'created_at' => $row['created_at'], 'tenant_id' => $row['tenant']];
                 }
             }
-            return $due;
+            $due = array_slice($due, 0, $limit);
+            $codes = array_values(array_filter($due, fn ($row) => isset($row['code'])));
+            $purged = array_column(array_filter($due, fn ($row) => !isset($row['code'])), 'coupon_id');
+            $this->orphans = array_values(array_diff($this->orphans, array_map('intval', $purged)));
+            $this->expiredBatches[] = count($due);
+            return ['codes' => $codes, 'purged' => count($purged), 'full' => count($due) >= $limit];
         });
         $rules->method('removeEndedCodes')->willReturnCallback(function ($now) {
             $removed = 0;
@@ -778,6 +888,6 @@ class CouponsTest extends TestCase
         });
 
         $this->locks = $locks;
-        return new Coupons($rules, $ruleFactory, $this->createStub(RuleResource::class), $couponFactory, $couponResource, $groupFactory, $stores, $config, $scopeConfig, $locks);
+        return new Coupons($rules, $ruleFactory, $this->createStub(RuleResource::class), $couponFactory, $couponResource, $groupFactory, $stores, $config, $scopeConfig, $locks, $this->cleanupSeconds);
     }
 }

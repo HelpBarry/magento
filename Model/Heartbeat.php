@@ -4,6 +4,7 @@ namespace Bluebarry\Bluebarry\Model;
 
 use Bluebarry\Bluebarry\Model\Api\Client;
 use Bluebarry\Bluebarry\Model\Catalog\FilterAttributes;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use Magento\Framework\FlagManager;
@@ -90,7 +91,9 @@ class Heartbeat
      * @param EncryptorInterface $encryptor
      * @param LockManagerInterface $locks
      * @param Url $frontendUrl
-     * @param FilterAttributes $filterAttributes
+     * @param FilterAttributes|null $filterAttributes optional because a store upgrading from 2.0.0 builds
+     *                                            this from 2.0.0's compiled DI during setup:upgrade
+     *                                            (Setup\RecurringData), before it is compiled again
      */
     public function __construct(
         Config $config,
@@ -102,7 +105,7 @@ class Heartbeat
         EncryptorInterface $encryptor,
         LockManagerInterface $locks,
         Url $frontendUrl,
-        FilterAttributes $filterAttributes
+        ?FilterAttributes $filterAttributes = null
     ) {
         $this->config = $config;
         $this->client = $client;
@@ -113,7 +116,7 @@ class Heartbeat
         $this->encryptor = $encryptor;
         $this->locks = $locks;
         $this->frontendUrl = $frontendUrl;
-        $this->filterAttributes = $filterAttributes;
+        $this->filterAttributes = $filterAttributes ?? ObjectManager::getInstance()->get(FilterAttributes::class);
     }
 
     /**
