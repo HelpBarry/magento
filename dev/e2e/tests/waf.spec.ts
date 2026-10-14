@@ -53,3 +53,13 @@ test('session update without a Referer header still reaches Magento', async () =
   const response = await post({ form_key: 'abc', bb_session_id: randomUUID(), advisor_id: randomUUID(), user_id: randomUUID() });
   expect(response.status).toBe(302);
 });
+
+test('a cart link with a full kit and a code reaches Magento', async () => {
+  // As the quiz builds it (URLSearchParams), with as many lines as the module takes and a code like
+  // bluebarry's. CRS counts special characters per argument (942430 at paranoia 2), so every one counts.
+  const items = Array.from({ length: 20 }, (_, i) => `${100000 + i}:${(i % 3) + 1}`).join(',');
+  const query = new URLSearchParams({ items, code: 'BB-QUIZ-AB12CD' });
+  const response = await fetch(`${WAF_URL}/bluebarry/cart/link/?${query}`, { redirect: 'manual' });
+  expect(response.status).toBe(302);
+  expect(response.headers.get('location')).toMatch(/\/checkout\/cart\/$/);
+});
