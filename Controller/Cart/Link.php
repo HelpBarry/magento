@@ -29,7 +29,7 @@ use Psr\Log\LoggerInterface;
  * SDK's bluebarry/cart/discount puts one (a code the shopper entered stays): no request to bluebarry.
  *
  * Never cached: the answer is a redirect with no-store, which neither the full page cache nor Varnish
- * keeps.
+ * keeps, and noindex, nofollow for search engines.
  */
 class Link implements HttpGetActionInterface
 {
@@ -144,6 +144,8 @@ class Link implements HttpGetActionInterface
         $result = $this->redirects->create()->setPath('checkout/cart');
         // The shopper's own cart: never kept by a cache in between.
         $result->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0', true);
+        // A crawler that follows a quiz's link on a landing page neither indexes it nor follows it on.
+        $result->setHeader('X-Robots-Tag', 'noindex, nofollow', true);
         $raw = $this->request->getParam('items');
         $items = is_string($raw) ? self::lines($raw) : [];
         if (!$items) {

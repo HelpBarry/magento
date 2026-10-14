@@ -3,6 +3,8 @@
 namespace Bluebarry\Bluebarry\Model\Catalog;
 
 use Bluebarry\Bluebarry\Model\Api\Client;
+use Magento\Catalog\Model\Indexer\Category\Product\TableMaintainer;
+use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\FlagManager;
@@ -69,6 +71,11 @@ class Categories
      */
     private $logger;
 
+    /**
+     * @var TableMaintainer
+     */
+    private $categoryIndex;
+
     /** @var bool a change was noted in this process already */
     private $noted = false;
 
@@ -80,6 +87,7 @@ class Categories
      * @param FlagManager $flags
      * @param LockManagerInterface $locks
      * @param LoggerInterface $logger
+     * @param TableMaintainer $categoryIndex
      */
     public function __construct(
         Sync $sync,
@@ -88,7 +96,8 @@ class Categories
         ResourceConnection $resource,
         FlagManager $flags,
         LockManagerInterface $locks,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        TableMaintainer $categoryIndex
     ) {
         $this->sync = $sync;
         $this->client = $client;
@@ -97,6 +106,7 @@ class Categories
         $this->flags = $flags;
         $this->locks = $locks;
         $this->logger = $logger;
+        $this->categoryIndex = $categoryIndex;
     }
 
     /**
@@ -189,7 +199,6 @@ class Categories
             return null;
         }
         $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_LINK), '/');
-        $counts = $this->productCounts();
         // As the products name them: by their path when another category has the same name.
         $names = CategoryNames::forStore($this->categories, $store);
         $categories = [];
@@ -214,8 +223,12 @@ class Categories
                 'imageUrl' => $image !== null && $image !== '' ? self::absolute($image, $base) : null,
                 'url' => $url,
                 'path' => (string) parse_url($url, PHP_URL_PATH),
-                'count' => (int) ($counts[(int) $category->getId()] ?? 0),
+                'count' => 0,
             ];
+        }
+        $counts = $this->productCounts((int) $store->getId(), array_column($categories, 'id'));
+        foreach ($categories as $i => $category) {
+            $categories[$i]['count'] = (int) ($counts[(int) $category['id']] ?? 0);
         }
         return $categories;
     }
@@ -261,16 +274,26 @@ class Categories
     }
 
     /**
-     * How many products each category holds: one grouped query.
+     * How many products each category shows in the store view, as its page counts them: from Magento's
+     * category product index, so an anchor category counts its subcategories' products and a disabled
+     * product, one of another website or one not visible in the catalog counts nowhere. One grouped query.
      *
+     * @param int $storeId
+     * @param array<int|string> $categoryIds
      * @return array<int, int>
      */
-    private function productCounts(): array
+    private function productCounts(int $storeId, array $categoryIds): array
     {
+        if (!$categoryIds) {
+            return [];
+        }
         $connection = $this->resource->getConnection();
         return array_map('intval', $connection->fetchPairs(
             $connection->select()
-                ->from($this->resource->getTableName('catalog_category_product'), ['category_id', 'products' => new \Zend_Db_Expr('COUNT(*)')])
+                ->from($this->categoryIndex->getMainTable($storeId), ['category_id', 'products' => new \Zend_Db_Expr('COUNT(*)')])
+                ->where('store_id = ?', $storeId)
+                ->where('category_id IN (?)', array_map('intval', $categoryIds))
+                ->where('visibility IN (?)', [Visibility::VISIBILITY_IN_CATALOG, Visibility::VISIBILITY_BOTH])
                 ->group('category_id')
         ));
     }

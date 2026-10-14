@@ -6,8 +6,11 @@ use Bluebarry\Bluebarry\Model\Api\Client;
 use Bluebarry\Bluebarry\Model\Api\Response;
 use Bluebarry\Bluebarry\Model\Catalog\Categories;
 use Bluebarry\Bluebarry\Model\Catalog\Sync;
+use Magento\Catalog\Model\Indexer\Category\Product\TableMaintainer;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory;
 use Magento\Framework\App\ResourceConnection;
+use Magento\Framework\DB\Adapter\AdapterInterface;
+use Magento\Framework\DB\Select;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Store\Model\Store;
@@ -110,6 +113,45 @@ class CategoriesTest extends TestCase
         $this->assertSame([], $this->posted);
     }
 
+    public function testProductCountsComeFromTheStoreViewsCategoryIndex_ForTheCategoriesSent(): void
+    {
+        // The index counts an anchor category's subcategories' products, and only enabled products of
+        // the store view's website: catalog_category_product has neither.
+        $index = $this->createMock(TableMaintainer::class);
+        $index->expects($this->once())->method('getMainTable')->with(3)->willReturn('catalog_category_product_index_store3');
+        $parts = [];
+        $select = $this->createStub(Select::class);
+        $select->method('from')->willReturnCallback(function ($table, $columns) use (&$parts, $select) {
+            $parts['from'] = $table;
+            return $select;
+        });
+        $select->method('where')->willReturnCallback(function ($condition, $value) use (&$parts, $select) {
+            $parts[$condition] = $value;
+            return $select;
+        });
+        $select->method('group')->willReturnSelf();
+        $connection = $this->createStub(AdapterInterface::class);
+        $connection->method('select')->willReturn($select);
+        $connection->method('fetchPairs')->willReturn(['12' => '4', '13' => '0']);
+        $resource = $this->createStub(ResourceConnection::class);
+        $resource->method('getConnection')->willReturn($connection);
+        $categories = new Categories(
+            $this->createStub(Sync::class), $this->createStub(Client::class), $this->createStub(CollectionFactory::class),
+            $resource, $this->createStub(FlagManager::class), $this->createStub(LockManagerInterface::class), new NullLogger(), $index
+        );
+
+        $counts = (new \ReflectionMethod($categories, 'productCounts'))->invoke($categories, 3, ['12', '13']);
+
+        $this->assertSame([12 => 4, 13 => 0], $counts);
+        $this->assertSame([
+            'from' => 'catalog_category_product_index_store3',
+            'store_id = ?' => 3,
+            'category_id IN (?)' => [12, 13],
+            // As the category page lists them: not the products only search finds.
+            'visibility IN (?)' => [2, 4],
+        ], $parts);
+    }
+
     private function categories(bool $tooMany = false): Categories
     {
         $sync = $this->createStub(Sync::class);
@@ -133,7 +175,7 @@ class CategoriesTest extends TestCase
         $locks->method('lock')->willReturnCallback(fn () => !$this->locked);
 
         $categories = $this->getMockBuilder(Categories::class)
-            ->setConstructorArgs([$sync, $client, $this->createStub(CollectionFactory::class), $this->createStub(ResourceConnection::class), $flags, $locks, new NullLogger()])
+            ->setConstructorArgs([$sync, $client, $this->createStub(CollectionFactory::class), $this->createStub(ResourceConnection::class), $flags, $locks, new NullLogger(), $this->createStub(TableMaintainer::class)])
             ->onlyMethods(['payload'])
             ->getMock();
         $categories->method('payload')->willReturnCallback(function (Store $store) use ($tooMany) {

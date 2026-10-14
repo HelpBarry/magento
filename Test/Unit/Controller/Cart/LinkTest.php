@@ -4,7 +4,18 @@ namespace Bluebarry\Bluebarry\Test\Unit\Controller\Cart;
 
 use Bluebarry\Bluebarry\Controller\Cart\Link;
 use Bluebarry\Bluebarry\Model\Cart\Adder;
+use Bluebarry\Bluebarry\Model\Config;
+use Bluebarry\Bluebarry\Model\Discount\Cart as Discounts;
+use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\App\RequestInterface;
+use Magento\Framework\Controller\Result\Redirect;
+use Magento\Framework\Controller\Result\RedirectFactory;
+use Magento\Framework\Message\ManagerInterface;
+use Magento\Framework\Stdlib\Cookie\PublicCookieMetadataFactory;
+use Magento\Framework\Stdlib\CookieManagerInterface;
+use Magento\Store\Model\StoreManagerInterface;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 
 /**
  * The lines of a cart link's `items`, as bluebarry/cart/add's Adder takes them.
@@ -46,5 +57,33 @@ class LinkTest extends TestCase
         $lines = Link::lines(str_repeat('9', 5000) . ',12');
         $this->assertCount(1, $lines);
         $this->assertSame(1024, strlen($lines[0]['reference']));
+    }
+
+    public function testTheRedirectIsNeverCachedNorIndexed_SoCrawlersFollowingQuizLinksGoNoFurther(): void
+    {
+        $headers = [];
+        $redirect = $this->createMock(Redirect::class);
+        $redirect->method('setPath')->willReturnSelf();
+        $redirect->method('setHeader')->willReturnCallback(function ($name, $value) use (&$headers, $redirect) {
+            $headers[$name] = $value;
+            return $redirect;
+        });
+        $redirects = $this->createStub(RedirectFactory::class);
+        $redirects->method('create')->willReturn($redirect);
+        $request = $this->createStub(RequestInterface::class);
+        $request->method('getParam')->willReturnCallback(fn ($key) => $key === 'items' ? '12:1' : null);
+        $adder = $this->createStub(Adder::class);
+        $adder->method('add')->willReturn(['success' => false, 'failure' => 'soldOut']);
+
+        $link = new Link(
+            $request, $redirects, $adder, $this->createStub(Discounts::class), $this->createStub(Config::class),
+            $this->createStub(StoreManagerInterface::class), $this->createStub(ManagerInterface::class),
+            $this->createStub(CookieManagerInterface::class), $this->createStub(PublicCookieMetadataFactory::class),
+            $this->createStub(ScopeConfigInterface::class), new NullLogger()
+        );
+
+        $this->assertSame($redirect, $link->execute());
+        $this->assertSame('noindex, nofollow', $headers['X-Robots-Tag']);
+        $this->assertStringContainsString('no-store', $headers['Cache-Control']);
     }
 }

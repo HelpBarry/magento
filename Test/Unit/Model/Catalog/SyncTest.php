@@ -25,6 +25,8 @@ class SyncTest extends TestCase
     private int $catalogQueued = 0;
     private array $calls = [];
     private array $flag = [];
+    /** The upgrade's own flag (Sync::FULL_DUE_FLAG). */
+    private mixed $fullDue = null;
     private array $awaitingIndex = [];
     private array $unreadable = [];
     /** @var int[] products deleted from the catalog */
@@ -237,6 +239,48 @@ class SyncTest extends TestCase
         $this->assertSame(1, $this->catalogQueued);
 
         $this->now = '2026-09-29 03:00:00 UTC'; // later that night: done already
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testAnUpgradeThatAsksForItHasTheNextRunQueueTheWholeCatalog_Once(): void
+    {
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()];
+        $this->sync([], tenants: [1 => 'a'])->queueAllOnNextRun();
+        $this->assertSame(0, $this->catalogQueued); // nothing during the deploy
+
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertNull($this->fullDue);
+
+        $this->sync([], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+    }
+
+    public function testAnUpgradeWithoutAConnectedWebsiteQueuesNothing_TheCatalogGoesOnConnecting(): void
+    {
+        $this->sync([], tenants: [])->queueAllOnNextRun();
+        $this->sync([], tenants: [])->run();
+        $this->assertSame(0, $this->catalogQueued);
+
+        $this->sync([200], tenants: [1 => 'a'])->run();
+        $this->assertSame(1, $this->catalogQueued);
+        $this->assertNull($this->fullDue);
+    }
+
+    public function testTheUpgradeLeavesTheSyncsStateAlone_ARunOfTheOldReleaseMayHoldIt(): void
+    {
+        // Set during a zero-downtime deploy, while the previous release's cron holds the sync: its
+        // deletions and failures must survive, and its next state write must not drop the request.
+        $state = ['tenants' => ['a' => 1, 'b' => 3], 'full_at' => time(), 'deletions' => ['b' => [9]], 'targets' => ['a' => ['retry_at' => time() + 60, 'error' => 'x']]];
+        $this->flag = $state;
+        $this->locked = true;
+
+        $this->sync([], tenants: [1 => 'a'])->queueAllOnNextRun();
+
+        $this->assertSame($state, $this->flag);
+        $this->flag = ['tenants' => ['a' => 1], 'full_at' => time()]; // the old run writes its state
+        $this->locked = false;
         $this->sync([], tenants: [1 => 'a'])->run();
         $this->assertSame(1, $this->catalogQueued);
     }
@@ -551,9 +595,18 @@ class SyncTest extends TestCase
         $queue->method('count')->willReturnCallback(fn () => count($this->queued));
 
         $flags = $this->createStub(FlagManager::class);
-        $flags->method('getFlagData')->willReturnCallback(fn () => $this->flag);
+        $flags->method('getFlagData')->willReturnCallback(fn ($code) => $code === Sync::FULL_DUE_FLAG ? $this->fullDue : $this->flag);
         $flags->method('saveFlag')->willReturnCallback(function ($code, $data) {
-            $this->flag = $data;
+            if ($code === Sync::FULL_DUE_FLAG) {
+                $this->fullDue = $data;
+            } else {
+                $this->flag = $data;
+            }
+            return true;
+        });
+        $flags->method('deleteFlag')->willReturnCallback(function ($code) {
+            $this->assertSame(Sync::FULL_DUE_FLAG, $code);
+            $this->fullDue = null;
             return true;
         });
         $locks = $this->createStub(LockManagerInterface::class);

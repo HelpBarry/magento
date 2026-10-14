@@ -250,6 +250,8 @@ test.describe('placements from Studio', () => {
     const block = page.locator('[data-bluebarry-recommendations]');
     await expect(block).toHaveAttribute('data-bluebarry-recommendations', cartBlock);
     await expect(block).toHaveAttribute('data-cart-anchored', 'true');
+    // So bluebarry counts it as the cart page's block, like Shopify's cart template.
+    await expect(block).toHaveAttribute('data-placement', 'cart');
     // Hidden until the SDK has filled in the cart (the stub SDK never does).
     await expect(block).toBeHidden();
   });
@@ -297,6 +299,7 @@ test.describe('placements from Studio', () => {
     await expect(button).toHaveText('Find my bike');
     await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}`);
     await expect(page.locator('[data-bluebarry-recommendations]')).toHaveAttribute('data-cart-anchored', 'true');
+    await expect(page.locator('[data-bluebarry-recommendations]')).not.toHaveAttribute('data-placement', /.*/);
     await expect(page.locator('[data-bluebarry-product-chat-embed]')).toHaveCount(1);
     await expect(page.locator('.bluebarry-product-check')).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => (window as any).__opened)).toEqual([
