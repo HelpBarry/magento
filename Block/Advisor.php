@@ -3,6 +3,7 @@
 namespace Bluebarry\Bluebarry\Block;
 
 use Bluebarry\Bluebarry\Model\Catalog\PageProduct;
+use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
@@ -72,6 +73,11 @@ class Advisor extends Template implements IdentityInterface
     private $pageProduct;
 
     /**
+     * @var Config
+     */
+    private $config;
+
+    /**
      * @param Context $context
      * @param ScopeConfigInterface $scopeConfig
      * @param StoreManagerInterface $storeManager
@@ -81,6 +87,7 @@ class Advisor extends Template implements IdentityInterface
      * @param CategoryCollectionFactory $categories
      * @param ProductCollectionFactory $products
      * @param PageProduct $pageProduct
+     * @param Config $config
      * @param array $data
      */
     public function __construct(
@@ -93,6 +100,7 @@ class Advisor extends Template implements IdentityInterface
         CategoryCollectionFactory $categories,
         ProductCollectionFactory $products,
         PageProduct $pageProduct,
+        Config $config,
         array $data = []
     ) {
         $this->scopeConfig = $scopeConfig;
@@ -103,6 +111,7 @@ class Advisor extends Template implements IdentityInterface
         $this->categories = $categories;
         $this->products = $products;
         $this->pageProduct = $pageProduct;
+        $this->config = $config;
 
         parent::__construct($context, $data);
     }
@@ -139,6 +148,27 @@ class Advisor extends Template implements IdentityInterface
                 ScopeInterface::SCOPE_WEBSITE,
                 $store->getWebsiteId()
             ) !== '';
+    }
+
+    /**
+     * Where the quiz runs: the origin the page accepts the advisor iframe's messages from.
+     *
+     * @return string
+     */
+    public function getAdvisorUrl(): string
+    {
+        return $this->config->getAdvisorUrl();
+    }
+
+    /**
+     * The SDK script the page loads.
+     *
+     * @param string $tenantId
+     * @return string
+     */
+    public function getSdkUrl(string $tenantId): string
+    {
+        return $this->config->getSdkUrl($tenantId);
     }
 
     /**
