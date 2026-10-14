@@ -7,6 +7,7 @@ use Bluebarry\Bluebarry\Model\Catalog\CategoryNames;
 use Bluebarry\Bluebarry\Model\Catalog\ProductBuilder;
 use Bluebarry\Bluebarry\Model\Catalog\Sync;
 use Bluebarry\Bluebarry\Model\Api\Client;
+use Magento\Catalog\Model\Indexer\Category\Product\TableMaintainer;
 use Magento\Catalog\Model\ResourceModel\Category\Collection;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory;
 use Magento\Framework\App\ResourceConnection;
@@ -92,6 +93,7 @@ class CategoryNamesTest extends TestCase
         $connection = $this->createStub(AdapterInterface::class);
         $select = $this->createStub(Select::class);
         $select->method('from')->willReturnSelf();
+        $select->method('where')->willReturnSelf();
         $select->method('group')->willReturnSelf();
         $connection->method('select')->willReturn($select);
         $connection->method('fetchPairs')->willReturn([]);
@@ -99,7 +101,8 @@ class CategoryNamesTest extends TestCase
         $resource->method('getConnection')->willReturn($connection);
         $resource->method('getTableName')->willReturnArgument(0);
         $categories = new Categories($this->createStub(Sync::class), $this->createStub(Client::class), $this->factory(), $resource,
-            $this->createStub(FlagManager::class), $this->createStub(LockManagerInterface::class), new NullLogger());
+            $this->createStub(FlagManager::class), $this->createStub(LockManagerInterface::class), new NullLogger(),
+            $this->createStub(TableMaintainer::class));
 
         $payload = $categories->payload($this->store());
 

@@ -50,6 +50,19 @@ class PlacementTest extends TestCase
         ], $this->placement()->getRecommendationAttributes(self::BLOCK));
     }
 
+    public function testTheBlockUnderTheCartSaysItIsOnTheCartPage_AWidgetElsewhereDoesNot(): void
+    {
+        $this->onProductPage = false;
+
+        $this->assertSame([
+            'data-bluebarry-recommendations' => self::BLOCK,
+            'data-cart-anchored' => 'true',
+            'data-placement' => 'cart',
+            'hidden' => 'hidden',
+        ], $this->placement(['placement' => 'cartRecommendations'])->getRecommendationAttributes(self::BLOCK));
+        $this->assertArrayNotHasKey('data-placement', $this->placement(['block_id' => self::BLOCK])->getRecommendationAttributes(self::BLOCK));
+    }
+
     public function testAProductBluebarryDoesNotKnowGetsNoBlock_RatherThanOneFromTheCart(): void
     {
         // A grouped product, or a configurable product without synced variants.
@@ -95,7 +108,7 @@ class PlacementTest extends TestCase
         $this->assertSame([], $this->placement()->getPickableVariants());
     }
 
-    private function placement(): Placement
+    private function placement(array $data = []): Placement
     {
         $store = $this->createStub(Store::class);
         $store->method('getId')->willReturn(1);
@@ -121,6 +134,6 @@ class PlacementTest extends TestCase
         $config = $this->createStub(Config::class);
         $config->method('getTenantId')->willReturnCallback(fn () => $this->tenant);
 
-        return new Placement($context, $storefront, $pageProduct, $config, $registry, $this->createStub(CspNonceProvider::class));
+        return new Placement($context, $storefront, $pageProduct, $config, $registry, $this->createStub(CspNonceProvider::class), $data);
     }
 }

@@ -79,8 +79,9 @@ test.describe('catalog sync', () => {
         media_gallery_entries: [image('bb-front', ['image', 'small_image', 'thumbnail']), image('bb-back', [])],
       },
     });
-    // As the indexer cron would: in stock, then priced (a product the stock index has not seen is left out of the price index).
-    magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+    // As the indexer cron would: in stock, then priced (a product the stock index has not seen is left out of the price index),
+    // and in its category.
+    magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price', 'catalog_category_product');
   });
 
   test.beforeEach(async () => {
@@ -182,6 +183,35 @@ test.describe('catalog sync', () => {
     await mockApi.reset();
     expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
     expect((await categorySets())[0].body.categories.find((c: any) => c.id === String(categoryId)).name).toBe('BB Catalog');
+  });
+
+  test("a category counts the products its page shows: a parent its subcategories', not disabled or hidden ones", async ({ request }) => {
+    const categorySets = async () => (await mockApi.requests()).filter((r) => r.path === '/data/magento/categories');
+    const disabled = 'bb-catalog-disabled';
+    const parent = (await rest(request, 'post', '/rest/V1/categories', {
+      category: { parent_id: 2, name: 'BB Anchor', is_active: true, custom_attributes: [{ attribute_code: 'is_anchor', value: '1' }] },
+    })).id;
+    const child = (await rest(request, 'post', '/rest/V1/categories', { category: { parent_id: parent, name: 'BB Anchor Child', is_active: true } })).id;
+    try {
+      await rest(request, 'post', `/rest/V1/categories/${child}/products`, { productLink: { sku: SKU, position: 0, category_id: String(child) } });
+      // A variant not visible on its own, and a disabled product: in the category, on no page of it.
+      await rest(request, 'post', `/rest/V1/categories/${child}/products`, { productLink: { sku: 'bb-configurable-red', position: 1, category_id: String(child) } });
+      await rest(request, 'post', '/rest/all/V1/products', {
+        product: {
+          sku: disabled, name: 'Bluebarry Disabled Product', attribute_set_id: 4, price: 10, status: 2, visibility: 4, type_id: 'simple', weight: 1,
+          extension_attributes: { website_ids: [1], category_links: [{ position: 2, category_id: String(child) }], stock_item: { qty: 5, is_in_stock: true } },
+        },
+      });
+      magento('indexer:reindex', 'catalog_category_product');
+      expect(magento('bluebarry:catalog:sync')).toContain('Sent the categories.');
+      const counts = Object.fromEntries((await categorySets())[0].body.categories.map((c: any) => [c.id, c.count]));
+      expect(counts[String(child)]).toBe(1);
+      expect(counts[String(parent)]).toBe(1);
+    } finally {
+      const token = await adminToken(request);
+      await request.delete(`/rest/V1/products/${disabled}`, { headers: { Authorization: `Bearer ${token}` } });
+      await request.delete(`/rest/V1/categories/${parent}`, { headers: { Authorization: `Bearer ${token}` } });
+    }
   });
 
   test('two categories with the same name go by their path, in the list and on the products', async ({ request }) => {

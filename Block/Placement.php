@@ -146,7 +146,8 @@ class Placement extends Template
      * the cart, which the SDK fills in from the shopper's own cart and keeps current: until then, and
      * while the cart is empty, the element stays hidden. A product page whose product bluebarry does
      * not know (a grouped product, a configurable product without synced variants) shows none: the
-     * cart is no stand-in for the product the shopper is looking at.
+     * cart is no stand-in for the product the shopper is looking at. The block under the cart says so,
+     * so bluebarry counts what it brings in as from the cart page (a widget elsewhere is from its page).
      *
      * @param string|null $blockId
      * @return array<string, string>|null null without a block to show
@@ -170,6 +171,9 @@ class Placement extends Template
             }
         } else {
             $attributes['data-cart-anchored'] = 'true';
+            if ($this->getData('placement') === 'cartRecommendations') {
+                $attributes['data-placement'] = 'cart';
+            }
             $attributes['hidden'] = 'hidden';
         }
         return $attributes;

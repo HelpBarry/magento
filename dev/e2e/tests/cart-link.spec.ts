@@ -93,6 +93,8 @@ test.describe('cart link', () => {
     const response = await page.request.get(url, { maxRedirects: 0 });
     expect(response.status()).toBe(302);
     expect(response.headers()['cache-control']).toContain('no-store');
+    // Crawlers following a quiz's link on a landing page leave it out and go no further.
+    expect(response.headers()['x-robots-tag']).toBe('noindex, nofollow');
     expect((await cart(page)).summary_count).toBe(1);
 
     // The same link again, by another shopper: their cart, not an answer kept from the first.

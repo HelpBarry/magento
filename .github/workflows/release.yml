@@ -77,8 +77,8 @@ jobs:
           ZIP="$(scripts/package.sh "$RUNNER_TEMP/dist")"
           unzip -p "$ZIP" composer.json | grep -q "\"version\": \"$VERSION\""
           unzip -p "$ZIP" etc/module.xml | grep -q "setup_version=\"$VERSION\""
-          if unzip -Z1 "$ZIP" | grep -E '^(dev|Test|\.github)/'; then
-            echo "::error::Test tooling ended up in the zip."
+          if unzip -Z1 "$ZIP" | grep -E '^(dev|Test|\.github|scripts)/|^copy\.sh$'; then
+            echo "::error::Test or dev tooling ended up in the zip."
             exit 1
           fi
           unzip -Z1 "$ZIP"
