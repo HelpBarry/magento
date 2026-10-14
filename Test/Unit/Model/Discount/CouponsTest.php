@@ -429,7 +429,7 @@ class CouponsTest extends TestCase
         $coupons->state('LOYAL-1', $this->website(1));
         $coupons->revoke('LOYAL-1', $this->website(1));
         $after = time();
-        // Magento has counted every use older than that (at checkout from 2.4.6-p10, 2.4.7-p5 and 2.4.8;
+        // Magento has counted every use older than that (at checkout from 2.4.6-p9, 2.4.7-p4 and 2.4.8;
         // from its queue before them): only the orders the count may still miss are looked at.
         $this->assertNotEmpty($this->orderSearches);
         // Also once it was taken back, until it is removed.
@@ -520,7 +520,7 @@ class CouponsTest extends TestCase
     public function testACheckoutThatHeldACodeWhenItExpiredIsRefusedByMagento(): void
     {
         if (!(new \ReflectionClass(Processor::class))->hasConstant('LOCK_NAME')) {
-            $this->markTestSkipped('This Magento counts a coupon\'s use after the order (before 2.4.6-p10 and 2.4.7-p5).');
+            $this->markTestSkipped('This Magento counts a coupon\'s use after the order (before 2.4.6-p9 and 2.4.7-p4).');
         }
         $coupons = $this->coupons();
         $spec = ['discountType' => 'percent', 'amount' => 10, 'expiresAt' => '2030-01-15T12:00:00Z'];

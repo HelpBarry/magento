@@ -295,7 +295,7 @@ class Coupons
      * A checkout may be placing its order with the code at this very moment. So the code is not deleted
      * but spent, under the lock Magento counts a coupon's use under: the checkout either counted first
      * (the code is spent, and stays), or finds its one use gone and is refused. The cron removes it later.
-     * Magento releases before that lock (2.4.6-p10, 2.4.7-p5) count after the order, without that check:
+     * Magento releases before that lock (2.4.6-p9, 2.4.7-p4) count after the order, without that check:
      * there the orders are looked at.
      *
      * @param string $code
@@ -384,7 +384,7 @@ class Coupons
 
     /**
      * The orders that carry a code Magento may not have counted yet. Magento releases before the locked
-     * usage check (2.4.6-p10, 2.4.7-p5) count a use from a queue after the order, so an order placed a
+     * usage check (2.4.6-p9, 2.4.7-p4) count a use from a queue after the order, so an order placed a
      * moment ago may be ahead of the count; later releases count at checkout. Only the last day's orders
      * are looked at, for what that queue may still be behind on: for a code made months ago, every order
      * since would be searched on each look-up.
