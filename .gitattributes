@@ -6,3 +6,4 @@
 /scripts export-ignore
 /copy.sh export-ignore
 /README.pdf export-ignore
+/dist export-ignore

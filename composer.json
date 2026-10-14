@@ -1,6 +1,6 @@
 {
     "name": "bluebarry/magento2-module",
-    "description": "",
+    "description": "bluebarry for Magento 2: product recommendation quizzes, on-site search, recommendations, product chat and conversion tracking, with catalog and order sync.",
     "type": "magento2-module",
     "version": "2.1.0",
     "license": [
