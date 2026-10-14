@@ -113,28 +113,50 @@ test.describe('placements from Studio', () => {
     expect(await violations()).toEqual([]);
   });
 
-  test('the product check follows the variant the shopper picks', async ({ page, request }) => {
+  test('the product check, product chat and recommendations follow the variant the shopper picks', async ({ page, request }) => {
     const violations = await collectCspViolations(page);
-    await setStorefront({ placements: { productCheck: { enabled: true } }, productChecks: { [configurable]: quiz } });
+    await setStorefront({
+      placements: {
+        productCheck: { enabled: true },
+        productChat: { enabled: true },
+        productRecommendations: { enabled: true, recommendationId: productBlock },
+      },
+      productChecks: { [configurable]: quiz },
+    });
     await refresh(request);
     await stubAdvisor(page, null, { visitor: false });
+    // The SDK's chat widget and recommendation blocks take a variant change from a change event on the document.
+    await page.addInitScript(() => {
+      (window as any).__variantEvents = 0;
+      document.addEventListener('change', (event) => { if (event.target === document) (window as any).__variantEvents++; });
+    });
     const red = productId('bb-configurable-red');
     const blue = productId('bb-configurable-blue');
     const button = page.locator('.bluebarry-product-check__btn');
-    const opensWith = `#bluebarry:${quiz}/${variants[0]}`;
+    const recommendations = page.locator('[data-bluebarry-recommendations]');
+    const events = () => page.evaluate(() => (window as any).__variantEvents);
+    /** Everything names this variant: the picked one, or the one the page opens with. */
+    async function following(variant: string) {
+      await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${variant}`);
+      await expect(recommendations).toHaveAttribute('data-anchor-id', variant);
+      await expect.poll(() => page.evaluate(() => (window as any).barry.chat.variantReference)).toBe(variant);
+    }
 
     // Luma's option select, Hyvä's options.
     await page.goto('/bb-configurable.html');
-    await expect(button).toHaveAttribute('href', opensWith);
-    await expect(button).toHaveAttribute('data-bluebarry-variants', variants.join(','));
+    await following(variants[0]);
+    expect(await events()).toBe(0);
     const select = page.locator('select[name^="super_attribute"]').first();
     await select.selectOption({ label: 'BB Red' });
-    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
+    await following(red);
     await select.selectOption({ label: 'BB Blue' });
-    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${blue}`);
+    await following(blue);
     // A choice taken back: the variant the page opens with again.
     await select.selectOption({ index: 0 });
-    await expect(button).toHaveAttribute('href', opensWith);
+    await following(variants[0]);
+    // Announced only when the variant they name changes: of the three steps, one names the variant
+    // they already named (picking the page's own, or clearing back to it after picking it).
+    expect(await events()).toBe(2);
 
     // An item's options page opens with its saved options, without a change.
     await addToCart(page, 'bb-configurable', { color: 'BB Red' });
@@ -143,7 +165,7 @@ test.describe('placements from Studio', () => {
       return (await response.json()).cart;
     });
     await page.goto(cart.items[0].configure_url);
-    await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
+    await following(red);
     expect(await violations()).toEqual([]);
 
     if (THEME !== 'luma') return;
@@ -158,18 +180,37 @@ test.describe('placements from Studio', () => {
       magento('cache:flush');
       await page.goto('/bb-configurable.html');
       const swatch = (label: string) => page.locator(`.swatch-attribute.color .swatch-option[data-option-label="${label}"]`);
-      await expect(button).toHaveAttribute('href', opensWith);
+      await following(variants[0]);
       await swatch('BB Red').click();
-      await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${red}`);
+      await following(red);
       await swatch('BB Blue').click();
-      await expect(button).toHaveAttribute('href', `#bluebarry:${quiz}/${blue}`);
+      await following(blue);
       await swatch('BB Blue').click(); // unselected
-      await expect(button).toHaveAttribute('href', opensWith);
+      await following(variants[0]);
     } finally {
       sql(`UPDATE catalog_eav_attribute SET additional_data = ${before === 'NULL' ? 'NULL' : `'${before}'`} WHERE attribute_id = ${color}`);
       sql(`DELETE FROM eav_attribute_option_swatch WHERE option_id IN (${options.map(([id]) => id).join(', ')})`);
       magento('cache:flush');
     }
+  });
+
+  test('a page without product chat or recommendation blocks announces no variant change', async ({ page, request }) => {
+    await setStorefront({});
+    await refresh(request);
+    await stubAdvisor(page, null, { visitor: false });
+    await page.addInitScript(() => {
+      (window as any).barry = { chat: false }; // product chat switched off on this store
+      (window as any).__variantEvents = 0;
+      document.addEventListener('change', (event) => { if (event.target === document) (window as any).__variantEvents++; });
+    });
+
+    await page.goto('/bb-configurable.html');
+    await expect(page.locator('#product-addtocart-button')).toBeVisible();
+    await expect(page.locator('.bluebarry-product-check, [data-bluebarry-recommendations]')).toHaveCount(0);
+    await page.locator('select[name^="super_attribute"]').first().selectOption({ label: 'BB Red' });
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => (window as any).__variantEvents)).toBe(0);
+    expect(await page.evaluate(() => (window as any).barry.chat)).toBe(false);
   });
 
   test('a quiz taken off a product takes its button off the page', async ({ page, request }) => {

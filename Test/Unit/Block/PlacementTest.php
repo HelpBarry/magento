@@ -71,33 +71,28 @@ class PlacementTest extends TestCase
     {
         $this->placements = ['productCheck' => ['buttonText' => 'Is this my size?']];
 
-        // With the variants bluebarry has for it, so the page's script can follow the one the shopper picks.
-        $this->assertSame(['href' => '#bluebarry:' . self::QUIZ . '/17', 'text' => 'Is this my size?', 'variants' => ['17', '18']], $this->placement()->getProductCheck());
+        $this->assertSame(['href' => '#bluebarry:' . self::QUIZ . '/17', 'text' => 'Is this my size?'], $this->placement()->getProductCheck());
         // The widget's own text wins over Studio's.
         $this->assertSame('Fits me?', $this->placement()->getProductCheck(' Fits me? ')['text']);
     }
 
-    public function testAProductWithoutVariantsToPickHasNoneToFollow(): void
+    public function testTheVariantsToFollowAreTheOnesBluebarryHasForTheProduct(): void
     {
-        $this->references = ['16'];
-        $this->opensWith = '16';
-        $this->group = null;
-        $this->checks = ['16' => self::QUIZ];
-
-        $this->assertSame([], $this->placement()->getProductCheck()['variants']);
+        $this->assertSame(['17', '18'], $this->placement()->getPickableVariants());
     }
 
-    public function testWithoutATextTheButtonSaysTheDefault_AndAProductWithoutAQuizHasNone(): void
+    public function testNothingToFollowWithOneVariant_OffAProductPage_OrWithoutBluebarry(): void
     {
-        $this->assertSame(Placement::DEFAULT_TEXT, $this->placement()->getProductCheck()['text']);
+        $this->references = ['16'];
+        $this->assertSame([], $this->placement()->getPickableVariants());
 
-        // A simple product stands for itself: the quiz is assigned to its own id.
-        $this->group = null;
-        $this->assertNotNull($this->placement()->getProductCheck());
-        $this->checks = [];
-        $this->assertNull($this->placement()->getProductCheck());
+        $this->references = ['17', '18'];
         $this->onProductPage = false;
-        $this->assertNull($this->placement()->getProductCheck());
+        $this->assertSame([], $this->placement()->getPickableVariants());
+
+        $this->onProductPage = true;
+        $this->tenant = null;
+        $this->assertSame([], $this->placement()->getPickableVariants());
     }
 
     private function placement(): Placement

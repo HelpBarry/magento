@@ -26,5 +26,11 @@
                 </arguments>
             </block>
         </referenceContainer>
+        <!-- Has the elements above, and widgets of them, follow the variant the shopper picks. Once per
+             page, for a product with variants to pick; nothing changes on a page without the elements. -->
+        <referenceContainer name="before.body.end">
+            <block class="Bluebarry\Bluebarry\Block\Placement" name="bluebarry.product.variant"
+                   template="Bluebarry_Bluebarry::placement/variant.phtml"/>
+        </referenceContainer>
     </body>
 </page>
