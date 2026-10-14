@@ -28,6 +28,8 @@ class StorefrontTest extends TestCase
     private $onGet;
     private array $answers = [];
     private bool $locked = false;
+    /** @var callable|null runs once, when a page is about to cache the product checks it read */
+    private $beforeChecksSave;
 
     public function testReadsSearchForTheWebsite_AndPurgesThePagesOnceWhenItChanges(): void
     {
@@ -312,9 +314,48 @@ class StorefrontTest extends TestCase
 
         // Another website's refresh is saving newer checks while this page renders.
         $this->checks[1]['version'] = 'newer';
-        unset($this->cache[Storefront::CHECKS_FLAG . '_1']);
 
         $this->assertNull($storefront->productCheck(1, self::TENANT, '10'));
+        // Not cached as the settings' checks either: the next page reads them again.
+        $this->assertSame([], $this->cachedChecks());
+    }
+
+    public function testAPageThatCachesOldChecksAfterARefreshDoesNotHideTheNewButtons(): void
+    {
+        $old = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+        $new = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+        $storefront = $this->storefront();
+        $this->answers = [
+            $this->answer(null, self::TENANT, ['version' => 'c1', 'productChecks' => ['10' => $old]]),
+            $this->answer(null, self::TENANT, ['version' => 'c2', 'productChecks' => ['10' => $new, '11' => $new]]),
+            $this->answer(null, self::TENANT, ['version' => 'c2', 'productChecks' => ['10' => $new, '11' => $new]]),
+        ];
+        $storefront->refresh($this->website(1));
+
+        // A product page misses the checks cache and reads the old checks. Before it caches them, a
+        // refresh saves new checks and settings; the page then caches what it read.
+        $this->beforeChecksSave = fn () => $this->storefront()->refresh($this->website(1));
+        $this->assertSame($old, $storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame(['10' => $new, '11' => $new], $this->checks[1]['products']);
+
+        // The next pages have the new settings and read the new checks, not what that page cached.
+        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '11'));
+
+        // Refreshing the same settings again changes nothing, and the buttons stay.
+        $storefront->refresh($this->website(1));
+        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '11'));
+        // Read from the cache now: a product page costs no query.
+        $this->checks = [];
+        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '11'));
+    }
+
+    /**
+     * @return array<string, string> the product check entries in the cache
+     */
+    private function cachedChecks(): array
+    {
+        return array_filter($this->cache, fn ($id) => str_starts_with($id, Storefront::CHECKS_FLAG), ARRAY_FILTER_USE_KEY);
     }
 
     public function testADisconnectedWebsiteForgetsItsElementsAndChecks(): void
@@ -379,6 +420,11 @@ class StorefrontTest extends TestCase
         $cache = $this->createStub(CacheInterface::class);
         $cache->method('load')->willReturnCallback(fn ($id) => $this->cache[$id] ?? false);
         $cache->method('save')->willReturnCallback(function ($data, $id) {
+            if ($this->beforeChecksSave && str_starts_with($id, Storefront::CHECKS_FLAG)) {
+                $beforeChecksSave = $this->beforeChecksSave;
+                $this->beforeChecksSave = null;
+                $beforeChecksSave();
+            }
             $this->cache[$id] = $data;
             return true;
         });
