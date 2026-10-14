@@ -7,6 +7,7 @@ use Magento\Catalog\Model\Product;
 use Magento\Catalog\Model\Product\Attribute\Source\Status;
 use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
+use Magento\Catalog\Model\ResourceModel\Product\Attribute\Collection as AttributeCollection;
 use Magento\Catalog\Model\ResourceModel\Product\Attribute\CollectionFactory as AttributeCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
 use Magento\CatalogInventory\Api\StockConfigurationInterface;
@@ -1140,23 +1141,36 @@ class ProductBuilder
 
     /**
      * The attributes a merchant made part of the storefront: shown on the product page, or filterable
-     * in the layered navigation. Their own, not Magento's system attributes.
+     * in the layered navigation (on category pages or search results). Their own, not Magento's system
+     * attributes.
      *
      * @return array<string, \Magento\Catalog\Model\ResourceModel\Eav\Attribute>
      */
     private function syncedAttributes(): array
     {
         if ($this->syncedAttributes === null) {
-            $collection = $this->attributes->create();
-            $collection->addFieldToFilter('is_user_defined', ['eq' => 1])
-                ->addFieldToFilter('frontend_input', ['in' => self::ATTRIBUTE_INPUTS])
-                ->addFieldToFilter(['is_visible_on_front', 'is_filterable'], [['eq' => 1], ['gt' => 0]]);
+            $collection = self::onlySynced($this->attributes->create());
             $this->syncedAttributes = [];
             foreach ($collection as $attribute) {
                 $this->syncedAttributes[(string) $attribute->getAttributeCode()] = $attribute;
             }
         }
         return $this->syncedAttributes;
+    }
+
+    /**
+     * Limits an attribute collection to the attributes the catalog sends as attr_{code} (see
+     * syncedAttributes()). FilterAttributes reports only these, so every filter it reports has values.
+     *
+     * @param AttributeCollection $collection
+     * @return AttributeCollection
+     */
+    public static function onlySynced(AttributeCollection $collection): AttributeCollection
+    {
+        $collection->addFieldToFilter('is_user_defined', ['eq' => 1])
+            ->addFieldToFilter('frontend_input', ['in' => self::ATTRIBUTE_INPUTS])
+            ->addFieldToFilter(['is_visible_on_front', 'is_filterable', 'is_filterable_in_search'], [['eq' => 1], ['gt' => 0], ['eq' => 1]]);
+        return $collection;
     }
 
     /**

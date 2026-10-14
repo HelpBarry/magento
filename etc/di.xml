@@ -71,6 +71,8 @@
     <type name="Bluebarry\Bluebarry\Model\Discount\Cart">
         <arguments>
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+            <!-- The database's locks whatever lock backend the store configured: see Cart::$locks. -->
+            <argument name="locks" xsi:type="object">Magento\Framework\Lock\Backend\Database</argument>
         </arguments>
     </type>
     <type name="Bluebarry\Bluebarry\Controller\Cart\Discount">

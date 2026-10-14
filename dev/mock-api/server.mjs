@@ -113,6 +113,9 @@ const magentoPing = {
     magentoVersion: types.nullableString(32),
     magentoEdition: types.nullableString(32),
     commandUrl: types.nullableString(512),
+    // The layered navigation's filters (DataApi's MagentoFilterAttributeRequest).
+    filterAttributes: (v) => Array.isArray(v) && v.every((a) => a && typeof a.code === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(a.code)
+      && typeof a.label === 'string' && Number.isInteger(a.position)),
   },
 };
 
