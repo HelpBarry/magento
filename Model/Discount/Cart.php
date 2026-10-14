@@ -8,6 +8,7 @@ use Bluebarry\Bluebarry\Model\ResourceModel\DiscountRules;
 use Bluebarry\Bluebarry\Model\Visitor;
 use Magento\Checkout\Model\Session;
 use Magento\Framework\App\CacheInterface;
+use Magento\Framework\Lock\LockManagerInterface;
 use Magento\Framework\Stdlib\CookieManagerInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Model\Quote;
@@ -48,10 +49,21 @@ class Cart
 
     /**
      * Seconds bluebarry gets to check an offer, and seconds no offer is asked about after it did not
-     * answer: a slow bluebarry keeps one request of the store busy for a moment, not one per shopper.
+     * answer: a slow bluebarry keeps a few requests of the store busy for a moment (OFFER_CALLS), not
+     * one per shopper.
      */
     private const OFFER_TIMEOUT = 2;
     private const OFFER_PAUSE = 30;
+
+    /**
+     * How many requests per website may wait on bluebarry about an offer at once. One more is not
+     * queued behind them: its offer waits in the browser for the next change of the cart, as during a
+     * pause. So a burst while bluebarry stops answering keeps this many of the store's PHP workers
+     * busy, not one per shopper. Offers are redeemed seldom and answered in well under a second, so
+     * two side by side are plenty.
+     */
+    private const OFFER_CALLS = 2;
+    private const OFFER_CALL_LOCK = 'bluebarry_offer_call_';
 
     /**
      * @var Session
@@ -109,6 +121,16 @@ class Cart
     private $logger;
 
     /**
+     * The database's locks (Magento\Framework\Lock\Backend\Database, see etc/di.xml), whatever lock
+     * backend the store configured: GET_LOCK is taken atomically, and a request the store abandons
+     * midway gives it back with its connection. The cache backend could hand one place to two
+     * requests, and keep an abandoned one for two hours.
+     *
+     * @var LockManagerInterface
+     */
+    private $locks;
+
+    /**
      * @param Session $checkoutSession
      * @param CartRepositoryInterface $quotes
      * @param DiscountRules $rules
@@ -120,6 +142,7 @@ class Cart
      * @param QuoteFactory $quoteFactory
      * @param CacheInterface $cache
      * @param LoggerInterface $logger
+     * @param LockManagerInterface $locks
      */
     public function __construct(
         Session $checkoutSession,
@@ -132,7 +155,8 @@ class Cart
         CookieManagerInterface $cookies,
         QuoteFactory $quoteFactory,
         CacheInterface $cache,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        LockManagerInterface $locks
     ) {
         $this->checkoutSession = $checkoutSession;
         $this->quotes = $quotes;
@@ -145,6 +169,7 @@ class Cart
         $this->quoteFactory = $quoteFactory;
         $this->cache = $cache;
         $this->logger = $logger;
+        $this->locks = $locks;
     }
 
     /**
@@ -323,22 +348,36 @@ class Cart
      */
     private function redeem(Quote $quote, $website, array $offer, bool $wholeSet, array $required, string $apiKey, string $tenantId): array
     {
-        // The shopper's session is let go before bluebarry is asked, so their next page does not wait
-        // for the answer. Nothing is written to it after this, and the cart is read again below.
-        $this->checkoutSession->writeClose();
-        $response = $this->client->post('/data/magento/offers/coupon', [
-            'grant' => $offer['grant'],
-            'userId' => $offer['uid'] !== '' ? $offer['uid'] : null,
-            'wholeSet' => $wholeSet,
-        ], $tenantId, $apiKey, self::OFFER_TIMEOUT);
-        $status = $response->getStatus();
-        if (!$response->isRetryable() && ($status === 204 || ($status >= 400 && $status < 500))) {
-            return ['invalid', ''];
+        $slot = $this->takeCallSlot((int) $website->getId());
+        if ($slot === null) {
+            return ['retry', '']; // others are asking already
         }
-        $spec = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
-        if (!is_array($spec)) {
-            $this->cache->save('1', self::OFFERS_PAUSED . $website->getId(), [], self::OFFER_PAUSE);
-            return ['retry', ''];
+        try {
+            // A request that asked while this one was on its way may have found bluebarry not
+            // answering: its pause is saved before it gives its place back.
+            if ($this->cache->load(self::OFFERS_PAUSED . $website->getId())) {
+                return ['retry', ''];
+            }
+            // The shopper's session is let go before bluebarry is asked, so their next page does not wait
+            // for the answer. Nothing is written to it after this, and the cart is read again below.
+            $this->checkoutSession->writeClose();
+            $response = $this->client->post('/data/magento/offers/coupon', [
+                'grant' => $offer['grant'],
+                'userId' => $offer['uid'] !== '' ? $offer['uid'] : null,
+                'wholeSet' => $wholeSet,
+            ], $tenantId, $apiKey, self::OFFER_TIMEOUT);
+            $status = $response->getStatus();
+            if (!$response->isRetryable() && ($status === 204 || ($status >= 400 && $status < 500))) {
+                return ['invalid', ''];
+            }
+            $spec = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
+            if (!is_array($spec)) {
+                // Before the slot is free again: whoever takes it next sees the pause.
+                $this->cache->save('1', self::OFFERS_PAUSED . $website->getId(), [], self::OFFER_PAUSE);
+                return ['retry', ''];
+            }
+        } finally {
+            $this->releaseCallSlot($slot);
         }
         try {
             $made = $this->coupons->ensure($spec + ['requiredProductIds' => $required], $website, DiscountRules::KIND_OFFER);
@@ -376,6 +415,40 @@ class Cart
             $this->put($cart, $before);
         }
         return ['retry', ''];
+    }
+
+    /**
+     * One of the website's places to ask bluebarry about an offer, taken without waiting.
+     *
+     * @param int $websiteId
+     * @return string|null the place's lock, or null when all are taken
+     */
+    private function takeCallSlot(int $websiteId): ?string
+    {
+        try {
+            for ($i = 0; $i < self::OFFER_CALLS; $i++) {
+                $lock = self::OFFER_CALL_LOCK . $websiteId . '_' . $i;
+                if ($this->locks->lock($lock, 0)) {
+                    return $lock;
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->warning('bluebarry: could not take a lock to ask about an offer: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * @param string $lock
+     * @return void
+     */
+    private function releaseCallSlot(string $lock): void
+    {
+        try {
+            $this->locks->unlock($lock);
+        } catch (\Exception $e) {
+            $this->logger->warning('bluebarry: could not release the lock for asking about an offer: ' . $e->getMessage());
+        }
     }
 
     /**

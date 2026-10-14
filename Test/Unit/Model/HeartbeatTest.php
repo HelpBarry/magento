@@ -4,6 +4,7 @@ namespace Bluebarry\Bluebarry\Test\Unit\Model;
 
 use Bluebarry\Bluebarry\Model\Api\Client;
 use Bluebarry\Bluebarry\Model\Api\Response;
+use Bluebarry\Bluebarry\Model\Catalog\FilterAttributes;
 use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Heartbeat;
 use Magento\Framework\App\ProductMetadataInterface;
@@ -30,6 +31,10 @@ class HeartbeatTest extends TestCase
     /** @var callable|null */
     private $onPost;
     private bool $lockTaken = false;
+    /** @var array|\Exception what the layered navigation filters by, or why it could not be read */
+    private $filters = [['code' => 'color', 'label' => 'Kleur', 'position' => 1], ['code' => 'price', 'label' => 'Prijs', 'position' => 2]];
+    /** @var int[] store views the filters were read for */
+    private array $filterStores = [];
 
     public function testPingsEachConnectedWebsiteWithItsKey(): void
     {
@@ -50,8 +55,30 @@ class HeartbeatTest extends TestCase
             'magentoVersion' => '2.4.8-p5',
             'magentoEdition' => 'Community',
             'commandUrl' => 'https://shop1.example/bluebarry/command/',
+            'filterAttributes' => [['code' => 'color', 'label' => 'Kleur', 'position' => 1], ['code' => 'price', 'label' => 'Prijs', 'position' => 2]],
         ], $body);
         $this->assertTrue($heartbeat->outcomes()[1]['ok']);
+        // Labelled as in the website's default store view.
+        $this->assertSame([1], $this->filterStores);
+    }
+
+    public function testAStoreWithoutFiltersReportsAnEmptyList(): void
+    {
+        $this->filters = [];
+
+        $this->heartbeat([200])->send($this->website(1));
+
+        $this->assertSame([], $this->calls[0][1]['filterAttributes']);
+    }
+
+    public function testFiltersThatCannotBeReadAreLeftOut_TheWebsiteStillReportsIn(): void
+    {
+        $this->filters = new \Exception('Table catalog_eav_attribute is locked.');
+
+        $outcome = $this->heartbeat([200])->send($this->website(1));
+
+        $this->assertTrue($outcome['ok']);
+        $this->assertArrayNotHasKey('filterAttributes', $this->calls[0][1]);
     }
 
     public function testPingsDailyUnlessForced(): void
@@ -340,7 +367,16 @@ class HeartbeatTest extends TestCase
         });
         $url->method('getUrl')->willReturnCallback(fn ($route) => "https://shop{$this->urlScope}.example/$route/");
 
-        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks, $url);
+        $filterAttributes = $this->createStub(FilterAttributes::class);
+        $filterAttributes->method('forStore')->willReturnCallback(function ($storeId) {
+            $this->filterStores[] = $storeId;
+            if ($this->filters instanceof \Exception) {
+                throw $this->filters;
+            }
+            return $this->filters;
+        });
+
+        return new Heartbeat($config, $client, $storeManager, $metadata, $modules, $flags, $encryptor, $locks, $url, $filterAttributes);
     }
 
     private function groupFor(int $websiteId): Group

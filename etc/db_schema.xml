@@ -103,20 +103,30 @@
             <column name="terms_hash"/>
         </constraint>
     </table>
-    <!-- When each of bluebarry's codes ends. Magento keeps a coupon's expiry date but never checks it (only
-         a rule's own dates end its codes), so the cron removes a code once this moment has passed. Only
-         codes that end are here: also a code bluebarry took back, which is spent first (so a checkout
-         that already holds it is refused by Magento's own count) and removed a little later. No foreign
-         key, for the same reason as above; a row whose coupon is gone goes with its own expiry. -->
+    <!-- When each of bluebarry's codes ends, and what is known of it once it is removed. Magento keeps a
+         coupon's expiry date but never checks it (only a rule's own dates end its codes), so the cron ends a
+         code once this moment has passed. Only codes that end are here: also a code bluebarry took back.
+         A code ends by being spent (unless a shopper spent it), so a checkout that already holds it is
+         refused by Magento's own count; it is removed a little later, and this row then says what became
+         of it, so a lookup of a removed code never searches the store's orders without bounds. No foreign
+         key, for the same reason as above. -->
     <table name="bluebarry_discount_code" resource="default" engine="innodb" comment="bluebarry coupon code expiry">
         <column xsi:type="int" name="coupon_id" unsigned="true" nullable="false" comment="Coupon ID"/>
-        <column xsi:type="datetime" name="expires_at" nullable="false" comment="Its last moment, UTC"/>
-        <column xsi:type="smallint" name="revoked" unsigned="true" nullable="false" default="0" comment="Taken back by bluebarry before anyone spent it"/>
+        <column xsi:type="smallint" name="stage" unsigned="true" nullable="false" default="0" comment="0 usable, 1 ended and kept a little, 2 removed"/>
+        <column xsi:type="datetime" name="expires_at" nullable="false" comment="UTC. Usable: its last moment; ended: when it is removed; removed: when it was"/>
+        <column xsi:type="smallint" name="revoked" unsigned="true" nullable="false" default="0" comment="Ended (taken back or expired) before anyone spent it"/>
+        <column xsi:type="varchar" name="code" length="255" nullable="true" comment="The code, once it ended"/>
+        <column xsi:type="varchar" name="tenant_id" length="64" nullable="true" comment="Its bluebarry account, once it ended"/>
+        <column xsi:type="datetime" name="created_at" nullable="true" comment="When it was made, UTC, once it ended"/>
         <constraint xsi:type="primary" referenceId="PRIMARY">
             <column name="coupon_id"/>
         </constraint>
-        <index referenceId="BLUEBARRY_DISCOUNT_CODE_EXPIRES_AT" indexType="btree">
+        <index referenceId="BLUEBARRY_DISCOUNT_CODE_STAGE_EXPIRES_AT" indexType="btree">
+            <column name="stage"/>
             <column name="expires_at"/>
+        </index>
+        <index referenceId="BLUEBARRY_DISCOUNT_CODE_CODE" indexType="btree">
+            <column name="code"/>
         </index>
     </table>
 </schema>
