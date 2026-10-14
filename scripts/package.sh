@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Builds the installable module zip from the working tree (tracked + untracked, respecting .gitignore).
+# Only what runs in the shop and its documentation: no tests, dev stack or helper scripts.
 # Usage: scripts/package.sh [output-dir]   (default: dist/)
 set -euo pipefail
 
@@ -11,7 +12,7 @@ ZIP="$OUT_DIR/bluebarry-magento2-module-$VERSION.zip"
 cd "$ROOT"
 rm -f "$ZIP"
 git ls-files -co --exclude-standard \
-    | grep -vE '^(dev/|dist/|Test/|\.github/|\.gitattributes|\.gitignore|scripts/package\.sh|scripts/prepare_release\.py)' \
+    | grep -vE '^(dev/|dist/|Test/|scripts/|\.github/|\.gitattributes|\.gitignore|copy\.sh$|README\.pdf$)' \
     | while read -r f; do [ -f "$f" ] && echo "$f"; done \
     | zip -q -X "$ZIP" -@
 
