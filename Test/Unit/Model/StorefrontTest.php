@@ -28,6 +28,8 @@ class StorefrontTest extends TestCase
     private $onGet;
     private array $answers = [];
     private bool $locked = false;
+    /** How often the flags were read from the database. */
+    private int $flagReads = 0;
     /** @var callable|null runs once, when a page is about to cache the product checks it read */
     private $beforeChecksSave;
 
@@ -346,8 +348,9 @@ class StorefrontTest extends TestCase
         $storefront->refresh($this->website(1));
         $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '11'));
         // Read from the cache now: a product page costs no query.
-        $this->checks = [];
-        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '11'));
+        $this->flagReads = 0;
+        $this->assertSame($new, $storefront->productCheck(1, self::TENANT, '10'));
+        $this->assertSame(0, $this->flagReads);
     }
 
     /**
@@ -401,7 +404,10 @@ class StorefrontTest extends TestCase
             return $answer;
         });
         $flags = $this->createStub(FlagManager::class);
-        $flags->method('getFlagData')->willReturnCallback(fn ($code) => $code === Storefront::CHECKS_FLAG ? $this->checks : $this->flag);
+        $flags->method('getFlagData')->willReturnCallback(function ($code) {
+            $this->flagReads++;
+            return $code === Storefront::CHECKS_FLAG ? $this->checks : $this->flag;
+        });
         $flags->method('saveFlag')->willReturnCallback(function ($code, $data) {
             if ($code === Storefront::CHECKS_FLAG) {
                 $this->checks = $data;
