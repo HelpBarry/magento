@@ -10,10 +10,14 @@ use Magento\Store\Model\ScopeInterface;
 /**
  * The module's settings in one place.
  *
- * Where bluebarry lives can be pointed elsewhere (a local bluebarry for development) through
- * app/etc/env.php, never from the admin:
+ * Where bluebarry lives can be pointed elsewhere (a local bluebarry for development, or bluebarry's
+ * staging) through app/etc/env.php, never from the admin. Each key is optional:
  *
- *     'bluebarry' => ['api_url' => 'http://localhost:63104']
+ *     'bluebarry' => [
+ *         'api_url' => 'http://localhost:63104',
+ *         'advisor_url' => 'http://localhost:3000',
+ *         'sdk_url' => 'https://staging.api.bluebarry.ai/sdk/{tenantId}/advisor.js',
+ *     ]
  */
 class Config
 {
@@ -22,6 +26,8 @@ class Config
     public const XML_API_KEY = 'bluebarry_module/general/api_key';
 
     public const DEFAULT_API_URL = 'https://data.bluebarry.ai';
+    public const DEFAULT_ADVISOR_URL = 'https://advisor.bluebarry.ai';
+    public const DEFAULT_SDK_URL = 'https://cdn.bluebarry.ai/advisor/advisor.js';
 
     /**
      * @var ScopeConfigInterface
@@ -116,5 +122,28 @@ class Config
     {
         $url = trim((string) $this->deploymentConfig->get('bluebarry/api_url'));
         return rtrim($url !== '' ? $url : self::DEFAULT_API_URL, '/');
+    }
+
+    /**
+     * Where the quiz runs (the advisor iframe's origin), without a trailing slash.
+     *
+     * @return string
+     */
+    public function getAdvisorUrl(): string
+    {
+        $url = trim((string) $this->deploymentConfig->get('bluebarry/advisor_url'));
+        return rtrim($url !== '' ? $url : self::DEFAULT_ADVISOR_URL, '/');
+    }
+
+    /**
+     * The SDK script a storefront loads. `{tenantId}` in a configured URL becomes the store's tenant.
+     *
+     * @param string $tenantId
+     * @return string
+     */
+    public function getSdkUrl(string $tenantId): string
+    {
+        $url = trim((string) $this->deploymentConfig->get('bluebarry/sdk_url'));
+        return $url !== '' ? str_replace('{tenantId}', rawurlencode($tenantId), $url) : self::DEFAULT_SDK_URL;
     }
 }
