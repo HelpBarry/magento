@@ -119,6 +119,24 @@
     <type name="Bluebarry\Bluebarry\Model\Catalog\Categories">
         <arguments>
             <argument name="logger" xsi:type="object">BluebarryLogger</argument>
+            <argument name="storefrontUrl" xsi:type="object">Magento\Framework\Url</argument>
+        </arguments>
+    </type>
+    <!-- Product pages through the storefront's URL builder, also when the admin's Sync now runs the sync:
+         the admin area's would give a product without a URL rewrite an admin address. -->
+    <virtualType name="BluebarryStorefrontUrlFactory" type="Magento\Framework\UrlFactory">
+        <arguments>
+            <argument name="instanceName" xsi:type="string">Magento\Framework\Url</argument>
+        </arguments>
+    </virtualType>
+    <virtualType name="BluebarryStorefrontProductUrl" type="Magento\Catalog\Model\Product\Url">
+        <arguments>
+            <argument name="urlFactory" xsi:type="object">BluebarryStorefrontUrlFactory</argument>
+        </arguments>
+    </virtualType>
+    <type name="Bluebarry\Bluebarry\Model\Catalog\ProductBuilder">
+        <arguments>
+            <argument name="productUrls" xsi:type="object">BluebarryStorefrontProductUrl</argument>
         </arguments>
     </type>
     <!-- Category saves in the admin only note the change: the sync itself is built when the cron runs it. -->

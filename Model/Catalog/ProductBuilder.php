@@ -5,6 +5,7 @@ namespace Bluebarry\Bluebarry\Model\Catalog;
 use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\Catalog\Model\Product;
 use Magento\Catalog\Model\Product\Attribute\Source\Status;
+use Magento\Catalog\Model\Product\Url as ProductUrl;
 use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
 use Magento\Catalog\Model\ResourceModel\Product\Attribute\Collection as AttributeCollection;
@@ -14,11 +15,14 @@ use Magento\CatalogInventory\Api\StockConfigurationInterface;
 use Magento\Customer\Api\GroupRepositoryInterface;
 use Magento\Customer\Model\Group;
 use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\ProductMetadataInterface;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\EntityManager\MetadataPool;
 use Magento\Framework\Indexer\IndexerRegistry;
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface;
+use Magento\Framework\Url;
+use Magento\Framework\UrlFactory;
 use Magento\Framework\UrlInterface;
 use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\Store;
@@ -41,6 +45,9 @@ use Magento\Tax\Api\TaxCalculationInterface;
  * reference is the Magento product id, which orders report.
  *
  * A batch costs a fixed number of queries, whatever its size.
+ *
+ * The same from the cron, the command line and the admin's Sync now: addresses are the storefront's
+ * (never the admin's), on the store's base URL rather than whichever the request came in on.
  */
 class ProductBuilder
 {
@@ -149,6 +156,9 @@ class ProductBuilder
     /** @var array<int, float> dynamically priced bundle => its shown minimum, for the current build */
     private $bundlePrices = [];
 
+    /** @var ProductUrl product page addresses from the storefront's URL builder */
+    private $productUrls;
+
     /**
      * @param ProductCollectionFactory $products
      * @param CategoryCollectionFactory $categories
@@ -167,6 +177,8 @@ class ProductBuilder
      * @param TaxClassKeyInterfaceFactory $taxClasses
      * @param StockConfigurationInterface $stockConfig
      * @param ProductMetadataInterface $productMetadata
+     * @param ProductUrl|null $productUrls the storefront's (di.xml). Optional because a store upgrading
+     *                                     from 2.1.0 can build this class from 2.1.0's compiled DI.
      */
     public function __construct(
         ProductCollectionFactory $products,
@@ -185,7 +197,8 @@ class ProductBuilder
         QuoteDetailsItemInterfaceFactory $taxItems,
         TaxClassKeyInterfaceFactory $taxClasses,
         StockConfigurationInterface $stockConfig,
-        ProductMetadataInterface $productMetadata
+        ProductMetadataInterface $productMetadata,
+        ?ProductUrl $productUrls = null
     ) {
         $this->products = $products;
         $this->categories = $categories;
@@ -203,6 +216,7 @@ class ProductBuilder
         $this->taxItems = $taxItems;
         $this->taxClasses = $taxClasses;
         $this->stockConfig = $stockConfig;
+        $this->productUrls = $productUrls ?? self::storefrontProductUrls(ObjectManager::getInstance());
         // 2.4.7 rounds the discounted selection to four decimals. 2.4.6 and 2.4.8
         // round the percentage result to two, before the catalog tax calculation.
         $version = $productMetadata->getVersion();
@@ -501,7 +515,7 @@ class ProductBuilder
             'name' => $name,
             'groupName' => $parent ? $name : null,
             'groupId' => $parent ? (string) $parent->getId() : null,
-            'url' => (string) $shown->getProductUrl(),
+            'url' => $this->url($shown),
             'imageUrl' => $image,
             'secondaryImages' => $secondary,
             'inactive' => false,
@@ -562,7 +576,8 @@ class ProductBuilder
     private function images(Product $product, ?Product $parent, Store $store): array
     {
         $source = $this->hasImage($product) || $parent === null ? $product : $parent;
-        $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_MEDIA), '/') . '/catalog/product';
+        // Not secure: as the cron reads it, also when the admin's Sync now comes in over https.
+        $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_MEDIA, false), '/') . '/catalog/product';
         $main = $this->hasImage($source) ? (string) $source->getData('image') : null;
         $secondary = [];
         foreach (($source->getData('media_gallery')['images'] ?? []) as $image) {
@@ -576,6 +591,33 @@ class ProductBuilder
             }
         }
         return [$main === null ? null : $base . $main, $secondary];
+    }
+
+    /**
+     * The product's page. Magento's own Product::getProductUrl() builds it with the area's URL builder,
+     * which in the admin gives a product without a URL rewrite an admin address. Not secure, so the
+     * address does not depend on the request: a cron run never is one, the admin usually is.
+     *
+     * @param Product $product
+     * @return string
+     */
+    private function url(Product $product): string
+    {
+        return (string) $this->productUrls->getUrl($product, ['_nosid' => true, '_secure' => false]);
+    }
+
+    /**
+     * Magento's product URL model, building addresses with the storefront's URL builder in every area
+     * (what di.xml configures for this class).
+     *
+     * @param \Magento\Framework\ObjectManagerInterface $objectManager
+     * @return ProductUrl
+     */
+    public static function storefrontProductUrls(\Magento\Framework\ObjectManagerInterface $objectManager): ProductUrl
+    {
+        return $objectManager->create(ProductUrl::class, [
+            'urlFactory' => $objectManager->create(UrlFactory::class, ['instanceName' => Url::class]),
+        ]);
     }
 
     /**

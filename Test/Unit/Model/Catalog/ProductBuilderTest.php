@@ -3,6 +3,11 @@
 namespace Bluebarry\Bluebarry\Test\Unit\Model\Catalog;
 
 use Bluebarry\Bluebarry\Model\Catalog\ProductBuilder;
+use Magento\Catalog\Model\Product;
+use Magento\Catalog\Model\Product\Url as ProductUrl;
+use Magento\Framework\ObjectManagerInterface;
+use Magento\Framework\Url;
+use Magento\Framework\UrlFactory;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -146,5 +151,35 @@ class ProductBuilderTest extends TestCase
         $this->assertSame([30.0, null], ProductBuilder::pricesOf(30, 30));
         $this->assertSame([30.0, null], ProductBuilder::pricesOf(30, null));
         $this->assertSame([19.99, 24.2], ProductBuilder::pricesOf(19.9900001, 24.2));
+    }
+
+    public function testAProductsPageIsTheStorefrontsWhereverTheSyncRuns(): void
+    {
+        // The storefront's URL builder in every area: the admin's would give a product without a URL
+        // rewrite an admin address. Not secure, as a cron run always reads it.
+        $objectManager = $this->createMock(ObjectManagerInterface::class);
+        $factory = $this->createStub(UrlFactory::class);
+        $productUrls = $this->createStub(ProductUrl::class);
+        $objectManager->expects($this->exactly(2))->method('create')->willReturnCallback(
+            function (string $type, array $arguments) use ($factory, $productUrls) {
+                if ($type === UrlFactory::class) {
+                    $this->assertSame(['instanceName' => Url::class], $arguments);
+                    return $factory;
+                }
+                $this->assertSame(ProductUrl::class, $type);
+                $this->assertSame(['urlFactory' => $factory], $arguments);
+                return $productUrls;
+            }
+        );
+        $this->assertSame($productUrls, ProductBuilder::storefrontProductUrls($objectManager));
+
+        $product = $this->createStub(Product::class);
+        $urls = $this->createMock(ProductUrl::class);
+        $urls->expects($this->once())->method('getUrl')->with($product, ['_nosid' => true, '_secure' => false])
+            ->willReturn('http://shop.example/mug.html');
+        $builder = (new \ReflectionClass(ProductBuilder::class))->newInstanceWithoutConstructor();
+        (new \ReflectionProperty(ProductBuilder::class, 'productUrls'))->setValue($builder, $urls);
+
+        $this->assertSame('http://shop.example/mug.html', (new \ReflectionMethod(ProductBuilder::class, 'url'))->invoke($builder, $product));
     }
 }

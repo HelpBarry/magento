@@ -6,6 +6,7 @@ use Bluebarry\Bluebarry\Model\Api\Client;
 use Bluebarry\Bluebarry\Model\Api\Response;
 use Bluebarry\Bluebarry\Model\Catalog\Categories;
 use Bluebarry\Bluebarry\Model\Catalog\Sync;
+use Magento\Catalog\Model\Category;
 use Magento\Catalog\Model\Indexer\Category\Product\TableMaintainer;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory;
 use Magento\Framework\App\ResourceConnection;
@@ -13,6 +14,7 @@ use Magento\Framework\DB\Adapter\AdapterInterface;
 use Magento\Framework\DB\Select;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Lock\LockManagerInterface;
+use Magento\Framework\Url;
 use Magento\Store\Model\Store;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -150,6 +152,30 @@ class CategoriesTest extends TestCase
             // As the category page lists them: not the products only search finds.
             'visibility IN (?)' => [2, 4],
         ], $parts);
+    }
+
+    public function testACategoryWithoutAUrlRewriteGetsItsStorefrontPage_AlsoFromTheAdmin(): void
+    {
+        // Category::getUrl() would build it with the area's URL builder: an admin address in the admin.
+        $url = $this->createMock(Url::class);
+        $url->expects($this->once())->method('setScope')->with(3)->willReturnSelf();
+        $url->expects($this->once())->method('getUrl')
+            ->with('catalog/category/view', ['s' => 'mugs', 'id' => 12, '_nosid' => true, '_secure' => false])
+            ->willReturn('https://shop.example/catalog/category/view/s/mugs/id/12/');
+        $categories = new Categories(
+            $this->createStub(Sync::class), $this->createStub(Client::class), $this->createStub(CollectionFactory::class),
+            $this->createStub(ResourceConnection::class), $this->createStub(FlagManager::class), $this->createStub(LockManagerInterface::class),
+            new NullLogger(), $this->createStub(TableMaintainer::class), $url
+        );
+        $category = $this->createStub(Category::class);
+        $category->method('getId')->willReturn('12');
+        $category->method('getUrlKey')->willReturn('mugs');
+        $store = $this->createStub(Store::class);
+        $store->method('getId')->willReturn('3');
+
+        $page = (new \ReflectionMethod($categories, 'pageWithoutRewrite'))->invoke($categories, $category, $store);
+
+        $this->assertSame('https://shop.example/catalog/category/view/s/mugs/id/12/', $page);
     }
 
     private function categories(bool $tooMany = false): Categories
