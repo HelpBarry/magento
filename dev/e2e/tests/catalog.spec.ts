@@ -138,6 +138,72 @@ test.describe('catalog sync', () => {
     expect(await sent(productId('bb-part-a'))).toEqual([{ reference: productId('bb-part-a'), inactive: true }]);
   });
 
+  test('Sync now in the settings sends the catalog the cron sends, with storefront addresses', async ({ page, request }) => {
+    // A product without a URL rewrite: Magento's own product URL in the admin is an admin address.
+    const noRewrite = 'bb-catalog-no-rewrite';
+    await rest(request, 'post', '/rest/all/V1/products', {
+      product: {
+        sku: noRewrite, name: 'Bluebarry No Rewrite', attribute_set_id: 4, price: 12, status: 1, visibility: 4, type_id: 'simple', weight: 1,
+        extension_attributes: { website_ids: [1], stock_item: { qty: 5, is_in_stock: true } },
+        custom_attributes: [{ attribute_code: 'url_key', value: noRewrite }],
+      },
+    });
+    try {
+      const id = productId(noRewrite);
+      // Indexed, as the indexer cron would: until then the sync waits for its price.
+      magento('indexer:reindex', 'cataloginventory_stock', 'inventory', 'catalog_product_price');
+      sql(`DELETE FROM url_rewrite WHERE entity_type = 'product' AND entity_id = ${Number(id)}`);
+      const products = async () => new Map((await syncs()).flatMap((r) => r.body.products).map((p: any) => [p.reference, p]));
+
+      // What the command (the cron's code, in the crontab area) sends for the whole catalog.
+      expect(syncCatalog('--all').code).toBe(0);
+      const fromCron = await products();
+      expect(fromCron.get(id)).toMatchObject({ url: `${BASE_URL}/catalog/product/view/id/${id}/s/${noRewrite}/`, inactive: false });
+      await mockApi.reset();
+
+      // Nothing waits, so Sync now queues the whole catalog, as --all does.
+      expect(Number(sql('SELECT COUNT(*) FROM bluebarry_product_sync'))).toBe(0);
+      const catalogSize = Number(sql('SELECT COUNT(*) FROM catalog_product_entity'));
+      await adminLogin(page);
+      await openBluebarrySettings(page);
+      const row = page.locator('#row_bluebarry_module_general_catalog');
+      const button = row.getByRole('button', { name: 'Sync now' });
+      const answered = page.waitForResponse((r) => r.url().includes('/bluebarry/catalog/sync/') && r.request().method() === 'POST');
+      await button.click();
+      expect(await (await answered).json()).toEqual({ ok: true, message: `Sent ${catalogSize} products to bluebarry.` });
+      await expect(row).toContainText(`Sent ${catalogSize} products to bluebarry.`);
+      await expect(button).toBeEnabled();
+      // The button sent nothing of the settings form: still on the page, nothing saved.
+      expect(page.url()).toContain('/section/bluebarry_module/');
+
+      const requests = await syncs();
+      expect(requests.length).toBeGreaterThan(0);
+      for (const r of requests) {
+        expect(r.contractErrors).toEqual([]);
+        expect(r.headers.authorization).toBe('test-api-key');
+      }
+      // Product for product what the cron sends: storefront pages and media, never the admin's.
+      const fromAdmin = await products();
+      expect(fromAdmin).toEqual(fromCron);
+      expect(fromAdmin.get(id).url).toBe(`${BASE_URL}/catalog/product/view/id/${id}/s/${noRewrite}/`);
+      expect(fromAdmin.get(productId(SKU))).toMatchObject({ url: `${BASE_URL}/${SKU}.html` });
+      expect(fromAdmin.get(productId(SKU)).imageUrl).toMatch(new RegExp(`^${BASE_URL}/media/catalog/product/.*bb-front.*\\.png$`));
+      for (const product of fromAdmin.values()) {
+        if (product.url) expect(product.url).not.toContain('/admin/');
+      }
+
+      // With products waiting, clicking again sends those rather than starting the catalog over.
+      await mockApi.reset();
+      sql(`INSERT INTO bluebarry_product_sync (product_id, claim, attempts, queued_at) VALUES (${Number(id)}, NULL, 0, UTC_TIMESTAMP() - INTERVAL 1 HOUR)`);
+      await openBluebarrySettings(page);
+      await row.getByRole('button', { name: 'Sync now' }).click();
+      await expect(row).toContainText('Sent 1 products to bluebarry.');
+      expect([...(await products()).keys()]).toEqual([id]);
+    } finally {
+      await request.delete(`/rest/V1/products/${noRewrite}`, { headers: { Authorization: `Bearer ${await adminToken(request)}` } });
+    }
+  });
+
   test('the categories go too, named as the products name them, and again only when one changed', async ({ request }) => {
     sql("DELETE FROM flag WHERE flag_code = 'bluebarry_categories'");
     const categorySets = async () => (await mockApi.requests()).filter((r) => r.path === '/data/magento/categories');

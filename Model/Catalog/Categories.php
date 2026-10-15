@@ -6,9 +6,11 @@ use Bluebarry\Bluebarry\Model\Api\Client;
 use Magento\Catalog\Model\Indexer\Category\Product\TableMaintainer;
 use Magento\Catalog\Model\Product\Visibility;
 use Magento\Catalog\Model\ResourceModel\Category\CollectionFactory as CategoryCollectionFactory;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\FlagManager;
 use Magento\Framework\Lock\LockManagerInterface;
+use Magento\Framework\Url;
 use Magento\Framework\UrlInterface;
 use Magento\Store\Model\Store;
 use Psr\Log\LoggerInterface;
@@ -76,6 +78,9 @@ class Categories
      */
     private $categoryIndex;
 
+    /** @var Url|null */
+    private $storefrontUrl;
+
     /** @var bool a change was noted in this process already */
     private $noted = false;
 
@@ -88,6 +93,8 @@ class Categories
      * @param LockManagerInterface $locks
      * @param LoggerInterface $logger
      * @param TableMaintainer $categoryIndex
+     * @param Url|null $storefrontUrl optional because a store upgrading from 2.1.0 can build this class
+     *                                from 2.1.0's compiled DI
      */
     public function __construct(
         Sync $sync,
@@ -97,7 +104,8 @@ class Categories
         FlagManager $flags,
         LockManagerInterface $locks,
         LoggerInterface $logger,
-        TableMaintainer $categoryIndex
+        TableMaintainer $categoryIndex,
+        ?Url $storefrontUrl = null
     ) {
         $this->sync = $sync;
         $this->client = $client;
@@ -107,6 +115,7 @@ class Categories
         $this->locks = $locks;
         $this->logger = $logger;
         $this->categoryIndex = $categoryIndex;
+        $this->storefrontUrl = $storefrontUrl;
     }
 
     /**
@@ -198,7 +207,8 @@ class Categories
         if ($collection->getSize() > self::MAX) {
             return null;
         }
-        $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_LINK), '/');
+        // Not secure: as the cron reads it, also when the admin's Sync now comes in over https.
+        $base = rtrim((string) $store->getBaseUrl(UrlInterface::URL_TYPE_LINK, false), '/');
         // As the products name them: by their path when another category has the same name.
         $names = CategoryNames::forStore($this->categories, $store);
         $categories = [];
@@ -208,7 +218,7 @@ class Categories
                 continue;
             }
             $path = (string) $category->getData('request_path');
-            $url = $path !== '' ? $base . '/' . ltrim($path, '/') : (string) $category->getUrl();
+            $url = $path !== '' ? $base . '/' . ltrim($path, '/') : $this->pageWithoutRewrite($category, $store);
             $image = null;
             try {
                 $image = $category->getImage() ? (string) $category->getImageUrl() : null;
@@ -231,6 +241,29 @@ class Categories
             $categories[$i]['count'] = (int) ($counts[(int) $category['id']] ?? 0);
         }
         return $categories;
+    }
+
+    /**
+     * A category page without a URL rewrite, as Category::getUrl() names it, but always on the
+     * storefront: in the admin that method builds it with the admin's URL builder.
+     *
+     * @param \Magento\Catalog\Model\Category $category
+     * @param Store $store
+     * @return string
+     */
+    private function pageWithoutRewrite($category, Store $store): string
+    {
+        $url = $this->storefrontUrl ?? ObjectManager::getInstance()->get(Url::class);
+        $key = (string) $category->getUrlKey() ?: (string) $category->formatUrlKey((string) $category->getName());
+        // The store as a parameter, not setScope(): the URL builder is shared, and it caches what it
+        // built by route and parameters only, so another store's page would come back otherwise.
+        return (string) $url->getUrl('catalog/category/view', [
+            's' => $key,
+            'id' => (int) $category->getId(),
+            '_scope' => (int) $store->getId(),
+            '_nosid' => true,
+            '_secure' => false,
+        ]);
     }
 
     /**

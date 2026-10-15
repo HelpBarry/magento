@@ -148,7 +148,7 @@ class CategoryNamesTest extends TestCase
                         continue; // the root is no category of the store's own
                     }
                     $read[] = $id;
-                    $rows[] = new DataObject(['id' => $id, 'url' => 'https://shop.example/c' . $id . '.html'] + $row);
+                    $rows[] = new DataObject(['id' => $id, 'request_path' => 'c' . $id . '.html'] + $row);
                 }
                 $this->loaded[] = $read;
                 return new \ArrayIterator($rows);
