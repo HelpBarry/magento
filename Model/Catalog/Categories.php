@@ -255,9 +255,12 @@ class Categories
     {
         $url = $this->storefrontUrl ?? ObjectManager::getInstance()->get(Url::class);
         $key = (string) $category->getUrlKey() ?: (string) $category->formatUrlKey((string) $category->getName());
-        return (string) $url->setScope((int) $store->getId())->getUrl('catalog/category/view', [
+        // The store as a parameter, not setScope(): the URL builder is shared, and it caches what it
+        // built by route and parameters only, so another store's page would come back otherwise.
+        return (string) $url->getUrl('catalog/category/view', [
             's' => $key,
             'id' => (int) $category->getId(),
+            '_scope' => (int) $store->getId(),
             '_nosid' => true,
             '_secure' => false,
         ]);

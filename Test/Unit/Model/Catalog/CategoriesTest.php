@@ -158,9 +158,10 @@ class CategoriesTest extends TestCase
     {
         // Category::getUrl() would build it with the area's URL builder: an admin address in the admin.
         $url = $this->createMock(Url::class);
-        $url->expects($this->once())->method('setScope')->with(3)->willReturnSelf();
+        // The store goes in the parameters, which the URL builder's cache is keyed by.
+        $url->expects($this->never())->method('setScope');
         $url->expects($this->once())->method('getUrl')
-            ->with('catalog/category/view', ['s' => 'mugs', 'id' => 12, '_nosid' => true, '_secure' => false])
+            ->with('catalog/category/view', ['s' => 'mugs', 'id' => 12, '_scope' => 3, '_nosid' => true, '_secure' => false])
             ->willReturn('https://shop.example/catalog/category/view/s/mugs/id/12/');
         $categories = new Categories(
             $this->createStub(Sync::class), $this->createStub(Client::class), $this->createStub(CollectionFactory::class),
