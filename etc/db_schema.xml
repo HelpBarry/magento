@@ -129,4 +129,28 @@
             <column name="code"/>
         </index>
     </table>
+    <!-- The collection pages bluebarry rendered for this store's categories, kept so a shopper's page never
+         waits for bluebarry. A row with no html has nothing to show yet, or is gone and still has to leave
+         the page cache once more. No foreign key: a deleted category goes when bluebarry stops naming it. -->
+    <table name="bluebarry_collection_page" resource="default" engine="innodb" comment="bluebarry collection pages per category">
+        <column xsi:type="smallint" name="store_id" unsigned="true" nullable="false" comment="The store view the catalog is read in"/>
+        <column xsi:type="int" name="category_id" unsigned="true" nullable="false" comment="Category ID"/>
+        <column xsi:type="varchar" name="tenant_id" length="36" nullable="false" comment="bluebarry company the page is of"/>
+        <column xsi:type="varchar" name="url" length="512" nullable="false" comment="Where bluebarry renders it"/>
+        <column xsi:type="mediumtext" name="html" nullable="true" comment="The page"/>
+        <column xsi:type="mediumtext" name="css" nullable="true" comment="Its sections' stylesheets"/>
+        <column xsi:type="varchar" name="hash" length="64" nullable="true" comment="Of what is kept, to see a change"/>
+        <column xsi:type="smallint" name="replaces_title" unsigned="true" nullable="false" default="0" comment="It shows the category's title and image"/>
+        <column xsi:type="smallint" name="replaces_description" unsigned="true" nullable="false" default="0" comment="It shows the category's description"/>
+        <column xsi:type="datetime" name="checked_at" nullable="true" comment="Last asked bluebarry, successfully or not"/>
+        <column xsi:type="datetime" name="purge_again_at" nullable="true" comment="When its pages leave the page cache once more"/>
+        <column xsi:type="smallint" name="removed" unsigned="true" nullable="false" default="0" comment="Gone: deleted after its last purge"/>
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="store_id"/>
+            <column name="category_id"/>
+        </constraint>
+        <index referenceId="BLUEBARRY_COLLECTION_PAGE_CHECKED_AT" indexType="btree">
+            <column name="checked_at"/>
+        </index>
+    </table>
 </schema>

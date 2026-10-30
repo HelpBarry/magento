@@ -104,5 +104,27 @@
         "constraint": {
             "PRIMARY": true
         }
+    },
+    "bluebarry_collection_page": {
+        "column": {
+            "store_id": true,
+            "category_id": true,
+            "tenant_id": true,
+            "url": true,
+            "html": true,
+            "css": true,
+            "hash": true,
+            "replaces_title": true,
+            "replaces_description": true,
+            "checked_at": true,
+            "purge_again_at": true,
+            "removed": true
+        },
+        "index": {
+            "BLUEBARRY_COLLECTION_PAGE_CHECKED_AT": true
+        },
+        "constraint": {
+            "PRIMARY": true
+        }
     }
 }

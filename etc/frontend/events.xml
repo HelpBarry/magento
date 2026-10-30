@@ -4,4 +4,8 @@
     <event name="sales_quote_product_add_after">
         <observer name="bluebarry_note_add_to_cart" instance="Bluebarry\Bluebarry\Observer\NoteAddToCart" />
     </event>
+    <!-- A category with a collection page shows it instead of Magento's product list. -->
+    <event name="layout_load_before">
+        <observer name="bluebarry_collection_page" instance="Bluebarry\Bluebarry\Observer\ShowCollectionPage" />
+    </event>
 </config>

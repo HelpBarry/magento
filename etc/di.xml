@@ -58,12 +58,24 @@
             <argument name="heartbeat" xsi:type="object">Bluebarry\Bluebarry\Model\Heartbeat\Proxy</argument>
         </arguments>
     </type>
+    <!-- Built on category pages, where only the cron's work needs the catalog sync. -->
+    <type name="Bluebarry\Bluebarry\Model\CollectionPages">
+        <arguments>
+            <argument name="sync" xsi:type="object">Bluebarry\Bluebarry\Model\Catalog\Sync\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Bluebarry\Bluebarry\Console\Command\RefreshCollectionPages">
+        <arguments>
+            <argument name="pages" xsi:type="object">Bluebarry\Bluebarry\Model\CollectionPages\Proxy</argument>
+        </arguments>
+    </type>
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">
                 <item name="bluebarry_conversions_send_due" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SendDueConversions</item>
                 <item name="bluebarry_catalog_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncCatalog</item>
                 <item name="bluebarry_orders_sync" xsi:type="object">Bluebarry\Bluebarry\Console\Command\SyncOrders</item>
+                <item name="bluebarry_collection_pages_refresh" xsi:type="object">Bluebarry\Bluebarry\Console\Command\RefreshCollectionPages</item>
                 <item name="bluebarry_discounts_clean" xsi:type="object">Bluebarry\Bluebarry\Console\Command\CleanDiscountCodes</item>
             </argument>
         </arguments>

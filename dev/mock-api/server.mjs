@@ -199,6 +199,9 @@ const checkoutStarted = {
     lines: (v) => Array.isArray(v) && v.every((l) => typeof l.reference === 'string' && Number.isInteger(l.quantity)),
   },
 };
+// PUT /__collection-pages: {"categories": {"<category id>": {"html": "...", "css": "...", "replaces": {...}}}, "status": 200, "listStatus": 200}
+let collectionPages = { categories: {}, status: 200, listStatus: 200 };
+
 // What GET /data/magento/tasks answers (PUT /__tasks to change it).
 let tasks = { importOrders: false };
 
@@ -264,6 +267,13 @@ const routes = {
     method: 'GET', auth: 'apiKey',
     ok: () => [200, { tenantId: API_KEY_TENANT, ...storefront, version: JSON.stringify(storefront) }],
   },
+  // Which categories have a collection page. Each category's page comes from /__store-page, on the collections host.
+  '/data/magento/collection-pages': {
+    method: 'GET', auth: 'apiKey',
+    ok: () => [collectionPages.listStatus, { pages: Object.keys(collectionPages.categories).map((categoryId) => ({
+      categoryId, url: `https://collections.bluebarry.ai/__store-page/${API_KEY_TENANT}/${categoryId}`,
+    })) }],
+  },
   '/data/magento/orders/sync': { schema: ordersSync, auth: 'apiKey', ok: () => [200, { synced: 0 }] },
   '/data/magento/checkout-started': { schema: checkoutStarted, auth: 'apiKey', ok: () => [204, null] },
   // The full set of a website's categories, kept as collections.
@@ -320,6 +330,17 @@ const api = createHttpsServer(
   { key: readFileSync('/certs/server.key'), cert: readFileSync('/certs/server.crt') },
   async (req, res) => {
     const raw = await readBody(req);
+    // A collection page, as ReactLandingPages renders it. Public: a key sent here is a bug, and is refused.
+    const storePage = /^\/__store-page\/[^/]+\/(\d+)$/.exec(req.url);
+    if (storePage) {
+      const page = collectionPages.categories[storePage[1]];
+      requests.push({ time: new Date().toISOString(), method: req.method, path: req.url, headers: req.headers, rawBody: raw, body: null, contractErrors: [], responseStatus: collectionPages.status });
+      if (req.headers.authorization) return sendJson(res, 400, { error: 'no key here' });
+      if (collectionPages.status !== 200 || !page) return sendJson(res, page ? collectionPages.status : 404, { error: 'none' });
+      const html = page.html ?? '';
+      const css = page.css ?? '';
+      return sendJson(res, 200, { html, css, replaces: page.replaces ?? { title: false, description: false }, hash: createHash('sha256').update(html).update(css).digest('hex') });
+    }
     let json = null;
     try {
       json = raw ? JSON.parse(raw) : null;
@@ -364,6 +385,7 @@ const control = createHttpServer(async (req, res) => {
     behavior = { ...DEFAULT_BEHAVIOR };
     storefront = { search: null };
     tasks = { importOrders: false };
+    collectionPages = { categories: {}, status: 200, listStatus: 200 };
     return sendJson(res, 200, { ok: true });
   }
   if (req.url === '/__behavior' && req.method === 'PUT') {
@@ -373,6 +395,10 @@ const control = createHttpServer(async (req, res) => {
   if (req.url === '/__tasks' && req.method === 'PUT') {
     tasks = { importOrders: false, ...JSON.parse((await readBody(req)) || '{}') };
     return sendJson(res, 200, tasks);
+  }
+  if (req.url === '/__collection-pages' && req.method === 'PUT') {
+    collectionPages = JSON.parse((await readBody(req)) || '{}');
+    return sendJson(res, 200, collectionPages);
   }
   if (req.url === '/__storefront' && req.method === 'PUT') {
     storefront = { search: null, ...JSON.parse((await readBody(req)) || '{}') };
