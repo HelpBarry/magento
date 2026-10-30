@@ -2,6 +2,7 @@
 
 namespace Bluebarry\Bluebarry\Setup;
 
+use Bluebarry\Bluebarry\Model\CollectionPages;
 use Bluebarry\Bluebarry\Model\Discount\Coupons;
 use Bluebarry\Bluebarry\Model\Heartbeat;
 use Bluebarry\Bluebarry\Model\ResourceModel\CheckoutNotes;
@@ -26,7 +27,7 @@ class Uninstall implements UninstallInterface
      */
     private const TABLES = [
         OrderVisitor::TABLE, ProductSyncQueue::TABLE, OrderSyncQueue::TABLE, CheckoutNotes::TABLE,
-        DiscountRules::TABLE, DiscountRules::CODES_TABLE,
+        DiscountRules::TABLE, DiscountRules::CODES_TABLE, CollectionPages::TABLE,
     ];
 
     /**

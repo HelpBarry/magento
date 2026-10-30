@@ -3,7 +3,8 @@
 set -euo pipefail
 CERT_DIR="$(cd "$(dirname "$0")/.." && pwd)/.certs"
 mkdir -p "$CERT_DIR"
-[ -f "$CERT_DIR/server.crt" ] && exit 0
+# Certificates from before the mock also answered for collections.bluebarry.ai are made again.
+[ -f "$CERT_DIR/server.crt" ] && [ -f "$CERT_DIR/.collections-host" ] && exit 0
 
 docker run --rm -v "$CERT_DIR:/certs" -w /certs alpine:3.20 sh -ec '
 apk add --no-cache openssl >/dev/null
@@ -14,4 +15,5 @@ openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 
 rm server.csr ext.cnf
 chmod 644 *
 '
+touch "$CERT_DIR/.collections-host"
 echo "Generated test certificates in $CERT_DIR"

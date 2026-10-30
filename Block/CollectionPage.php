@@ -91,7 +91,7 @@ class CollectionPage extends AbstractBlock implements IdentityInterface
      */
     public static function withNonce(string $html, string $nonce): string
     {
-        return (string) preg_replace('/<script(?![^>]*\btype=)/i', '<script nonce="' . $nonce . '"', $html);
+        return (string) preg_replace('/<script\b(?![^>]*(?<![\w-])type=["\']?application\/(?:ld\+)?json)/i', '<script nonce="' . $nonce . '"', $html);
     }
 
     /**

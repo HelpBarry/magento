@@ -13,4 +13,12 @@ class CollectionPageTest extends TestCase
 
         $this->assertSame('<script nonce="abc">a()</script><script type="application/json">{}</script><script type="application/ld+json">{}</script>', $html);
     }
+
+    public function testAnotherScriptTypeOrAnAttributeNamedLikeTypeStillGetsIt(): void
+    {
+        $this->assertSame(
+            '<script nonce="n" type="module"></script><script nonce="n" data-type="x"></script><scripts>',
+            CollectionPage::withNonce('<script type="module"></script><script data-type="x"></script><scripts>', 'n')
+        );
+    }
 }

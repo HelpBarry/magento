@@ -14,7 +14,7 @@ async function rest(request: APIRequestContext, method: 'post' | 'put', path: st
   return response.json();
 }
 
-async function setPages(categories: Record<string, object>, statuses: { status?: number; listStatus?: number } = {}) {
+async function setPages(categories: Record<string, object>, statuses: { status?: number; listStatus?: number; listTenant?: string } = {}) {
   await fetch(`${MOCK_API}/__collection-pages`, { method: 'PUT', body: JSON.stringify({ categories, status: 200, listStatus: 200, ...statuses }) });
 }
 const refresh = () => magento('bluebarry:collection-pages:refresh');
@@ -120,6 +120,13 @@ test.describe('collection pages on the store', () => {
     refresh();
     await page.goto(`/${path}`);
     await expect(page.locator('[data-marker="from-bluebarry"]')).toBeVisible();
+  });
+
+  test('a list of another company is not kept', async ({ page }) => {
+    await setPages({ [category]: { html: GRID } }, { listTenant: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
+    refresh();
+    await page.goto(`/${path}`);
+    await expect(page.locator('[data-marker="from-bluebarry"]')).toHaveCount(0);
   });
 
   test('a fragment that is not a page is not kept', async ({ page }) => {

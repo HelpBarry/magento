@@ -254,7 +254,8 @@ class CollectionPages
     {
         $response = $this->client->get('/data/magento/collection-pages', $target['apiKey'], self::LIST_TIMEOUT);
         $answer = $response->isSuccess() ? json_decode($response->getBody(), true) : null;
-        if (!is_array($answer) || !is_array($answer['pages'] ?? null)) {
+        // A key of another company than this store view reports to gets that company's list: not this one's.
+        if (!is_array($answer) || !is_array($answer['pages'] ?? null) || strtolower((string) ($answer['tenantId'] ?? '')) !== $tenant) {
             return;
         }
         $wanted = [];
@@ -400,6 +401,8 @@ class CollectionPages
         );
         foreach ($rows as $row) {
             $where = ['store_id = ?' => (int) $row['store_id'], 'category_id = ?' => (int) $row['category_id']];
+            // A shopper's request that read the set during the change can have saved it after the change cleared it.
+            $this->cache->remove(self::setKey((int) $row['store_id']));
             $this->purge((int) $row['store_id'], (int) $row['category_id']);
             if ((int) $row['removed']) {
                 $connection->delete($table, $where);

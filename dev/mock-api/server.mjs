@@ -270,7 +270,7 @@ const routes = {
   // Which categories have a collection page. Each category's page comes from /__store-page, on the collections host.
   '/data/magento/collection-pages': {
     method: 'GET', auth: 'apiKey',
-    ok: () => [collectionPages.listStatus, { pages: Object.keys(collectionPages.categories).map((categoryId) => ({
+    ok: () => [collectionPages.listStatus, { tenantId: collectionPages.listTenant ?? API_KEY_TENANT, pages: Object.keys(collectionPages.categories).map((categoryId) => ({
       categoryId, url: `https://collections.bluebarry.ai/__store-page/${API_KEY_TENANT}/${categoryId}`,
     })) }],
   },
@@ -397,7 +397,7 @@ const control = createHttpServer(async (req, res) => {
     return sendJson(res, 200, tasks);
   }
   if (req.url === '/__collection-pages' && req.method === 'PUT') {
-    collectionPages = JSON.parse((await readBody(req)) || '{}');
+    collectionPages = { categories: {}, status: 200, listStatus: 200, ...JSON.parse((await readBody(req)) || '{}') };
     return sendJson(res, 200, collectionPages);
   }
   if (req.url === '/__storefront' && req.method === 'PUT') {
