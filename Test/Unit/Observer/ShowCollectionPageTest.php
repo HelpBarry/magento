@@ -69,6 +69,12 @@ class ShowCollectionPageTest extends TestCase
         $this->assertSame([], $this->handles);
     }
 
+    public function testACategoryInheritingALayoutUpdateStaysMagentos(): void
+    {
+        $this->run_(['inheritedUpdate' => 'custom.xml']);
+        $this->assertSame([], $this->handles);
+    }
+
     public function testAThemeOfAnUnknownFamilyStaysMagentos(): void
     {
         $this->run_(['themes' => ['Acme/custom']]);
@@ -93,12 +99,16 @@ class ShowCollectionPageTest extends TestCase
             'currency' => 'EUR',
             'displayMode' => Category::DM_PRODUCT,
             'update' => null,
+            'inheritedUpdate' => null,
             'themes' => ['Magento/luma'],
         ];
         $category = $this->createMock(Category::class);
         $category->method('getId')->willReturn(7);
         $category->method('getDisplayMode')->willReturn($given['displayMode']);
         $category->method('getData')->willReturnCallback(fn ($key = '') => $key === 'custom_layout_update_file' ? $given['update'] : null);
+        $parent = $this->createMock(Category::class);
+        $parent->method('getData')->willReturnCallback(fn ($key = '') => $key === 'custom_layout_update_file' ? $given['inheritedUpdate'] : null);
+        $category->method('getParentDesignCategory')->willReturn($parent);
         $registry = $this->createMock(Registry::class);
         $registry->method('registry')->with('current_category')->willReturn($category);
         $store = $this->getMockBuilder(Store::class)->disableOriginalConstructor()

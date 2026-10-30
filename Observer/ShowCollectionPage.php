@@ -127,10 +127,12 @@ class ShowCollectionPage implements ObserverInterface
         if ($category->getDisplayMode() === Category::DM_PAGE) {
             return null;
         }
-        // A category's own layout update may expect the product list.
-        $update = $category->getData('custom_layout_update_file');
-        if ((is_string($update) && $update !== '' && $update !== '__no_update__') || (string) $category->getData('custom_layout_update') !== '') {
-            return null;
+        // A category's own layout update, or the one it inherits with "Use Parent Category Settings", may expect the product list.
+        foreach ([$category, $category->getParentDesignCategory()] as $source) {
+            $update = $source->getData('custom_layout_update_file');
+            if ((is_string($update) && $update !== '' && $update !== '__no_update__') || (string) $source->getData('custom_layout_update') !== '') {
+                return null;
+            }
         }
         return $this->isSupportedTheme() ? $page : null;
     }
