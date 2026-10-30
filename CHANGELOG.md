@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
+- Products also go to bluebarry under the anchor categories above them, as your category pages list them, so a parent category's collection page and filters include its subcategories' products. The first cron run after the upgrade sends the catalog again.
 - Collection pages on your own category pages: choose categories for a page in bluebarry and shoppers get its layout, filters, personal order and quick add at the category's own address, with no flash of another layout. Works on Luma, Blank, Hyvä and themes built on them, in the store view your catalog is read in; other themes and store views keep Magento's page. The pages are kept up to date in the background, so a shopper's page never waits for bluebarry, and `bin/magento bluebarry:collection-pages:refresh` runs it now.
 - **Sync now** next to Catalog in the module settings sends your catalog to bluebarry right away, without the command line or waiting for the cron. With nothing waiting it sends the whole catalog; otherwise it sends what waits. It stops after about 20 seconds and the cron sends the rest, so clicking again carries on where it stopped.
 ### Changed

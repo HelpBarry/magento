@@ -88,6 +88,24 @@ class CategoryNamesTest extends TestCase
         $this->assertCount(2, $this->loaded, 'the categories are read once per store, not per product');
     }
 
+    public function testAProductIsAlsoInTheAnchorCategoriesAboveIt(): void
+    {
+        $collection = $this->createStub(Collection::class);
+        $collection->method('setStoreId')->willReturnSelf();
+        $collection->method('addAttributeToSelect')->willReturnSelf();
+        $collection->method('addAttributeToFilter')->willReturnSelf();
+        $collection->method('addFieldToFilter')->willReturnSelf();
+        $collection->method('getIterator')->willReturn(new \ArrayIterator([
+            new DataObject(['id' => 3, 'name' => 'Men', 'path' => '1/2/3', 'is_anchor' => '1']),
+            new DataObject(['id' => 5, 'name' => 'Tops', 'path' => '1/2/3/5', 'is_anchor' => '0']),
+            new DataObject(['id' => 7, 'name' => 'Shirts', 'path' => '1/2/3/5/7', 'is_anchor' => '1']),
+        ]));
+        $factory = $this->createStub(CollectionFactory::class);
+        $factory->method('create')->willReturn($collection);
+
+        $this->assertSame([5 => [3], 7 => [3]], CategoryNames::withAnchors($factory, $this->store())['anchors']);
+    }
+
     public function testTheCategoryListNamesThemTheSameWay(): void
     {
         $connection = $this->createStub(AdapterInterface::class);

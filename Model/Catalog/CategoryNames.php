@@ -30,11 +30,45 @@ class CategoryNames
      */
     public static function forStore(CategoryCollectionFactory $factory, Store $store): array
     {
+        return self::resolve(self::read($factory, $store), (int) $store->getRootCategoryId());
+    }
+
+    /**
+     * The same names, with what a product's categories also bring it into: an anchor category lists the
+     * products of the categories below it on its own page, so a collection on it must find them too.
+     *
+     * @param CategoryCollectionFactory $factory
+     * @param Store $store
+     * @return array{names: array<int, string>, anchors: array<int, int[]>} anchors: category => its anchor ancestors
+     */
+    public static function withAnchors(CategoryCollectionFactory $factory, Store $store): array
+    {
+        $root = (int) $store->getRootCategoryId();
+        $categories = self::read($factory, $store);
+        $anchors = [];
+        foreach ($categories as $id => $category) {
+            foreach (explode('/', $category['path']) as $ancestor) {
+                $ancestor = (int) $ancestor;
+                if ($ancestor !== $id && $ancestor !== $root && !empty($categories[$ancestor]['anchor'])) {
+                    $anchors[$id][] = $ancestor;
+                }
+            }
+        }
+        return ['names' => self::resolve($categories, $root), 'anchors' => $anchors];
+    }
+
+    /**
+     * @param CategoryCollectionFactory $factory
+     * @param Store $store
+     * @return array<int, array{name: string, path: string, active: bool, anchor?: bool}> by id
+     */
+    private static function read(CategoryCollectionFactory $factory, Store $store): array
+    {
         $root = (int) $store->getRootCategoryId();
         $storeId = (int) $store->getId();
         $collection = $factory->create();
         $collection->setStoreId($storeId)
-            ->addAttributeToSelect('name')
+            ->addAttributeToSelect(['name', 'is_anchor'])
             ->addAttributeToFilter('is_active', ['eq' => 1])
             ->addFieldToFilter('path', ['like' => '1/' . $root . '/%']);
         $categories = [];
@@ -43,6 +77,7 @@ class CategoryNames
                 'name' => self::text($category->getName()),
                 'path' => (string) $category->getPath(),
                 'active' => true,
+                'anchor' => (bool) $category->getData('is_anchor'),
             ];
         }
         // An active category's parent can be inactive and still names its path. Only those parents are
@@ -61,7 +96,7 @@ class CategoryNames
                 ];
             }
         }
-        return self::resolve($categories, $root);
+        return $categories;
     }
 
     /**

@@ -137,6 +137,20 @@ test.describe('collection pages on the store', () => {
     await expect(page.locator('.products.wrapper, #product-list, .products-grid').first()).toBeVisible();
   });
 
+  test('a product in a subcategory also names the anchor category above it, as that category\'s page lists it', async ({ request }) => {
+    const child = String((await rest(request, 'post', '/rest/V1/categories', {
+      category: { parent_id: Number(category), name: `BB Collection child ${Date.now()}`, is_active: true },
+    })).id);
+    await rest(request, 'post', `/rest/V1/categories/${child}/products`, { productLink: { sku: 'bb-configurable', position: 0, category_id: child } });
+
+    magento('bluebarry:catalog:sync', '--all');
+    const synced = (await mockApi.requests()).filter((r) => r.path === '/data/magento/products/sync').flatMap((r) => (r.body as any).products ?? []);
+    // The configurable's variants: only the subcategory has them, the parent only has bb-simple itself.
+    const named = synced.filter((p: any) => p.groupId && p.properties?.some((x: any) => x.propertyName === 'categories' && x.value.includes('BB Collection')));
+    expect(named.length).toBeGreaterThan(0);
+    await request.delete(`/rest/V1/categories/${child}`, { headers: { Authorization: `Bearer ${await adminToken(request)}` } });
+  });
+
   test('the module sends its API key to the list and not to the page', async () => {
     await setPages({ [category]: { html: GRID } });
     refresh();

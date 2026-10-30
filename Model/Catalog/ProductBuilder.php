@@ -150,7 +150,7 @@ class ProductBuilder
     /** @var array<int, array<string, array<string, string>>> store => attribute => option => label */
     private $optionLabels = [];
 
-    /** @var array<int, array<int, string>> store => category => name */
+    /** @var array<int, array{names: array<int, string>, anchors: array<int, int[]>}> store => CategoryNames::withAnchors() */
     private $categoryNames = [];
 
     /** @var array<int, float> dynamically priced bundle => its shown minimum, for the current build */
@@ -1170,12 +1170,18 @@ class ProductBuilder
     {
         $storeId = (int) $store->getId();
         if (!isset($this->categoryNames[$storeId])) {
-            $this->categoryNames[$storeId] = CategoryNames::forStore($this->categories, $store);
+            $this->categoryNames[$storeId] = CategoryNames::withAnchors($this->categories, $store);
         }
         $names = [];
         foreach ($ids as $id) {
-            if (isset($this->categoryNames[$storeId][$id]) && $this->categoryNames[$storeId][$id] !== '') {
-                $names[] = $this->categoryNames[$storeId][$id];
+            if (!isset($this->categoryNames[$storeId]['names'][$id])) {
+                continue;
+            }
+            // As the store's category pages list it: on the page of each anchor category above too.
+            foreach (array_merge([$id], $this->categoryNames[$storeId]['anchors'][$id] ?? []) as $category) {
+                if (($this->categoryNames[$storeId]['names'][$category] ?? '') !== '') {
+                    $names[] = $this->categoryNames[$storeId]['names'][$category];
+                }
             }
         }
         return array_values(array_unique($names));
