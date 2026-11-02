@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.1.1] - 2026-11-02
 ### Added
 - **Sync now** next to Catalog in the module settings sends your catalog to bluebarry right away, without the command line or waiting for the cron. With nothing waiting it sends the whole catalog; otherwise it sends what waits. It stops after about 20 seconds and the cron sends the rest, so clicking again carries on where it stopped.
 ### Changed
