@@ -16,6 +16,7 @@ class UpdateTest extends TestCase
     private Http&Stub $request;
     private SessionDouble $session;
     private array $responseData = [];
+    private ?int $responseCode = null;
     private Update $controller;
 
     protected function setUp(): void
@@ -29,6 +30,10 @@ class UpdateTest extends TestCase
         $json = $this->createStub(Json::class);
         $json->method('setData')->willReturnCallback(function ($data) use ($json) {
             $this->responseData = $data;
+            return $json;
+        });
+        $json->method('setHttpResponseCode')->willReturnCallback(function ($code) use ($json) {
+            $this->responseCode = $code;
             return $json;
         });
         $jsonFactory = $this->createStub(JsonFactory::class);
@@ -78,5 +83,21 @@ class UpdateTest extends TestCase
 
         $this->assertSame([], $this->session->writes);
         $this->assertSame(['success' => true, 'session' => $stored], $this->responseData);
+    }
+
+    /** Magento's own form key check still decides, also that a GET needs no key. */
+    public function testLeavesTheFormKeyCheckToMagento(): void
+    {
+        $this->assertNull($this->controller->validateForCsrf($this->request));
+    }
+
+    /** The default answer is a redirect and "Invalid Form Key" on the shopper's next page. */
+    public function testRefusedFormKeyAnswersInJsonWithoutAMessage(): void
+    {
+        $exception = $this->controller->createCsrfValidationException($this->request);
+
+        $this->assertSame(['success' => false], $this->responseData);
+        $this->assertSame(403, $this->responseCode);
+        $this->assertEmpty($exception->getMessages());
     }
 }

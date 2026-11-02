@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Fixed
+- Shoppers no longer see "Invalid Form Key. Please refresh the page." when they return after a quiz. This happened on any page opened before the theme had made its form key cookie, most visibly on Hyvä. bluebarry now makes the key itself when needed, and a refused request is answered in the background without a redirect or a message. The request also follows the store view's own address.
 
 ## [2.1.1] - 2026-11-02
 ### Added
