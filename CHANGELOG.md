@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Fixed
+- Shoppers no longer see "Invalid Form Key. Please refresh the page." when they return after a quiz. This happened on any page opened before the theme had made its form key cookie, most visibly on Hyvä. bluebarry now makes the key itself when needed, and a refused request is answered in the background without a redirect or a message. The request also follows the store view's own address.
 ### Added
 - **Sync now** next to Catalog in the module settings sends your catalog to bluebarry right away, without the command line or waiting for the cron. With nothing waiting it sends the whole catalog; otherwise it sends what waits. It stops after about 20 seconds and the cron sends the rest, so clicking again carries on where it stopped.
 ### Changed

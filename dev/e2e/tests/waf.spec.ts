@@ -27,7 +27,7 @@ test('storefront session update succeeds through the WAF (real browser request)'
   // cross-origin and never get a form key); only the module's own request is sent through the WAF,
   // with the cookies, form key, headers and body exactly as the browser built them.
   let viaWaf = false;
-  await page.route('**/bluebarry/session/update', (route) => {
+  await page.route('**/bluebarry/session/update/', (route) => {
     viaWaf = true;
     return route.continue({ url: `${WAF_URL}/bluebarry/session/update` });
   });
@@ -51,7 +51,9 @@ test('session update without a Referer header still reaches Magento', async () =
   // Some privacy tools strip Referer; CRS scores that differently. Magento answers the bogus form key
   // with a redirect, which proves the request got past the WAF (a WAF error would be 403 or 5xx).
   const response = await post({ form_key: 'abc', bb_session_id: randomUUID(), advisor_id: randomUUID(), user_id: randomUUID() });
-  expect(response.status).toBe(302);
+  // Refused by Magento's form key check, in Magento's JSON: the WAF's own 403 is not JSON.
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({ success: false });
 });
 
 test('a cart link with a full kit and a code reaches Magento', async () => {

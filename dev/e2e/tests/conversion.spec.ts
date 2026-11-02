@@ -60,6 +60,42 @@ test('quiz session is stored server-side and returned by GET', async ({ page }) 
   });
 });
 
+test('a first page without a form key cookie still stores a returning shopper\'s session', async ({ page, context }) => {
+  // The quiz was started on an earlier visit: the session is in localStorage, the form_key cookie is gone.
+  const ids = newAdvisorIds();
+  await context.addInitScript((stored) => {
+    localStorage.setItem('barry-session', JSON.stringify(stored));
+  }, { advisorId: ids.advisorId, sessionId: ids.sessionId, userId: ids.userId, time: Date.now() });
+  await stubAdvisor(page, ids);
+
+  const update = page.waitForResponse((r) => r.url().includes('/bluebarry/session/update') && r.request().method() === 'POST');
+  await page.goto('/');
+  const response = await update;
+  expect(response.status()).toBe(200);
+
+  const stored = await (await page.request.get('/bluebarry/session/update')).json();
+  expect(stored.session.bluebarry.session_id).toBe(ids.sessionId);
+  const cookies = await context.cookies();
+  expect(cookies.find((cookie) => cookie.name === 'mage-messages')?.value ?? '').not.toContain('Invalid');
+});
+
+test('a session update with a wrong form key answers in JSON, without a redirect or a message for the shopper', async ({ page, context }) => {
+  await page.goto('/');
+  const answer = await page.evaluate(async () => {
+    const response = await fetch('/bluebarry/session/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ form_key: 'wrong', bb_session_id: 's', advisor_id: 'a', user_id: 'u' }).toString(),
+      redirect: 'manual',
+    });
+    return { status: response.status, body: response.status === 403 ? await response.json() : null };
+  });
+  expect(answer).toEqual({ status: 403, body: { success: false } });
+
+  const cookies = await context.cookies();
+  expect(cookies.find((cookie) => cookie.name === 'mage-messages')?.value ?? '').not.toContain('Invalid');
+});
+
 const conversionsSent = async () =>
   (await mockApi.requests()).filter((r) => r.path.toLowerCase() === '/data/conversionevents');
 

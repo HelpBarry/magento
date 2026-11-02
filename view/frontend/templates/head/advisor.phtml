@@ -161,14 +161,24 @@ if ($tenantId != null && $tenantId != "") {
     advisorScript.src = "<?= $block->escapeJs($block->getSdkUrl($tenantId)); ?>";
     document.head.appendChild(advisorScript);
 
+    // The theme's script makes the form_key cookie in the browser (Luma's form-key-provider, Hyvä's
+    // hyva.getFormKey) and may not have run yet. The key is then made here the same way, and the theme
+    // finds and keeps this one.
     function getFormKey() {
-        var match = document.cookie.match(/form_key=([^;]+)/);
-        return match ? match[1] : null;
+        var match = document.cookie.match(/(?:^|;\s*)form_key=([^;]+)/);
+        if (match) return decodeURIComponent(match[1]);
+        var chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', key = '';
+        var random = window.crypto.getRandomValues(new Uint8Array(16));
+        for (var i = 0; i < random.length; i++) key += chars[random[i] % chars.length];
+        var config = window.cookiesConfig || {};
+        var expires = new Date(Date.now() + 86400000).toUTCString();
+        document.cookie = 'form_key=' + key + '; expires=' + expires + (config.secure ? '; secure' : '') + '; path=/; samesite=' + (config.samesite || 'lax');
+        return key;
     }
 
     function updateSession(advisorId, sessionId, userId) {
         var formKey = getFormKey();
-        fetch('/bluebarry/session/update', {
+        fetch("<?= $block->escapeJs($block->getUrl('bluebarry/session/update')); ?>", {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
