@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system.xsd">
     <system>
-        <tab id="bluebarry" translate="label" sortOrder="10">
+        <tab id="bluebarry" translate="label" sortOrder="1000">
             <label>Bluebarry</label>
         </tab>
         <section id="bluebarry_module" translate="label" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
