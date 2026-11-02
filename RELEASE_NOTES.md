@@ -1,6 +1,16 @@
-# Bluebarry Magento 2 Module 2.1.0 Release Notes
+# Bluebarry Magento 2 Module 2.1.1 Release Notes
 
-Release date: 2026-10-14
+Release date: 2026-11-02
+
+2.1.1:
+Stability: Stable Build
+Description:
+Release 2.1.1 (2026-11-02)
+
+Improvements
+- **Sync now** next to Catalog in the module settings sends your catalog to bluebarry right away, without the command line or waiting for the cron. With nothing waiting it sends the whole catalog; otherwise it sends what waits. It stops after about 20 seconds and the cron sends the rest, so clicking again carries on where it stopped
+- The module is on Packagist: `composer require bluebarry/magento2-module` works without the Marketplace repository, and each release is available there right away. A Composer install no longer brings along the old 1.0 release zips
+- Stores > Configuration opens on Magento's General page again: the Bluebarry tab now sits below Magento's own tabs
 
 2.1.0:
 Stability: Stable Build
