@@ -1,6 +1,14 @@
-# Bluebarry Magento 2 Module 2.1.1 Release Notes
+# Bluebarry Magento 2 Module 2.1.2 Release Notes
 
 Release date: 2026-11-02
+
+2.1.2:
+Stability: Stable Build
+Description:
+Release 2.1.2 (2026-11-02)
+
+Bug Fixes
+- Shoppers no longer see "Invalid Form Key. Please refresh the page." when they return after a quiz. This happened on any page opened before the theme had made its form key cookie, most visibly on Hyvä. bluebarry now makes the key itself when needed, and a refused request is answered in the background without a redirect or a message. The request also follows the store view's own address
 
 2.1.1:
 Stability: Stable Build
