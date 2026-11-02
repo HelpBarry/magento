@@ -2,12 +2,14 @@
 
 namespace Bluebarry\Bluebarry\Controller\Command;
 
+use Bluebarry\Bluebarry\Model\CollectionPages;
 use Bluebarry\Bluebarry\Model\Config;
 use Bluebarry\Bluebarry\Model\Discount\Coupons;
 use Bluebarry\Bluebarry\Model\Discount\RefusedException;
 use Bluebarry\Bluebarry\Model\Orders\Sync as OrderSync;
 use Bluebarry\Bluebarry\Model\Storefront;
 use Magento\Framework\App\Action\HttpPostActionInterface;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\CsrfAwareActionInterface;
 use Magento\Framework\App\Request\Http as HttpRequest;
 use Magento\Framework\App\Request\InvalidRequestException;
@@ -70,6 +72,11 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
     private $coupons;
 
     /**
+     * @var CollectionPages|null
+     */
+    private $collectionPages;
+
+    /**
      * @param HttpRequest $request
      * @param JsonFactory $json
      * @param Config $config
@@ -78,6 +85,8 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
      * @param ModuleListInterface $modules
      * @param OrderSync $orders
      * @param Coupons $coupons
+     * @param CollectionPages|null $collectionPages optional because a store upgrading from 2.1.0 can build
+     *                                              this class from 2.1.0's compiled DI
      */
     public function __construct(
         HttpRequest $request,
@@ -87,7 +96,8 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         Storefront $storefront,
         ModuleListInterface $modules,
         OrderSync $orders,
-        Coupons $coupons
+        Coupons $coupons,
+        ?CollectionPages $collectionPages = null
     ) {
         $this->request = $request;
         $this->json = $json;
@@ -97,6 +107,7 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
         $this->modules = $modules;
         $this->orders = $orders;
         $this->coupons = $coupons;
+        $this->collectionPages = $collectionPages ?? ObjectManager::getInstance()->get(CollectionPages::class);
     }
 
     /**
@@ -120,6 +131,8 @@ class Index implements HttpPostActionInterface, CsrfAwareActionInterface
                 return $result->setData(['ok' => true, 'version' => (string) ($this->modules->getOne('Bluebarry_Bluebarry')['setup_version'] ?? '')]);
             case 'settings.refresh':
                 $version = $this->storefront->refresh($website);
+                // The merchant may have changed a collection page too: the next cron run fetches it.
+                $this->collectionPages->markDue();
                 return $result->setHttpResponseCode($version === null ? 502 : 200)->setData(['ok' => $version !== null, 'version' => $version]);
             case 'orders.import':
                 // Studio's Orders page: the history import, run by the cron in batches.

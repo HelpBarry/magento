@@ -86,6 +86,7 @@ services:
       default:
         aliases:
           - data.bluebarry.ai
+          - collections.bluebarry.ai
 
   # OWASP CRS in front of the store, the same rule set Cloud Armor and most hosting WAFs are based on.
   waf:

@@ -53,6 +53,28 @@ class Client
     }
 
     /**
+     * GETs a public address of bluebarry's, with no key: whatever it answers is for anyone to read.
+     * Redirects are not followed, and what is too long is cut off.
+     *
+     * @param string $url
+     * @param int $timeout seconds
+     * @param int $maxBytes
+     * @return Response status 0 when no answer came
+     */
+    public function getPublic(string $url, int $timeout, int $maxBytes): Response
+    {
+        $curl = $this->curlFactory->create();
+        $curl->setTimeout($timeout);
+        $curl->setOptions([CURLOPT_FOLLOWLOCATION => false, CURLOPT_MAXFILESIZE_LARGE => $maxBytes]);
+        try {
+            $curl->get($url);
+            return new Response((int) $curl->getStatus(), (string) $curl->getBody());
+        } catch (\Exception $e) {
+            return new Response(0, '', $e->getMessage());
+        }
+    }
+
+    /**
      * POSTs JSON to bluebarry.
      *
      * @param string $path e.g. /data/conversionevents

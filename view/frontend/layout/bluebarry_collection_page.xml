@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <!-- A category with a collection page (Observer\ShowCollectionPage): bluebarry's page takes the place
+             of the product list and the filters. A static block of the category's own stays above it. -->
+        <referenceBlock name="category.products" remove="true"/>
+        <referenceBlock name="catalog.leftnav" remove="true"/>
+        <referenceBlock name="catalog.navigation.state" remove="true"/>
+        <referenceBlock name="catalog.navigation.renderer" remove="true"/>
+        <referenceBlock name="catalog.compare.sidebar" remove="true"/>
+        <referenceContainer name="content">
+            <block class="Bluebarry\Bluebarry\Block\CollectionPage" name="bluebarry.collection.page"/>
+        </referenceContainer>
+    </body>
+</page>
